@@ -138,11 +138,101 @@
 		"power": 0.4,
 		"build_speed": 5.0
 	},
+	"armcomlvl2": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 5.4
+	},
+	"armcomlvl3": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 7.45
+	},
+	"armcomlvl4": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 9.0
+	},
+	"armcomlvl5": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 11.0
+	},
+	"armcomlvl6": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 13.5
+	},
+	"armcomlvl7": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 16.5
+	},
+	"armcomlvl8": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 20.0
+	},
+	"armcomlvl9": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 24.5
+	},
+	"armcomlvl10": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 30.0
+	},
 	"corcom": {
 		"role": ["builder"],
 		"attribute": ["commander"],
 		"power": 0.4,
 		"build_speed": 5.0
+	},
+	"corcomlvl2": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 6.1
+	},
+	"corcomlvl3": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 7.5
+	},
+	"corcomlvl4": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 9.0
+	},
+	"corcomlvl5": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 11.0
+	},
+	"corcomlvl6": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 13.5
+	},
+	"corcomlvl7": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 16.5
+	},
+	"corcomlvl8": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 20.0
+	},
+	"corcomlvl9": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 24.5
+	},
+	"corcomlvl10": {
+		"role": ["builder"],
+		"attribute": ["commander"],
+		"build_speed": 30.0
 	},
 
 	// ARMADA defenses

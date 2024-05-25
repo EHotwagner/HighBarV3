@@ -397,6 +397,8 @@ void CAllyTeam::ResetStartOnce()
 
 void CAllyTeam::SetAuthority(CCircuitAI* authority)
 {
+	// FIXME: Authority should be first one who gets message from the engine.
+	//        Remove method, commented in SetupManager
 	if (circuit == authority) {
 		return;
 	}
@@ -406,11 +408,14 @@ void CAllyTeam::SetAuthority(CCircuitAI* authority)
 
 void CAllyTeam::DelegateAuthority()
 {
+	std::map<Id, CCircuitAI*> teamAIs;
 	for (CCircuitAI* newOwner : circuit->GetGameAttribute()->GetCircuits()) {
 		if (newOwner->IsInitialized() && (newOwner != circuit) && (newOwner->GetAllyTeamId() == circuit->GetAllyTeamId())) {
-			ApplyAuthority(newOwner);
-			break;
+			teamAIs[newOwner->GetSkirmishAIId()] = newOwner;
 		}
+	}
+	if (!teamAIs.empty()) {
+		ApplyAuthority(teamAIs.begin()->second);
 	}
 }
 
@@ -424,7 +429,12 @@ void CAllyTeam::ApplyAuthority(CCircuitAI* newOwner)
 
 	UpdateFriendlyUnits();
 	enemyManager->ApplyAuthority(newOwner);
-	circuit->GetTerrainManager()->ApplyAuthority();
+	for (CCircuitAI* ai : circuit->GetGameAttribute()->GetCircuits()) {
+		// TODO: Is updating oldOwner desired?
+		if (ai->GetAllyTeamId() == circuit->GetAllyTeamId()) {
+			ai->GetTerrainManager()->ApplyAuthority();
+		}
+	}
 
 	releaseTask = CScheduler::GameJob(&CAllyTeam::DelegateAuthority, this);
 	newOwner->GetScheduler()->RunOnRelease(releaseTask);

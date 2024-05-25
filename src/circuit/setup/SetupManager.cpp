@@ -603,6 +603,7 @@ void CSetupManager::CalcLanePos()
 
 	// FIXME: Influence map gets broken
 	// FIXED: @see CThreatMap::CopyDefs
+	// FIXME: Authority should be first one who gets message from the engine
 //	const AIFloat3 mapCenter = CTerrainManager::GetTerrainCenter();
 //	CAllyTeam* allyTeam = circuit->GetAllyTeam();
 //	if (mapCenter.SqDistance2D(lanePos) < mapCenter.SqDistance2D(allyTeam->GetAuthority()->GetSetupManager()->GetLanePos())) {

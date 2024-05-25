@@ -1653,7 +1653,9 @@ CCircuitDef* CFactoryManager::GetFacRoleDef(CCircuitDef::RoleT role, const SFact
 	float magnitude = 0.f;
 	for (unsigned i = 0; i < facDef.buildDefs.size(); ++i) {
 		CCircuitDef* bd = facDef.buildDefs[i];
-		if ((bd->GetMainRole() != role) || !bd->IsAvailable(frame)) {
+		if (((bd->GetMainRole() != role) && (circuit->GetBindedRole(bd->GetMainRole()) != role))
+			|| !bd->IsAvailable(frame))  // builderT2 -> builder conversion
+		{
 			continue;
 		}
 
@@ -1665,6 +1667,7 @@ CCircuitDef* CFactoryManager::GetFacRoleDef(CCircuitDef::RoleT role, const SFact
 
 	CCircuitDef* buildDef = nullptr;
 	if (magnitude == 0.f) {  // workaround for disabled units
+		// FIXME: for previous algo with probs[i]==0; never true with probs[i]>0
 		if (!candidates.empty()) {
 			buildDef = candidates[rand() % candidates.size()].first;
 		}

@@ -260,6 +260,16 @@ bool CEnemyManager::UnitInLOS(CEnemyUnit* data, CCircuitDef::Id unitDefId)
 
 std::pair<CEnemyUnit*, bool> CEnemyManager::RegisterEnemyUnit(ICoreUnit::Id unitId, bool isInLOS)
 {
+	// NOTE: Authority change issue: EnemyUnit already registered by oldOwner,
+	//       may result in consecutive RegisterEnemyUnit call
+	CEnemyUnit* data = GetEnemyUnit(unitId);
+	if (data != nullptr) {
+		if (!isInLOS || UnitInLOS(data)) {
+			return std::make_pair(data, true);
+		}
+		return std::make_pair(nullptr, true);  // error, maybe globalLOS
+	}
+
 	Unit* e = WrappUnit::GetInstance(circuit->GetSkirmishAIId(), unitId);
 	if (e == nullptr) {
 		return std::make_pair(nullptr, true);  // true error
@@ -276,7 +286,7 @@ std::pair<CEnemyUnit*, bool> CEnemyManager::RegisterEnemyUnit(ICoreUnit::Id unit
 		cdef = circuit->GetCircuitDef(unitDefId);
 		isIgnore |= cdef->IsIgnore();
 	}
-	CEnemyUnit* data = new CEnemyUnit(unitId, e, cdef);  // TODO: Use std::shared_ptr
+	data = new CEnemyUnit(unitId, e, cdef);  // TODO: Use std::shared_ptr
 
 	enemyUnits[unitId] = data;
 	enemyUpdates.push_back(data);

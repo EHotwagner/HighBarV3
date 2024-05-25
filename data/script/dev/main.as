@@ -21,7 +21,7 @@ void AiMain()
 
 	for (Id defId = 1, count = ai.GetDefCount(); defId <= count; ++defId) {
 		CCircuitDef@ cdef = ai.GetCircuitDef(defId);
-		if (cdef.costM >= 200.f && aiEconomyMgr.GetEnergyMake(cdef) > 1.f)
+		if (cdef.costM >= 200.f && !cdef.IsMobile() && aiEconomyMgr.GetEnergyMake(cdef) > 1.f)
 			cdef.AddAttribute(Unit::Attr::BASE.type);  // Build heavy energy at base
 	}
 

@@ -82,6 +82,7 @@ CEnemyUnit::CEnemyUnit(Id unitId, Unit* unit, CCircuitDef* cdef)
 		: ICoreUnit(unitId, unit)
 		, knownFrame(-1)
 		, lastSeen(-1)
+		, shield(nullptr)
 		, data(SEnemyData {.cdef = cdef,
 			.shieldPower = 0.f,
 			.health = 0.f,
@@ -137,6 +138,7 @@ void CEnemyUnit::SetCircuitDef(CCircuitDef* cdef)
 
 void CEnemyUnit::Init()
 {
+	delete shield;  // Consecutive Init calls from SetCircuitDef on authority change
 	if (data.cdef == nullptr) {
 		data.cost = 0.f;
 		shield = nullptr;

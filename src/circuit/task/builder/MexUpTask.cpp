@@ -163,14 +163,29 @@ void CBMexUpTask::OnUnitIdle(CCircuitUnit* unit)
 
 void CBMexUpTask::FindBuildSite(CCircuitUnit* builder, const AIFloat3& pos, float searchRadius)
 {
-	FindFacing(pos);
-
 	CCircuitAI* circuit = manager->GetCircuit();
+	AIFloat3 adjPos = pos;
+
+	// Check off-center ally unit
+	const auto& unitIds = circuit->GetCallback()->GetFriendlyUnitIdsIn(buildPos, buildDef->GetExtrRangeM(), false);
+	for (ICoreUnit::Id unitId : unitIds) {
+		CAllyUnit* curMex = circuit->GetFriendlyUnit(unitId);
+		if (curMex == nullptr) {
+			continue;
+		}
+		if (curMex->GetCircuitDef()->GetExtractsM() > 0.f) {
+			adjPos = curMex->GetPos(circuit->GetLastFrame());
+			break;
+		}
+	}
+
+	FindFacing(adjPos);
+
 	CTerrainManager* terrainMgr = circuit->GetTerrainManager();
-	if (terrainMgr->CanReachAtSafe(builder, pos, builder->GetCircuitDef()->GetBuildDistance())
-		&& circuit->GetMap()->IsPossibleToBuildAt(buildDef->GetDef(), pos, facing))
+	if (terrainMgr->CanReachAtSafe(builder, adjPos, builder->GetCircuitDef()->GetBuildDistance())
+		&& circuit->GetMap()->IsPossibleToBuildAt(buildDef->GetDef(), adjPos, facing))
 	{
-		SetBuildPos(pos);
+		SetBuildPos(adjPos);
 	} else {
 		CTerrainManager::TerrainPredicate predicate = [terrainMgr, builder](const AIFloat3& p) {
 			return terrainMgr->CanReachAtSafe(builder, p, builder->GetCircuitDef()->GetBuildDistance());
