@@ -145,6 +145,7 @@ void CEnemyUnit::Init()
 	} else {
 		data.cost = data.cdef->GetCostM();
 		WeaponMount* wpMnt = data.cdef->GetShieldMount();
+		assert(unit != nullptr);
 		shield = (wpMnt == nullptr) ? nullptr : WrappWeapon::GetInstance(unit->GetSkirmishAIId(), id, wpMnt->GetWeaponMountId());
 	}
 }

@@ -238,6 +238,8 @@ public:
 	CEnemyFake(CCircuitDef* cdef, const springai::AIFloat3& pos, int timeout);
 	virtual ~CEnemyFake();
 
+	void SetCircuitDef(CCircuitDef* cdef) = delete;
+
 	int GetTimeout() const { return timeout; }
 
 private:

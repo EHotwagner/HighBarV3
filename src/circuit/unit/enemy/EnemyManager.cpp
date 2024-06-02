@@ -98,7 +98,8 @@ void CEnemyManager::ApplyAuthority(CCircuitAI* authority)
 	}
 	for (CEnemyFake* ef : enemyFakes) {
 		if (ef->GetCircuitDef() != nullptr) {
-			ef->SetCircuitDef(authority->GetCircuitDef(ef->GetCircuitDef()->GetId()));
+			// NOTE: Can't use CEnemyUnit::SetCircuitDef: unit==nullptr
+			ef->data.cdef = authority->GetCircuitDef(ef->GetCircuitDef()->GetId());
 		}
 	}
 }
