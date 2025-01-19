@@ -178,7 +178,7 @@ private:
 	std::unordered_map<CCircuitDef::Id, SPurpose> purposes;
 	void IncPurpose(const CCircuitDef::Id defId);
 	void DecPurpose(const CCircuitDef::Id defId);
-	bool IsNoPurpose(const CCircuitDef::Id defId) const;
+	bool HasNoPurpose(const CCircuitDef::Id defId) const;
 
 	struct SStoreExt {
 		float storage;

@@ -7,6 +7,7 @@
 
 #include "setup/SetupManager.h"
 #include "setup/SetupData.h"
+#include "script/SetupScript.h"
 #include "map/InfluenceMap.h"
 #include "module/EconomyManager.h"
 #include "module/MilitaryManager.h"  // Only for CalcLanePos
@@ -41,6 +42,7 @@ using namespace terrain;
 CSetupManager::CSetupManager(CCircuitAI* circuit, CSetupData* setupData)
 		: circuit(circuit)
 		, setupData(setupData)
+		, script(new CSetupScript(circuit->GetScriptManager()))
 		, config(nullptr)
 		, commander(nullptr)
 		, startPos(-RgtVector)
@@ -56,11 +58,9 @@ CSetupManager::CSetupManager(CCircuitAI* circuit, CSetupData* setupData)
 		, commChoice(nullptr)
 		, isSideSelected(false)
 {
-	const char* setupScript = circuit->GetGame()->GetSetupScript();
 	if (!setupData->IsInitialized()) {
-		setupData->ParseSetupScript(circuit, setupScript);
+		setupData->ParseSetupScript(circuit, circuit->GetGame()->GetSetupScript());
 	}
-	DisabledUnits(setupScript);
 
 	findStart = CScheduler::GameJob(&CSetupManager::FindStart, this);
 	circuit->GetScheduler()->RunJobEvery(findStart, 1);
@@ -68,12 +68,12 @@ CSetupManager::CSetupManager(CCircuitAI* circuit, CSetupData* setupData)
 
 CSetupManager::~CSetupManager()
 {
+	delete script;
 	delete config;
 }
 
-void CSetupManager::DisabledUnits(const char* setupScript)
+void CSetupManager::DisabledUnits()
 {
-	std::string script(setupScript);
 	auto disableUnits = [this](const std::string& opt_str) {
 		std::string::const_iterator start = opt_str.begin();
 		std::string::const_iterator end = opt_str.end();
@@ -88,22 +88,10 @@ void CSetupManager::DisabledUnits(const char* setupScript)
 		}
 	};
 
-	std::string modoptionsTag("[modoptions]");
-	std::string::const_iterator bodyBegin = std::search(
-			script.begin(), script.end(),
-			modoptionsTag.begin(), modoptionsTag.end(),
-			[](char ch1, char ch2) { return std::tolower(ch1) == ch2; }
-	);
-	if (bodyBegin != script.end()) {
-		std::advance(bodyBegin, modoptionsTag.length());
-		std::string::const_iterator bodyEnd = utils::EndInBraces(bodyBegin, script.end());
-
-		std::smatch disabledunits;
-		std::regex patternDisabled("disabledunits=(.*);", std::regex::ECMAScript | std::regex::icase);
-		if (std::regex_search(bodyBegin, bodyEnd, disabledunits, patternDisabled)) {
-			// !setoptions disabledunits=armwar+armpw+raveparty+zenith+mahlazer
-			disableUnits(disabledunits[1]);
-		}
+	auto it = setupData->GetModOptions().find("disabledunits");
+	if (it != setupData->GetModOptions().end()) {
+		// !setoptions disabledunits=armwar+armpw+raveparty+zenith+mahlazer
+		disableUnits(it->second);
 	}
 
 	OptionValues* options = circuit->GetSkirmishAI()->GetOptionValues();
@@ -747,6 +735,11 @@ void CSetupManager::OverrideConfig()
 		circuit->LOG("Override config %s by startscript", configName.c_str());
 		config = ParseConfig(cfgStr, "startscript", config);
 	}
+}
+
+CScriptDictionary* CSetupManager::GetModOptions()
+{
+	return script->GetModOptions(setupData->GetModOptions());
 }
 
 } // namespace circuit

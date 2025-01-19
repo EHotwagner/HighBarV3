@@ -2041,7 +2041,7 @@ void CEconomyManager::DecPurpose(const CCircuitDef::Id defId)
 	--purposes[defId].count;
 }
 
-bool CEconomyManager::IsNoPurpose(const CCircuitDef::Id defId) const
+bool CEconomyManager::HasNoPurpose(const CCircuitDef::Id defId) const
 {
 	auto it = purposes.find(defId);
 	assert(it != purposes.end());
@@ -2076,7 +2076,7 @@ void CEconomyManager::ReclaimOldConvert(const SConvertExt* convertExt)
 				IncPurpose(cdef->GetId());
 			}
 		}
-		if (IsNoPurpose(cdef->GetId())) {
+		if (HasNoPurpose(cdef->GetId())) {
 			circuit->GetBuilderManager()->Enqueue(TaskB::Reclaim(IUnitTask::Priority::HIGH, unit, FRAMES_PER_SEC * 1200));
 			energyNet += convertExt->energyUse;
 			if (energyNet > 0) {
@@ -2114,7 +2114,7 @@ void CEconomyManager::ReclaimOldEnergy(const SEnergyExt* energyExt)
 				IncPurpose(cdef->GetId());
 			}
 		}
-		if (IsNoPurpose(cdef->GetId())) {
+		if (HasNoPurpose(cdef->GetId())) {
 			energyIncome -= info->make;
 			if (energyIncome < energyExt->cond.energyIncome) {
 				break;

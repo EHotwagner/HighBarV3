@@ -561,7 +561,8 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	InitRoles();  // core c++ implemented roles
 	const std::string profile = InitOptions();  // Inits GameAttribute
 	scriptManager = std::make_shared<CScriptManager>(this);
-	script = new CInitScript(GetScriptManager(), this);
+	setupManager = std::make_shared<CSetupManager>(this, &gameAttribute->GetSetupData());
+	script = new CInitScript(GetScriptManager(), this);  // partially registers CSetupManager
 	std::vector<std::string> cfgParts;
 	CCircuitDef::SArmorInfo armor;
 	if (!script->InitConfig(profile, cfgParts, armor)) {
@@ -578,16 +579,16 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	float decloakRadius;
 	InitUnitDefs(armor, decloakRadius);  // Inits TerrainData
 
-	setupManager = std::make_shared<CSetupManager>(this, &gameAttribute->GetSetupData());
+	setupManager->DisabledUnits();
 	if (!setupManager->OpenConfig(profile, cfgParts)) {
 		Release(RELEASE_CONFIG);
 		return ERROR_INIT;
 	}
 	setupManager->ReadConfig();
-	if (!setupManager->PickCommander()) {
-		Release(RELEASE_COMMANDER);
-		return ERROR_INIT;
-	}
+//	if (!setupManager->PickCommander()) {
+//		Release(RELEASE_COMMANDER);
+//		return ERROR_INIT;
+//	}
 
 	allyTeam = setupManager->GetAllyTeam();
 	isAllyAware &= allyTeam->GetSize() > 1;

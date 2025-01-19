@@ -27,6 +27,7 @@ class CMap;
 
 class CSetupData {
 public:
+	using ModOptions = std::unordered_map<std::string, std::string>;
 	using BoxMap = std::map<int, utils::CRegion>;  // <start_box_id, box>
 	using AllyMap = std::vector<CAllyTeam*>;
 
@@ -40,6 +41,8 @@ public:
 	CAllyTeam* GetAllyTeam(int allyTeamId) { return allyTeams[allyTeamId]; }
 	const utils::CRegion& GetStartBox(int boxId) { return boxes[boxId]; }
 
+	const ModOptions& GetModOptions() const { return modoptions; }
+
 private:
 	void Init(AllyMap&& ats, BoxMap&& bm,
 			  CGameSetup::StartPosType spt = CGameSetup::StartPosType::StartPos_ChooseInGame);
@@ -49,6 +52,8 @@ private:
 	CGameSetup::StartPosType startPosType;
 	AllyMap allyTeams;  // owner
 	BoxMap boxes;
+
+	ModOptions modoptions;
 };
 
 } // namespace circuit

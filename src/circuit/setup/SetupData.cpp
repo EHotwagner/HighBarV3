@@ -20,9 +20,9 @@ namespace circuit {
 
 using namespace springai;
 
-CSetupData::CSetupData() :
-		isInitialized(false),
-		startPosType(CGameSetup::StartPosType::StartPos_Fixed)
+CSetupData::CSetupData()
+		: isInitialized(false)
+		, startPosType(CGameSetup::StartPosType::StartPos_Fixed)
 {
 }
 
@@ -34,12 +34,29 @@ CSetupData::~CSetupData()
 void CSetupData::ParseSetupScript(CCircuitAI* circuit, const char* setupScript)
 {
 	std::string script(setupScript);
-	std::map<int, int> teamIdsRemap;
-	using OrigTeamIds = std::set<int>;
-	std::map<int, OrigTeamIds> allies;
-	CSetupData::BoxMap boxes;
 
-	boxes = std::move(ReadStartBoxes(script, circuit->GetMap(), circuit->GetGame()));
+	// Process ModOptions (mostly for AS)
+	std::string modoptionsTag("[modoptions]");
+	std::string::const_iterator start = std::search(
+			script.begin(), script.end(),
+			modoptionsTag.begin(), modoptionsTag.end(),
+			[](char ch1, char ch2) { return std::tolower(ch1) == ch2; }
+	);
+	std::string::const_iterator end = script.end();
+	if (start != end) {
+		std::advance(start, modoptionsTag.length());
+		end = utils::EndInBraces(start, end);
+
+		std::smatch section;
+		std::regex patternOption("(.*)=(.*);", std::regex::ECMAScript | std::regex::icase);
+		while (std::regex_search(start, end, section, patternOption)) {
+			modoptions[section[1]] = section[2];
+			start = section[0].second;
+		}
+	}
+
+	// Read Start Boxes
+	CSetupData::BoxMap boxes = ReadStartBoxes(script, circuit->GetMap(), circuit->GetGame());
 
 	// Detect start position type
 	CGameSetup::StartPosType startPosType;
@@ -52,9 +69,11 @@ void CSetupData::ParseSetupScript(CCircuitAI* circuit, const char* setupScript)
 	}
 
 	// Count number of alliances
+	using OrigTeamIds = std::set<int>;
+	std::map<int, OrigTeamIds> allies;
 	std::regex patternAlly("\\[allyteam(\\d+)\\]", std::regex::ECMAScript | std::regex::icase);
-	std::string::const_iterator start = script.begin();
-	std::string::const_iterator end = script.end();
+	start = script.begin();
+	end = script.end();
 	std::smatch section;
 	while (std::regex_search(start, end, section, patternAlly)) {
 		int allyTeamId = utils::string_to_int(section[1]);
@@ -63,6 +82,7 @@ void CSetupData::ParseSetupScript(CCircuitAI* circuit, const char* setupScript)
 	}
 
 	// Detect team alliances
+	std::map<int, int> teamIdsRemap;
 	std::regex patternTeam("\\[team(\\d+)\\]", std::regex::ECMAScript | std::regex::icase);
 	std::regex patternAllyId("allyteam=(\\d+);", std::regex::ECMAScript | std::regex::icase);
 	start = script.begin();

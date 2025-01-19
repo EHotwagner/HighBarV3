@@ -15,10 +15,13 @@
 
 #include <functional>
 
+class CScriptDictionary;
+
 namespace circuit {
 
 class CCircuitAI;
 class CSetupData;
+class CSetupScript;
 class CAllyTeam;
 class IMainJob;
 class CCircuitUnit;
@@ -46,7 +49,7 @@ public:
 
 	CSetupManager(CCircuitAI* circuit, CSetupData* setupData);
 	virtual ~CSetupManager();
-	void DisabledUnits(const char* setupScript);
+	void DisabledUnits();
 
 	bool OpenConfig(const std::string& profile, const std::vector<std::string>& parts);
 	void CloseConfig();
@@ -101,8 +104,11 @@ private:
 	void UpdateJson(Json::Value& a, Json::Value& b);
 	void OverrideConfig();
 
+	CScriptDictionary* GetModOptions();  // for AS
+
 	CCircuitAI* circuit;
 	CSetupData* setupData;
+	CSetupScript* script;
 	Json::Value* config;  // owner;
 	std::string configName;
 

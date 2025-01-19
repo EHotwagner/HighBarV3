@@ -76,21 +76,21 @@ local options = {
 		type    = 'list',
 		def     = 'hard',
 		items   = {
-			{
-				key  = 'hard',
-				name = 'Hard | Balanced',
-				desc = 'Difficulty: Hard |Playstyle: Balanced |Made by Flaka',
-			},
-			{
-				key  = 'medium',
-				name = 'Medium | Lazy',
-				desc = 'Difficulty: Medium |Playstyle: Learning mechanics',
-			},
-			{
-				key  = 'easy',
-				name = 'Easy | Slow',
-				desc = 'Difficulty: Easy |Playstyle: First launch',
-			},
+-- 			{
+-- 				key  = 'hard',
+-- 				name = 'Hard | Balanced',
+-- 				desc = 'Difficulty: Hard |Playstyle: Balanced |Made by Flaka',
+-- 			},
+-- 			{
+-- 				key  = 'medium',
+-- 				name = 'Medium | Lazy',
+-- 				desc = 'Difficulty: Medium |Playstyle: Learning mechanics',
+-- 			},
+-- 			{
+-- 				key  = 'easy',
+-- 				name = 'Easy | Slow',
+-- 				desc = 'Difficulty: Easy |Playstyle: First launch',
+-- 			},
 			{
 				key  = 'dev',
 				name = 'Testing AI',
