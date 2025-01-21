@@ -216,6 +216,9 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("OStream", "OStream& opShl(const float& in)", asFUNCTION(utils::binary_write<float>), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("OStream", "OStream& opShl(const double& in)", asFUNCTION(utils::binary_write<double>), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 
+	r = engine->RegisterObjectMethod("string", "string toLower() const", asFUNCTION(utils::StringToLower), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("string", "string toUpper() const", asFUNCTION(utils::StringToUpper), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+
 	// RegisterCircuitAI
 	r = engine->RegisterTypedef("Id", "int"); ASSERT(r >= 0);
 
@@ -412,7 +415,7 @@ bool CInitScript::InitConfig(const std::string& profile,
 
 	mod->Discard();
 	// NOTE: destroys "array<T>". "main" should be registered and loaded first,
-	//       then "array<T>" will be in defaultGroup - not viable option.
+	//       then "array<T>" will be in defaultGroup. But main-first is not a viable option.
 	//       And re-creating CScriptManager is not worth the effort.
 //	r = script->GetEngine()->RemoveConfigGroup(CScriptManager::initName.c_str()); ASSERT(r >= 0);
 	return true;

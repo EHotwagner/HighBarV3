@@ -42,6 +42,7 @@ CFactoryScript::CFactoryScript(CScriptManager* scr, CFactoryManager* mgr)
 
 	r = engine->RegisterObjectType("CFactoryManager", 0, asOBJ_REF | asOBJ_NOHANDLE); ASSERT(r >= 0);
 	r = engine->RegisterGlobalProperty("CFactoryManager aiFactoryMgr", manager); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CFactoryManager", "CCircuitDef@ DefaultGetFactoryToBuild(const AIFloat3& in, bool, bool)", asMETHOD(CFactoryManager, DefaultGetFactoryToBuild), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CFactoryManager", "IUnitTask@+ DefaultMakeTask(CCircuitUnit@)", asMETHOD(CFactoryManager, DefaultMakeTask), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CFactoryManager", "IUnitTask@+ Enqueue(const SRecruitTask& in)", asMETHODPR(CFactoryManager, Enqueue, (const TaskS::SRecruitTask&), CRecruitTask*), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CFactoryManager", "IUnitTask@+ Enqueue(const SServSTask& in)", asMETHODPR(CFactoryManager, Enqueue, (const TaskS::SServSTask&), IUnitTask*), asCALL_THISCALL); ASSERT(r >= 0);
@@ -62,6 +63,7 @@ bool CFactoryScript::Init()
 	InitModule(mod);
 	factoryInfo.isSwitchTime = script->GetFunc(mod, "bool AiIsSwitchTime(int)");
 	factoryInfo.isSwitchAllowed = script->GetFunc(mod, "bool AiIsSwitchAllowed(CCircuitDef@)");
+	factoryInfo.getFactoryToBuild = script->GetFunc(mod, "CCircuitDef@ AiGetFactoryToBuild(const AIFloat3& in, bool, bool)");
 	return true;
 }
 
@@ -85,6 +87,20 @@ bool CFactoryScript::IsSwitchAllowed(CCircuitDef* facDef)
 	asIScriptContext* ctx = script->PrepareContext(factoryInfo.isSwitchAllowed);
 	ctx->SetArgObject(0, facDef);
 	const bool result = script->Exec(ctx) ? ctx->GetReturnByte() : false;
+	script->ReturnContext(ctx);
+	return result;
+}
+
+CCircuitDef* CFactoryScript::GetFactoryToBuild(const AIFloat3& pos, bool isStart, bool isReset)
+{
+	if (factoryInfo.getFactoryToBuild == nullptr) {
+		return static_cast<CFactoryManager*>(manager)->DefaultGetFactoryToBuild(pos, isStart, isReset);
+	}
+	asIScriptContext* ctx = script->PrepareContext(factoryInfo.getFactoryToBuild);
+	ctx->SetArgAddress(0, &const_cast<AIFloat3&>(pos));
+	ctx->SetArgByte(1, isStart);
+	ctx->SetArgByte(2, isReset);
+	CCircuitDef* result = script->Exec(ctx) ? (CCircuitDef*)ctx->GetReturnObject() : nullptr;
 	script->ReturnContext(ctx);
 	return result;
 }

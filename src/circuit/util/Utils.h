@@ -143,6 +143,22 @@ static inline float string_to_float(const std::string &str)
 	}
 }
 
+static inline std::string StringToLower(std::string str)
+{
+	std::transform(str.begin(), str.end(), str.begin(),
+			[](unsigned char c){ return std::tolower(c); }
+	);
+	return str;
+}
+
+static inline std::string StringToUpper(std::string str)
+{
+	std::transform(str.begin(), str.end(), str.begin(),
+			[](unsigned char c){ return std::toupper(c); }
+	);
+	return str;
+}
+
 static inline void sleep(uint64_t ms)
 {
 	spring::this_thread::sleep_for(std::chrono::milliseconds(ms));

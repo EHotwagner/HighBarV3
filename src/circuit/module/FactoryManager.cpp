@@ -1040,11 +1040,7 @@ bool CFactoryManager::IsHighPriority(CAllyUnit* unit) const
 
 CCircuitDef* CFactoryManager::GetFactoryToBuild(AIFloat3 position, bool isStart, bool isReset)
 {
-	CCircuitDef* facDef = factoryData->GetFactoryToBuild(circuit, position, isStart, isReset);
-	if ((facDef == nullptr) && utils::is_valid(position)) {
-		facDef = factoryData->GetFactoryToBuild(circuit, -RgtVector, isStart, isReset);
-	}
-	return facDef;
+	return static_cast<CFactoryScript*>(script)->GetFactoryToBuild(position, isStart, isReset);
 }
 
 void CFactoryManager::AddFactory(const CCircuitDef* cdef)
@@ -1090,6 +1086,15 @@ CCircuitDef* CFactoryManager::GetRepresenter(const CCircuitDef* facDef) const
 	} else {
 		return GetWaterDef(facDef);
 	}
+}
+
+CCircuitDef* CFactoryManager::DefaultGetFactoryToBuild(const AIFloat3& position, bool isStart, bool isReset)
+{
+	CCircuitDef* facDef = factoryData->GetFactoryToBuild(circuit, position, isStart, isReset);
+	if ((facDef == nullptr) && utils::is_valid(position)) {
+		facDef = factoryData->GetFactoryToBuild(circuit, -RgtVector, isStart, isReset);
+	}
+	return facDef;
 }
 
 void CFactoryManager::EnableFactory(CCircuitUnit* unit)

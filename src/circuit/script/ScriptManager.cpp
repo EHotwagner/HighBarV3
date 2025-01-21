@@ -35,24 +35,6 @@ using namespace springai;
 std::string CScriptManager::initName("init");
 std::string CScriptManager::mainName("main");
 
-static std::string StrToLower(const std::string &str)
-{
-	std::string s(str);
-	std::transform(s.begin(), s.end(), s.begin(),
-			[](unsigned char c){ return std::tolower(c); }
-	);
-	return s;
-}
-
-static std::string StrToUpper(const std::string &str)
-{
-	std::string s(str);
-	std::transform(s.begin(), s.end(), s.begin(),
-			[](unsigned char c){ return std::toupper(c); }
-	);
-	return s;
-}
-
 CScriptManager::CScriptManager(CCircuitAI* circuit)
 		: circuit(circuit)
 		, engine(nullptr)
@@ -123,7 +105,6 @@ void CScriptManager::Init()
 	// The SDK do however provide a standard add-on for registering a string type, so it's not
 	// necessary to implement the registration yourself if you don't want to.
 	RegisterStdString(engine);
-	RegisterStdStringUtility();
 	RegisterScriptArray(engine, true);
 	RegisterStdStringUtils(engine);  // optional
 	RegisterScriptDictionary(engine);
@@ -295,12 +276,6 @@ void CScriptManager::MessageCallback(const asSMessageInfo* msg, void* param)
 		type = "INFO";
 	}
 	circuit->LOG("%s (%d, %d) : %s : %s", msg->section, msg->row, msg->col, type, msg->message);
-}
-
-void CScriptManager::RegisterStdStringUtility()
-{
-	int r = engine->RegisterObjectMethod("string", "string toLower() const", asFUNCTION(StrToLower), asCALL_CDECL_OBJLAST); ASSERT(r >= 0);
-	r = engine->RegisterObjectMethod("string", "string toUpper() const", asFUNCTION(StrToUpper), asCALL_CDECL_OBJLAST); ASSERT(r >= 0);
 }
 
 #ifdef DEBUG_VIS

@@ -154,6 +154,7 @@ public:
 	float GetAssistRange() const { return GetSideInfo().assistDef->GetBuildDistance(); }
 
 private:
+	CCircuitDef* DefaultGetFactoryToBuild(const springai::AIFloat3& position, bool isStart, bool isReset);
 	void EnableFactory(CCircuitUnit* unit);
 	void DisableFactory(CCircuitUnit* unit);
 	virtual IUnitTask* DefaultMakeTask(CCircuitUnit* unit) override;
