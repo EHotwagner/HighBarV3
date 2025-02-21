@@ -61,11 +61,11 @@
 		// "vampire" - reclaim enemy units without threat check
 //		"attribute": ["boost", "no_strafe"],
 
-		// Fire state (open by default)
-		// "hold" - hold fire
-		// "return" - return fire
-		// "open" - fire at will
-//		"fire_state": "open",
+		// Fire state (fire at will by default)
+		// 0 - hold fire
+		// 1 - return fire
+		// 2 - fire at will
+//		"fire_state": 2,
 
 		// Per unit On state for static and mobile enemies while attacking. Not used when unspecified
 		// true = on

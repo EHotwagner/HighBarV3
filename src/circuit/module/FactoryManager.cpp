@@ -334,7 +334,6 @@ void CFactoryManager::ReadConfig()
 	std::map<CCircuitDef::RoleT, std::set<CCircuitDef::Id>> roleDefs;
 	CCircuitDef::RoleName& roleNames = CCircuitDef::GetRoleNames();
 	CCircuitDef::AttrName& attrNames = CCircuitDef::GetAttrNames();
-	CCircuitDef::FireName& fireNames = CCircuitDef::GetFireNames();
 	std::set<CCircuitDef::RoleT> modRoles;
 	const Json::Value& behaviours = root["behaviour"];
 	for (const std::string& defName : behaviours.getMemberNames()) {
@@ -401,13 +400,7 @@ void CFactoryManager::ReadConfig()
 
 		const Json::Value& fire = behaviour["fire_state"];
 		if (!fire.isNull()) {
-			const std::string& fireName = fire.asString();
-			auto itf = fireNames.find(fireName);
-			if (itf == fireNames.end()) {
-				circuit->LOG("CONFIG %s: %s has unknown fire state '%s'", cfgName.c_str(), defName.c_str(), fireName.c_str());
-			} else {
-				cdef->SetFireState(itf->second);
-			}
+			cdef->SetFireState(fire.asInt());
 		}
 
 		const Json::Value& slowOnOff = behaviour["slow_target"];
@@ -671,7 +664,7 @@ int CFactoryManager::UnitCreated(CCircuitUnit* unit, CCircuitUnit* builder)
 {
 	CCircuitDef* cdef = unit->GetCircuitDef();
 	TRY_UNIT(circuit, unit,
-		unit->GetUnit()->SetFireState(cdef->GetFireState());
+		unit->CmdSetFireState(cdef->GetFireState());
 	)
 
 	auto search = createdHandler.find(cdef->GetId());

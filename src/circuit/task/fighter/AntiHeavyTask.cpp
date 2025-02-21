@@ -67,7 +67,7 @@ void CAntiHeavyTask::AssignTo(CCircuitUnit* unit)
 	CCircuitAI* circuit = manager->GetCircuit();
 	if (cdef->IsAbleToCloak() && !cdef->IsOpenFire()) {
 		TRY_UNIT(circuit, unit,
-			unit->GetUnit()->SetFireState(CCircuitDef::FireType::RETURN);
+			unit->CmdSetFireState(CCircuitDef::FireType::RETURN);
 		)
 	}
 
@@ -100,7 +100,7 @@ void CAntiHeavyTask::RemoveAssignee(CCircuitUnit* unit)
 	CCircuitDef* cdef = unit->GetCircuitDef();
 	if (cdef->IsAbleToCloak()) {
 		TRY_UNIT(manager->GetCircuit(), unit,
-			unit->GetUnit()->SetFireState(cdef->GetFireState());
+			unit->CmdSetFireState(cdef->GetFireState());
 		)
 	}
 }
@@ -272,7 +272,7 @@ void CAntiHeavyTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 	if (attacker != nullptr) {
 		if (unit->GetCircuitDef()->IsAbleToCloak()) {
 			TRY_UNIT(manager->GetCircuit(), unit,
-				unit->GetUnit()->SetFireState(CCircuitDef::FireType::OPEN);
+				unit->CmdSetFireState(CCircuitDef::FireType::OPEN);
 			)
 		}
 		if (unit->GetDGunAct() != nullptr) {

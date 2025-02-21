@@ -159,6 +159,8 @@ public:
 	void CmdReclaimUnit(CAllyUnit* toReclaim, short options = 0, int timeout = INT_MAX);
 	void CmdReclaimInArea(const springai::AIFloat3& pos, float radius, short options = 0, int timeout = INT_MAX);
 	void CmdResurrectInArea(const springai::AIFloat3& pos, float radius, short options = 0, int timeout = INT_MAX);
+	void CmdSetFireState(CCircuitDef::FireT state);
+	void TrySetFireState(CCircuitDef::FireT state);  // safe CmdSetFireState
 
 	void Attack(CEnemyInfo* enemy, bool isGround, int timeout);
 	void Attack(const springai::AIFloat3& position, CEnemyInfo* enemy, bool isGround, bool isStatic, int timeout);

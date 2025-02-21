@@ -33,11 +33,6 @@ using namespace terrain;
 
 CCircuitDef::RoleName* CCircuitDef::roleNames;
 CCircuitDef::AttrName* CCircuitDef::attrNames;
-CCircuitDef::FireName CCircuitDef::fireNames = {
-	{"hold",   CCircuitDef::FireType::HOLD},
-	{"return", CCircuitDef::FireType::RETURN},
-	{"open",   CCircuitDef::FireType::OPEN},
-};
 
 void CCircuitDef::InitStatic(CCircuitAI* circuit, CMaskHandler* roleMasker, CMaskHandler* attrMasker)
 {
@@ -196,7 +191,7 @@ CCircuitDef::CCircuitDef(CCircuitAI* circuit, UnitDef* def, std::unordered_set<I
 					  & ~circuit->GetGoodCategory();
 
 	const int ft = def->GetFireState();
-	fireState = (ft < 0) ? FireType::OPEN : static_cast<FireType>(ft);
+	fireState = (ft < 0) ? FireType::OPEN : ft;
 
 	health       = def->GetHealth();
 	speed        = def->GetSpeed();  // elmos per second

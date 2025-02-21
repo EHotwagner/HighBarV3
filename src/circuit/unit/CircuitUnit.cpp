@@ -447,6 +447,19 @@ void CCircuitUnit::CmdResurrectInArea(const AIFloat3& pos, float radius, short o
 	unit->ResurrectInArea(pos, radius, options, timeout);
 }
 
+void CCircuitUnit::CmdSetFireState(CCircuitDef::FireT state)
+{
+	unit->SetFireState(state);
+}
+
+void CCircuitUnit::TrySetFireState(CCircuitDef::FireT state)
+{
+	assert(manager != nullptr);
+	TRY_UNIT(manager->GetCircuit(), this,
+		CmdSetFireState(state);
+	)
+}
+
 void CCircuitUnit::Attack(CEnemyInfo* enemy, bool isGround, int timeout)
 {
 	target = enemy;

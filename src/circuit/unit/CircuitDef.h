@@ -98,16 +98,15 @@ public:
 	using AttrT = std::underlying_type<AttrType>::type;
 	using AttrM = std::underlying_type<AttrMask>::type;
 
-	enum FireType: int {HOLD = 0, RETURN = 1, OPEN = 2, _SIZE_};
+	enum FireType: int {HOLD = 0, RETURN = 1, OPEN = 2};
+	using FireT = std::underlying_type<FireType>::type;
 
 	static RoleM GetMask(RoleT type) { return CMaskHandler::GetMask(type); }
 
 	using RoleName = const CMaskHandler::MaskName;
 	using AttrName = const CMaskHandler::MaskName;
-	using FireName = std::map<std::string, FireType>;
 	static RoleName& GetRoleNames() { return *roleNames; }
 	static AttrName& GetAttrNames() { return *attrNames; }
-	static FireName& GetFireNames() { return fireNames; }
 
 	static void InitStatic(CCircuitAI* circuit, CMaskHandler* roleMasker, CMaskHandler* attrMasker);
 
@@ -242,7 +241,7 @@ public:
 	int GetThreatRange(ThreatType type) const { return threatRange[static_cast<ThreatT>(type)]; }
 	float GetShieldRadius() const { return shieldRadius; }
 	float GetMaxShield() const { return maxShield; }
-	int GetFireState() const { return fireState; }
+	FireT GetFireState() const { return fireState; }
 	int GetReloadTime() const { return reloadTime; }
 	int GetCategory() const { return category; }
 	int GetTargetCategory() const { return targetCategory; }
@@ -257,7 +256,7 @@ public:
 	void ModSurfThreat(float mod) { surfThrMod *= mod; surfThrDmg *= mod; }
 	void ModWaterThreat(float mod) { waterThrMod *= mod; waterThrDmg *= mod; }
 	void SetThreatRange(ThreatType type, int range) { threatRange[static_cast<ThreatT>(type)] = range; }
-	void SetFireState(FireType ft) { fireState = ft; }
+	void SetFireState(FireT ft) { fireState = ft; }
 	void SetReloadTime(int time) { reloadTime = time; }
 
 	terrain::SImmobileType::Id GetImmobileId() const { return immobileTypeId; }
@@ -362,7 +361,6 @@ public:
 private:
 	static RoleName* roleNames;
 	static AttrName* attrNames;
-	static FireName fireNames;
 
 	// TODO: associate script data with CCircuitDef
 	//       instead of using map<Id,data> everywhere
@@ -407,7 +405,7 @@ private:
 	std::array<int, static_cast<ThreatT>(ThreatType::_SIZE_)> threatRange;
 	float shieldRadius;
 	float maxShield;
-	FireType fireState;
+	FireT fireState;
 	int reloadTime;  // frames in ticks
 	int category;
 	int targetCategory;

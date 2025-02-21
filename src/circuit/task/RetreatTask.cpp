@@ -56,7 +56,7 @@ void CRetreatTask::AssignTo(CCircuitUnit* unit)
 	CCircuitAI* circuit = manager->GetCircuit();
 	CCircuitDef* cdef = unit->GetCircuitDef();
 	TRY_UNIT(circuit, unit,
-		unit->GetUnit()->SetFireState(cdef->IsAttrRetHold() ? CCircuitDef::FireType::HOLD : CCircuitDef::FireType::OPEN);
+		unit->CmdSetFireState(cdef->IsAttrRetHold() ? CCircuitDef::FireType::HOLD : CCircuitDef::FireType::OPEN);
 	)
 	if (cdef->IsAttrBoost()) {
 		unit->SetTaskFrame(circuit->GetLastFrame());  // avoid UnitIdle on find_pad
@@ -83,7 +83,7 @@ void CRetreatTask::AssignTo(CCircuitUnit* unit)
 	if (unit->GetCircuitDef()->IsAbleToCloak()) {
 		TRY_UNIT(manager->GetCircuit(), unit,
 			unit->CmdCloak(true);
-			unit->GetUnit()->SetFireState(CCircuitDef::FireType::RETURN);
+			unit->CmdSetFireState(CCircuitDef::FireType::RETURN);
 		)
 	}
 
@@ -101,7 +101,7 @@ void CRetreatTask::RemoveAssignee(CCircuitUnit* unit)
 	}
 
 	TRY_UNIT(manager->GetCircuit(), unit,
-		unit->GetUnit()->SetFireState(unit->GetCircuitDef()->GetFireState());
+		unit->CmdSetFireState(unit->GetCircuitDef()->GetFireState());
 	)
 }
 
@@ -356,7 +356,7 @@ void CRetreatTask::Recovered(CCircuitUnit* unit)
 		{
 			unit->CmdCloak(false);
 		}
-		unit->GetUnit()->SetFireState(unit->GetCircuitDef()->GetFireState());
+		unit->CmdSetFireState(unit->GetCircuitDef()->GetFireState());
 	)
 
 	RemoveAssignee(unit);
