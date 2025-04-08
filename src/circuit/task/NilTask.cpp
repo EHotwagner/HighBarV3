@@ -6,8 +6,11 @@
  */
 
 #include "task/NilTask.h"
+#include "module/UnitModule.h"
+#include "setup/SetupManager.h"
 #include "unit/CircuitUnit.h"
 #include "unit/action/AntiCapAction.h"
+#include "CircuitAI.h"
 #include "util/Utils.h"
 
 namespace circuit {
@@ -25,7 +28,7 @@ void CNilTask::AssignTo(CCircuitUnit* unit)
 {
 	unit->SetTask(this);
 
-	if (!unit->GetCircuitDef()->IsMobile()) {
+	if (!unit->GetCircuitDef()->IsMobile() && manager->GetCircuit()->GetSetupManager()->IsAntiCap()) {
 		unit->PushBack(new CAntiCapAction(unit));
 	}
 }

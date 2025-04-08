@@ -55,8 +55,8 @@ CPathFinder::CPathFinder(CTerrainData* terrainData, int numThreads)
 	squareSize   = terrainData->convertStoP;
 	pathMapXSize = terrainData->sectorXSize;
 	pathMapYSize = terrainData->sectorZSize;
-	moveMapXSize = pathMapXSize + 2;  // +2 for passable edges
-	moveMapYSize = pathMapYSize + 2;  // +2 for passable edges
+	moveMapXSize = pathMapXSize + 2;  // +2 for passable edges (blocked border)
+	moveMapYSize = pathMapYSize + 2;  // +2 for passable edges (blocked border)
 
 	micropathers.reserve(numThreads);
 	for (int i = 0; i < numThreads; ++i) {

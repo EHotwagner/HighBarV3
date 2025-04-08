@@ -7,6 +7,7 @@
 
 #include "scheduler/Scheduler.h"
 #include "util/Utils.h"
+#include "util/Data.h"
 #include "util/Profiler.h"
 
 #include "angelscript/include/angelscript.h"
@@ -189,7 +190,7 @@ void CScheduler::RemoveJob(const std::shared_ptr<IMainJob>& task)
 
 void CScheduler::RemoveReleaseJob(const std::shared_ptr<IMainJob>& task)
 {
-	std::remove(releaseTasks.begin(), releaseTasks.end(), task);
+	utils::really_remove(releaseTasks, task);
 }
 
 void CScheduler::WorkerThread(int num)

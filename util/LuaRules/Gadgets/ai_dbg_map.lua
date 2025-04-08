@@ -336,7 +336,7 @@ local function InitGL4()
 		gadgetHandler:RemoveGadget()
 	end
 
-	local luaShaderDir = "LuaUI/Widgets/Include/"
+	local luaShaderDir = "LuaUI/Include/"
 	local LuaShader = VFS.Include(luaShaderDir.."LuaShader.lua")
 	VFS.Include(luaShaderDir.."instancevbotable.lua")
 
@@ -594,7 +594,8 @@ local function drawThrGL4Way()
 						gl.Translate(px, py, pz)
 						gl.Rotate(-90, 1, 0, 0)
 --						gl.Rotate(dir, 0, 0, 1)
-						gl.Text(("%.2f"):format(value), 0.0, 0.0, 14, "cno")
+-- 						gl.Text(("%.2f"):format(value), 0.0, 0.0, 14, "cno")
+						gl.Text(("%.0f"):format(value), 0.0, 0.0, 6, "cno")
 
 						gl.PopMatrix()
 					end

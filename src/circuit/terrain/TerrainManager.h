@@ -222,7 +222,8 @@ public:
 
 	float GetLandPercent() const { return areaData->percentLand; }
 	float GetMinLandPercent() const { return minLandPercent; }
-	bool IsWaterMap() const { return GetLandPercent() < GetMinLandPercent(); }
+	bool IsWaterAVoid() const { return terrainData->waterIsAVoid; }
+	bool IsWaterMap() const { return !IsWaterAVoid() && GetLandPercent() < GetMinLandPercent(); }
 	bool IsWaterSector(const springai::AIFloat3& position) const { return IsWaterSector(GetSectorIndex(position)); }
 	bool IsWaterSector(const int sIndex) const { return areaData->sector[sIndex].isWater; }
 

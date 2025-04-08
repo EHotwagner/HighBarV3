@@ -326,7 +326,7 @@ void CTerrainData::Init(CCircuitAI* circuit)
 			for (auto& it : immobileType) {
 				if ((it.canHover && (it.maxElevation >= sector[i].maxElevation) && !waterIsAVoid) ||
 					(it.canFloat && (it.maxElevation >= sector[i].maxElevation) && !waterIsHarmful) ||
-					((it.minElevation <= sector[i].minElevation) && (it.maxElevation >= sector[i].maxElevation) && (!waterIsHarmful || (sector[i].minElevation >=0))))
+					((it.minElevation <= sector[i].minElevation) && (it.maxElevation >= sector[i].maxElevation) && (!waterIsHarmful || (sector[i].minElevation >= 0))))
 				{
 					it.sector[i] = &sector[i];
 				}

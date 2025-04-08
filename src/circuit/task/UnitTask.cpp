@@ -8,6 +8,7 @@
 #include "task/UnitTask.h"
 #include "task/IdleTask.h"
 #include "module/UnitModule.h"
+#include "setup/SetupManager.h"
 #include "terrain/TerrainManager.h"
 #include "terrain/path/PathQuery.h"
 #include "unit/CircuitUnit.h"
@@ -70,7 +71,7 @@ void IUnitTask::AssignTo(CCircuitUnit* unit)
 		unit->RemoveWait();
 	)
 
-	if (!unit->GetCircuitDef()->IsMobile()) {
+	if (!unit->GetCircuitDef()->IsMobile() && manager->GetCircuit()->GetSetupManager()->IsAntiCap()) {
 		unit->PushBack(new CAntiCapAction(unit));
 	}
 }

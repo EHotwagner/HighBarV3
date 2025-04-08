@@ -51,6 +51,7 @@ CSetupManager::CSetupManager(CCircuitAI* circuit, CSetupData* setupData)
 		, energyBase(-RgtVector)
 		, energyBase2(-RgtVector)
 		, smallEnergyPos(-RgtVector)
+		, antiCapProb(2.f)
 		, emptyShield(0.f)
 		, fullShield(0.f)
 		, assistFac(0)
@@ -331,6 +332,9 @@ void CSetupManager::ReadConfig()
 {
 	const Json::Value& root = GetConfig();
 	const std::string& cfgName = GetConfigName();
+
+	antiCapProb = root["quota"].get("anti_cap", 2.0f).asFloat();
+
 	const Json::Value& shield = root["retreat"]["shield"];
 	emptyShield = shield.get((unsigned)0, 0.1f).asFloat();
 	fullShield = shield.get((unsigned)1, 0.6f).asFloat();

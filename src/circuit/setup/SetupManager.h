@@ -80,6 +80,7 @@ public:
 	CAllyTeam* GetAllyTeam() const;
 
 	void ReadConfig();
+	bool IsAntiCap() const { return antiCapProb > (float)rand() / RAND_MAX; }
 	float GetEmptyShield() const { return emptyShield; }
 	float GetFullShield() const { return fullShield; }
 	int GetAssistFac() const { return assistFac; }
@@ -120,6 +121,7 @@ private:
 	std::shared_ptr<IMainJob> findStart;
 	std::vector<StartFunc> startFuncs;
 
+	float antiCapProb;
 	float emptyShield;
 	float fullShield;
 	int assistFac;

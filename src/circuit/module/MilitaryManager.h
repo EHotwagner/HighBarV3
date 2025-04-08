@@ -139,6 +139,7 @@ public:
 	const std::set<CCircuitUnit*>& GetRoleUnits(CCircuitDef::RoleT type) const {
 		return roleInfos[type].units;
 	}
+	float GetRoleCost(CCircuitDef::RoleT type) const { return roleInfos[type].cost; }
 	void AddResponse(CCircuitUnit* unit);
 	void DelResponse(CCircuitUnit* unit);
 	float GetArmyCost() const { return armyCost; }

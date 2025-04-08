@@ -1464,7 +1464,7 @@ void CTerrainManager::MarkBusPath()
 			FillParentBusNodes(q->GetPathInfo().get());
 			CPathFinder* pathfinder = circuit->GetPathfinder();
 			const int granularity = pathfinder->GetSquareSize() / (SQUARE_SIZE * 2);
-			const int howWide = pathfinder->GetSquareSize() / 32;
+			const int howWide = pathfinder->GetSquareSize() / 32;  // 1, 2, 4
 			for (int index : q->GetPathInfo()->path) {  // path can be empty
 				int ix, iz;
 				pathfinder->PathIndex2PathXY(index, &ix, &iz);

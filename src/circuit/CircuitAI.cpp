@@ -86,11 +86,13 @@ using namespace terrain;
  * Разрушать города,
  * Видеть в братьях мишени...
  */
-constexpr char version[]{"1.6.18"};
+constexpr char version[]{"1.6.19"};
 constexpr uint32_t VERSION_SAVE = 4;
 
 std::unique_ptr<CGameAttribute> CCircuitAI::gameAttribute(nullptr);
 unsigned int CCircuitAI::gaCounter = 0;
+// HAX to fix event sequence UnitCreated=>UnitDestroyed=>UnitFinished within single frame
+std::set<ICoreUnit::Id> destroyed;  // in current frame, between Update events
 
 CCircuitAI::CCircuitAI(OOAICallback* clb)
 		: eventHandler(&CCircuitAI::HandleGameEvent)
@@ -255,11 +257,15 @@ int CCircuitAI::HandleGameEvent(int topic, const void* data)
 			struct SUnitFinishedEvent* evt = (struct SUnitFinishedEvent*)data;
 			TRACY_TOPIC_UNIT("EVENT_UNIT_FINISHED", UnitFinished, evt->unit);
 
-			// Lua might call SetUnitHealth within eventHandler.UnitCreated(this, builder);
-			// and trigger UnitFinished before eoh->UnitCreated(*this, builder);
-			// @see rts/Sim/Units/Unit.cpp CUnit::PostInit
-			CCircuitUnit* unit = GetOrRegTeamUnit(evt->unit);
-			ret = (unit != nullptr) ? this->UnitFinished(unit) : ERROR_UNIT_FINISHED;
+			if (destroyed.find(evt->unit) == destroyed.end()) {  // prevents UnitCreated=>UnitDestroyed=>UnitFinished
+				// Lua might call SetUnitHealth within eventHandler.UnitCreated(this, builder);
+				// and trigger UnitFinished before eoh->UnitCreated(*this, builder);
+				// @see rts/Sim/Units/Unit.cpp CUnit::PostInit
+				CCircuitUnit* unit = GetOrRegTeamUnit(evt->unit);
+				ret = (unit != nullptr) ? this->UnitFinished(unit) : ERROR_UNIT_FINISHED;
+			} else {
+				ret = 0;
+			}
 		} break;
 		case EVENT_UNIT_IDLE: {
 			struct SUnitIdleEvent* evt = (struct SUnitIdleEvent*)data;
@@ -773,6 +779,7 @@ int CCircuitAI::Release(int reason)
 
 int CCircuitAI::Update(int frame)
 {
+	destroyed.clear();
 	lastFrame = frame;
 	if (isResigned) {
 		Release(RELEASE_RESIGN);
@@ -1014,8 +1021,10 @@ int CCircuitAI::UnitCreated(CCircuitUnit* unit, CCircuitUnit* builder)
 
 int CCircuitAI::UnitFinished(CCircuitUnit* unit)
 {
-	if (unit->GetUnit()->IsBeingBuilt()) {
-		return 0;  // created by gadget
+	if (unit->GetUnit()->IsBeingBuilt() || (unit->GetTask() == nullptr)) {
+		// NOTE: unit->GetTask()=nullptr in case of UnitCreated=>UnitDestroyed=>UnitFinished sequence
+		// and unit->GetUnit()->IsBeingBuilt() when spawned full health by gadget UnitFinished=>UnitCreated
+		return 0;
 	}
 	unit->SetIsFinished();  // TODO: Investigate rezz, plop and capture
 
@@ -1121,6 +1130,7 @@ int CCircuitAI::UnitDamaged(CCircuitUnit* unit, ICoreUnit::Id attackerId, int we
 
 int CCircuitAI::UnitDestroyed(CCircuitUnit* unit, CEnemyInfo* attacker)
 {
+	destroyed.insert(unit->GetId());
 	for (auto& module : modules) {
 		module->UnitDestroyed(unit, attacker);
 	}

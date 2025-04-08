@@ -1009,7 +1009,7 @@ int CMicroPather::FindWidePathToBus(void* startNode, VoidVec& endNodes,
 				if (CantMoveTo(indexEnd)) {
 					continue;
 				}
-				switch (howWide) {
+				switch (howWide) {  // 1, 2, 4
 					case 0:
 						if (CantMoveTo(indexEnd - 1) || CantMoveTo(indexEnd + 1)
 							|| CantMoveTo(indexEnd - mapSizeX) || CantMoveTo(indexEnd + mapSizeX))  // offsets[0..3]
@@ -1046,7 +1046,7 @@ int CMicroPather::FindWidePathToBus(void* startNode, VoidVec& endNodes,
 
 				float newCost = nodeCostFromStart;
 				float nodeCost = canMoveArray[indexEnd] + moveFun(directNode->index2);
-				switch (howWide) {
+				switch (howWide) {  // 1, 2, 4
 					case 0:
 						nodeCost += canMoveArray[indexEnd - 1] + canMoveArray[indexEnd + 1] + canMoveArray[indexEnd - mapSizeX] + canMoveArray[indexEnd + mapSizeX];
 						break;

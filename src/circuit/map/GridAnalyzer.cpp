@@ -822,7 +822,7 @@ void CGridAnalyzer::ReplaceAreaIds(TilePosition p, CArea::Id newAreaId)
 			if (f.areaId2 == oldAreaId) f.areaId2 = newAreaId;
 		}
 	} else {
-		std::remove_if(rawFrontier.begin(), rawFrontier.end(), [oldAreaId](const SFrontier& f) {
+		utils::really_remove_if(rawFrontier, [oldAreaId](const SFrontier& f) {
 			return (f.areaId1 == oldAreaId) || (f.areaId2 == oldAreaId);
 		});
 	}
