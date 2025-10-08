@@ -41,6 +41,8 @@ public:
 
 	CTerrainManager(CCircuitAI* circuit, terrain::CTerrainData* terrainData);
 	~CTerrainManager();
+
+	void InitAnalyzer();
 private:
 	CCircuitAI* circuit;
 	void ReadConfig();
@@ -55,8 +57,6 @@ public:
 		return springai::AIFloat3(GetTerrainWidth() / 2, 0, GetTerrainHeight() / 2);
 	}
 
-public:
-	void InitConfig() { ReadConfig(); }
 	void Init();
 	void AddBlocker(CCircuitDef* cdef, const springai::AIFloat3& pos, int facing, bool isOffset = false);
 	void DelBlocker(CCircuitDef* cdef, const springai::AIFloat3& pos, int facing, bool isOffset = false);

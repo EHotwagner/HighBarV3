@@ -133,8 +133,6 @@ CEnergyGrid::CEnergyGrid(CCircuitAI* circuit)
 			cdef.SetIsPylon(true);
 		}
 	}
-
-	ReadConfig();
 }
 
 CEnergyGrid::~CEnergyGrid()

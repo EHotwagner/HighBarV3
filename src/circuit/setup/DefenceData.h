@@ -37,8 +37,8 @@ public:
 	CDefenceData(CCircuitAI* circuit);
 	~CDefenceData();
 
-private:
 	void ReadConfig(CCircuitAI* circuit);
+private:
 	void Init(CCircuitAI* circuit);
 
 public:
@@ -70,17 +70,17 @@ private:
 			2 /* dim */, int>;
 	DefTree defTree;  // TODO: replace cluster points, currently unused
 
-	float baseRadMin;
-	float baseRadMax;
-	float baseRange;
-	float commRadBegin;
-	float commRadFraction;
+	float baseRadMin = 0.f;
+	float baseRadMax = 0.f;
+	float baseRange = 0.f;
+	float commRadBegin = 0.f;
+	float commRadFraction = 0.f;
 
-	unsigned int guardTaskNum;
-	unsigned int guardsNum;
-	int guardFrame;
+	unsigned int guardTaskNum = 0;
+	unsigned int guardsNum = 0;
+	int guardFrame = 0;
 
-	float pointRange;
+	float pointRange = 0.f;
 };
 
 } // namespace circuit

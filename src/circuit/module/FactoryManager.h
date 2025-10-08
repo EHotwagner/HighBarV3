@@ -92,6 +92,7 @@ public:
 	CFactoryManager(CCircuitAI* circuit);
 	virtual ~CFactoryManager();
 
+	void InitHandlers();
 private:
 	void ReadConfig();
 	void Init();
@@ -173,10 +174,10 @@ private:
 	std::vector<CRecruitTask*> factoryTasks;  // order matters
 	float metalRequire;
 	float energyRequire;
-	float newFacModM;
-	float newFacModE;
-	float facModM;
-	float facModE;
+	float newFacModM = 0.f;
+	float newFacModE = 0.f;
+	float facModM = 0.f;
+	float facModE = 0.f;
 
 	std::vector<SSideInfo> sideInfos;
 
@@ -247,7 +248,7 @@ private:
 		bool isResponse;
 		int buildCount;
 	};
-	int numBatch;
+	int numBatch = 0;
 	std::map<CCircuitDef::Id, SFireDef> lastFireDef;  // factory: SFireDef
 	void SetLastRequiredDef(CCircuitDef::Id facId, CCircuitDef* cdef,
 							const std::vector<float>& probs, bool isResp);

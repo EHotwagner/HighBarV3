@@ -91,6 +91,7 @@ public:
 	CMilitaryManager(CCircuitAI* circuit);
 	virtual ~CMilitaryManager();
 
+	void InitHandlers();
 private:
 	void ReadConfig();
 	void InitEconomyScores(const std::vector<CCircuitDef*>&& builders);
@@ -238,15 +239,15 @@ private:
 		float min;
 		float avg;
 	} raid;
-	unsigned int maxScouts;
-	float minAttackers;
+	unsigned int maxScouts = 0;
+	float minAttackers = 0.f;
 	struct SThreatQuota {
 		float min;
 		float len;
 	} attackMod, defenceMod;
 
-	unsigned int preventCount;
-	float amountFactor;
+	unsigned int preventCount = 0;
+	float amountFactor = 0.f;
 	CCircuitDef* bigGunDef;
 
 	std::vector<SSideInfo> sideInfos;

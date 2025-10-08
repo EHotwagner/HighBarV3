@@ -46,11 +46,6 @@ CTerrainManager::CTerrainManager(CCircuitAI* circuit, CTerrainData* terrainData)
 		, dbgMap(nullptr)
 #endif
 {
-	assert(terrainData->IsInitialized());
-	terrainData->AnalyzeMap(circuit);
-
-	areaData = terrainData->pAreaData.load();
-
 	ResetBuildFrame();
 
 	CMap* map = circuit->GetMap();
@@ -85,6 +80,16 @@ CTerrainManager::~CTerrainManager()
 		delete[] dbgMap;
 	}
 #endif
+}
+
+void CTerrainManager::InitAnalyzer()
+{
+	assert(terrainData->IsInitialized());
+	terrainData->AnalyzeMap(circuit);
+
+	areaData = terrainData->pAreaData.load();
+
+	ReadConfig();
 }
 
 void CTerrainManager::ReadConfig()

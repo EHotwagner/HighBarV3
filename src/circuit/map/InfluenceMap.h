@@ -36,10 +36,7 @@ public:
 	CInfluenceMap(CMapManager* manager);
 	~CInfluenceMap();
 
-private:
 	void ReadConfig();
-
-public:
 	void EnqueueUpdate();
 	bool IsUpdating() const { return isUpdating; }
 
@@ -106,7 +103,7 @@ private:
 //	float* vulnerability;
 //	float* featureInfl;
 
-	float defRadius;
+	float defRadius = 0.f;
 
 #ifdef DEBUG_VIS
 private:

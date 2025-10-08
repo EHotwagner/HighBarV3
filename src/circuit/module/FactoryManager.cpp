@@ -57,6 +57,40 @@ CFactoryManager::CFactoryManager(CCircuitAI* circuit)
 {
 	circuit->GetScheduler()->RunOnInit(CScheduler::GameJob(&CFactoryManager::Init, this));
 
+
+	for (CCircuitDef& cdef : circuit->GetCircuitDefs()) {
+		// Auto-assign roles
+		auto setRoles = [circuit, &cdef](CCircuitDef::RoleT type) {
+			if (circuit->GetBindedRole(cdef.GetMainRole()) != type) {
+				cdef.SetMainRole(type);
+				cdef.AddEnemyRole(type);
+				cdef.AddRole(type);
+			}
+		};
+		if (cdef.IsAbleToFly()) {
+			setRoles(ROLE_TYPE(AIR));
+		} else if (!cdef.IsMobile() && cdef.IsAttacker() && cdef.HasSurfToLand()) {
+			setRoles(ROLE_TYPE(STATIC));
+		} else if (cdef.GetDef()->IsBuilder() && cdef.IsBuilder() && !cdef.IsRoleComm()) {
+			setRoles(ROLE_TYPE(BUILDER));
+		}
+		if (cdef.IsRoleComm()) {
+			// NOTE: Omit AddRole to exclude commanders from response
+//			cdef.SetMainRole(ROLE_TYPE(BUILDER));  // breaks retreat
+			cdef.AddEnemyRole(ROLE_TYPE(COMM));
+			cdef.AddEnemyRole(ROLE_TYPE(BUILDER));
+		}
+	}
+
+	factoryData = circuit->GetAllyTeam()->GetFactoryData().get();
+}
+
+CFactoryManager::~CFactoryManager()
+{
+}
+
+void CFactoryManager::InitHandlers()
+{
 	/*
 	 * factory handlers
 	 */
@@ -240,30 +274,6 @@ CFactoryManager::CFactoryManager(CCircuitAI* circuit)
 		UnitRemoved(unit, UseAs::ASSIST);
 	};
 
-	for (CCircuitDef& cdef : circuit->GetCircuitDefs()) {
-		// Auto-assign roles
-		auto setRoles = [circuit, &cdef](CCircuitDef::RoleT type) {
-			if (circuit->GetBindedRole(cdef.GetMainRole()) != type) {
-				cdef.SetMainRole(type);
-				cdef.AddEnemyRole(type);
-				cdef.AddRole(type);
-			}
-		};
-		if (cdef.IsAbleToFly()) {
-			setRoles(ROLE_TYPE(AIR));
-		} else if (!cdef.IsMobile() && cdef.IsAttacker() && cdef.HasSurfToLand()) {
-			setRoles(ROLE_TYPE(STATIC));
-		} else if (cdef.GetDef()->IsBuilder() && cdef.IsBuilder() && !cdef.IsRoleComm()) {
-			setRoles(ROLE_TYPE(BUILDER));
-		}
-		if (cdef.IsRoleComm()) {
-			// NOTE: Omit AddRole to exclude commanders from response
-//			cdef.SetMainRole(ROLE_TYPE(BUILDER));  // breaks retreat
-			cdef.AddEnemyRole(ROLE_TYPE(COMM));
-			cdef.AddEnemyRole(ROLE_TYPE(BUILDER));
-		}
-	}
-
 	ReadConfig();
 
 	CEconomyManager* economyMgr = circuit->GetEconomyManager();
@@ -290,12 +300,6 @@ CFactoryManager::CFactoryManager(CCircuitAI* circuit)
 			economyMgr->AddAssistDef(&cdef);
 		}
 	}
-
-	factoryData = circuit->GetAllyTeam()->GetFactoryData().get();
-}
-
-CFactoryManager::~CFactoryManager()
-{
 }
 
 void CFactoryManager::ReadConfig()

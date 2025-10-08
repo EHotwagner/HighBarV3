@@ -62,6 +62,17 @@ CMilitaryManager::CMilitaryManager(CCircuitAI* circuit)
 {
 	circuit->GetScheduler()->RunOnInit(CScheduler::GameJob(&CMilitaryManager::Init, this));
 
+	defence = circuit->GetAllyTeam()->GetDefenceData().get();
+
+	fightTasks.resize(static_cast<IFighterTask::FT>(IFighterTask::FightType::_SIZE_));
+}
+
+CMilitaryManager::~CMilitaryManager()
+{
+}
+
+void CMilitaryManager::InitHandlers()
+{
 	/*
 	 * Attacker handlers
 	 */
@@ -298,14 +309,6 @@ CMilitaryManager::CMilitaryManager(CCircuitAI* circuit)
 	}
 
 	InitEconomyScores(std::move(builders));
-
-	defence = circuit->GetAllyTeam()->GetDefenceData().get();
-
-	fightTasks.resize(static_cast<IFighterTask::FT>(IFighterTask::FightType::_SIZE_));
-}
-
-CMilitaryManager::~CMilitaryManager()
-{
 }
 
 void CMilitaryManager::ReadConfig()

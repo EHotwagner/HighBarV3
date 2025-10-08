@@ -39,6 +39,7 @@ CMapManager::CMapManager(CCircuitAI* circuit, float decloakRadius)
 
 	threatMap = new CThreatMap(this, decloakRadius);
 	inflMap = new CInfluenceMap(this);
+	inflMap->ReadConfig();
 }
 
 CMapManager::~CMapManager()

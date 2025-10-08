@@ -86,7 +86,7 @@ using namespace terrain;
  * Разрушать города,
  * Видеть в братьях мишени...
  */
-constexpr char version[]{"1.6.20"};
+constexpr char version[]{"1.6.21"};
 constexpr uint32_t VERSION_SAVE = 4;
 
 std::unique_ptr<CGameAttribute> CCircuitAI::gameAttribute(nullptr);
@@ -613,10 +613,10 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	isAllyAware &= allyTeam->GetSize() > 1;
 
 	terrainManager = std::make_shared<CTerrainManager>(this, &gameAttribute->GetTerrainData());
-	terrainManager->InitConfig();
+	terrainManager->InitAnalyzer();
 	economyManager = std::make_shared<CEconomyManager>(this);
-	// TODO: Move all ReadConfig() out of constructors: on bad json
-	// throws exception and leaks allocations in between.
+	// NOTE: ReadConfig() on bad json throws exception and leaks allocations in between.
+	// Hence user input processing must never be inside class constructor.
 	economyManager->InitHandlers();
 	economy = callback->GetEconomy();
 
@@ -637,8 +637,11 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 //	}
 
 	factoryManager = std::make_shared<CFactoryManager>(this);
+	factoryManager->InitHandlers();
 	builderManager = std::make_shared<CBuilderManager>(this);
+	builderManager->InitHandlers();
 	militaryManager = std::make_shared<CMilitaryManager>(this);
+	militaryManager->InitHandlers();
 
 	// TODO: Remove EconomyManager from module (move abilities to BuilderManager).
 	modules.push_back(militaryManager);

@@ -77,6 +77,7 @@ void CAllyTeam::Init(CCircuitAI* circuit, float decloakRadius)
 
 	mapManager = std::make_shared<CMapManager>(circuit, decloakRadius);
 	enemyManager = std::make_shared<CEnemyManager>(circuit);
+	enemyManager->ReadConfig();
 
 	uEnemyMark = circuit->GetSkirmishAIId() % THREAT_UPDATE_RATE;
 
@@ -87,9 +88,12 @@ void CAllyTeam::Init(CCircuitAI* circuit, float decloakRadius)
 
 	energyManager = std::make_shared<CEnergyManager>(circuit, &circuit->GetGameAttribute()->GetEnergyData());
 	energyGrid = std::make_shared<CEnergyGrid>(circuit);
+	energyGrid->ReadConfig();
 	defence = std::make_shared<CDefenceData>(circuit);
+	defence->ReadConfig(circuit);
 	pathfinder = std::make_shared<CPathFinder>(&circuit->GetGameAttribute()->GetTerrainData(), circuit->GetScheduler()->GetMaxWorkThreads());
-	factoryData = std::make_shared<CFactoryData>(circuit);
+	factoryData = std::make_shared<CFactoryData>();
+	factoryData->InitFactoryDefs(circuit);
 
 	releaseTask = CScheduler::GameJob(&CAllyTeam::DelegateAuthority, this);
 	circuit->GetScheduler()->RunOnRelease(releaseTask);

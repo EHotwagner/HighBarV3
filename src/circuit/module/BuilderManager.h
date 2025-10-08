@@ -248,6 +248,7 @@ public:
 	CBuilderManager(CCircuitAI* circuit);
 	virtual ~CBuilderManager();
 
+	void InitHandlers();
 private:
 	void ReadConfig();
 	void Init();
@@ -347,11 +348,11 @@ private:
 	unsigned int buildTasksCount;
 	float buildPower;
 
-	float goalExecTime;  // seconds
+	float goalExecTime = 0.f;  // seconds
 	std::set<CCircuitUnit*> workers;
 	std::map<CCircuitUnit*, std::shared_ptr<IPathQuery>> costQueries;  // IPathQuery owner
 
-	CCircuitDef* terraDef;
+	CCircuitDef* terraDef = nullptr;
 	std::unordered_map<IBuilderTask::BT, std::unordered_map<CCircuitDef*, SBuildChain*>> buildChains;  // owner
 	struct SSuper {
 		float minIncome;  // metal per second

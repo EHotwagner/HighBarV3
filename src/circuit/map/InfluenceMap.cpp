@@ -63,8 +63,6 @@ CInfluenceMap::CInfluenceMap(CMapManager* manager)
 //	drawTension = inflData1.tension.data();
 //	drawVulnerability = inflData1.vulnerability.data();
 //	drawFeatureInfl = inflData1.featureInfl.data();
-
-	ReadConfig();
 }
 
 CInfluenceMap::~CInfluenceMap()

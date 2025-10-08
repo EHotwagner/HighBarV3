@@ -99,8 +99,8 @@ public:
 	void SetAreaUpdated(bool value) { isAreaUpdated = value; }
 	const std::unordered_set<const terrain::SArea*>& GetEnemyAreas() const { return enemyAreas; }
 
-private:
 	void ReadConfig();
+private:
 	void KMeansIteration();
 
 	struct SGroupData {
@@ -149,7 +149,7 @@ private:
 		float inMobile;
 		float inStatic;
 	} initThrMod;
-	float maxAAThreat;
+	float maxAAThreat = 0.f;
 	struct SEnemyInfo {
 		float cost;
 		float threat;

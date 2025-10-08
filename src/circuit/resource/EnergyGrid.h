@@ -29,8 +29,8 @@ public:
 	CEnergyGrid(CCircuitAI* circuit);
 	virtual ~CEnergyGrid();
 
-private:
 	void ReadConfig();
+private:
 	void Init();
 
 public:

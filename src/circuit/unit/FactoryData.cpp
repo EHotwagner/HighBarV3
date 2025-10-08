@@ -24,8 +24,16 @@ namespace circuit {
 using namespace springai;
 using namespace terrain;
 
-CFactoryData::CFactoryData(CCircuitAI *circuit)
+CFactoryData::CFactoryData()
 		: choiceNum(0)
+{
+}
+
+CFactoryData::~CFactoryData()
+{
+}
+
+void CFactoryData::InitFactoryDefs(CCircuitAI *circuit)
 {
 	ReadConfig(circuit);
 
@@ -38,10 +46,6 @@ CFactoryData::CFactoryData(CCircuitAI *circuit)
 //			}
 //		}
 //	}
-}
-
-CFactoryData::~CFactoryData()
-{
 }
 
 CCircuitDef* CFactoryData::GetFactoryToBuild(CCircuitAI* circuit, AIFloat3 position,

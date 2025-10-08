@@ -31,8 +31,6 @@ CDefenceData::CDefenceData(CCircuitAI* circuit)
 		, defTree(2 /*dim*/, defAdaptor, KDTreeSingleIndexAdaptorParams(2 /*max leaf*/))
 {
 	circuit->GetScheduler()->RunOnInit(CScheduler::GameJob(&CDefenceData::Init, this, circuit));
-
-	ReadConfig(circuit);
 }
 
 CDefenceData::~CDefenceData()

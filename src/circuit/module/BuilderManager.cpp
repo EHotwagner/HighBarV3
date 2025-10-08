@@ -67,6 +67,28 @@ CBuilderManager::CBuilderManager(CCircuitAI* circuit)
 {
 	circuit->GetScheduler()->RunOnInit(CScheduler::GameJob(&CBuilderManager::Init, this));
 
+	buildTasks.resize(static_cast<IBuilderTask::BT>(IBuilderTask::BuildType::_SIZE_));
+
+	CTerrainManager* terrainMgr = circuit->GetTerrainManager();
+	for (auto mtId : workerMobileTypes) {
+		for (auto& area : terrainMgr->GetMobileTypeById(mtId)->area) {
+			buildAreas[&area] = std::map<CCircuitDef*, int>();
+		}
+	}
+	buildAreas[nullptr] = std::map<CCircuitDef*, int>();  // air
+}
+
+CBuilderManager::~CBuilderManager()
+{
+	for (auto& kv1 : buildChains) {
+		for (auto& kv2 : kv1.second) {
+			delete kv2.second;
+		}
+	}
+}
+
+void CBuilderManager::InitHandlers()
+{
 	/*
 	 * worker handlers
 	 */
@@ -286,24 +308,6 @@ CBuilderManager::CBuilderManager(CCircuitAI* circuit)
 	}
 
 	ReadConfig();
-
-	buildTasks.resize(static_cast<IBuilderTask::BT>(IBuilderTask::BuildType::_SIZE_));
-
-	for (auto mtId : workerMobileTypes) {
-		for (auto& area : terrainMgr->GetMobileTypeById(mtId)->area) {
-			buildAreas[&area] = std::map<CCircuitDef*, int>();
-		}
-	}
-	buildAreas[nullptr] = std::map<CCircuitDef*, int>();  // air
-}
-
-CBuilderManager::~CBuilderManager()
-{
-	for (auto& kv1 : buildChains) {
-		for (auto& kv2 : kv1.second) {
-			delete kv2.second;
-		}
-	}
 }
 
 void CBuilderManager::ReadConfig()

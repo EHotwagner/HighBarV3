@@ -51,8 +51,6 @@ CEnemyManager::CEnemyManager(CCircuitAI* circuit)
 
 	enemyPos = circuit->GetTerrainManager()->GetTerrainCenter();
 	enemyGroups.push_back(SEnemyGroup(enemyPos));
-
-	ReadConfig();
 }
 
 CEnemyManager::~CEnemyManager()
