@@ -53,6 +53,7 @@ public:
 	CEconomyManager(CCircuitAI* circuit);
 	virtual ~CEconomyManager();
 
+	void InitHandlers();
 	void InitEconomyScores();
 private:
 	void ReadConfig(float& outMinEInc);
@@ -163,9 +164,9 @@ private:
 		int metalFrame;
 	};
 	std::vector<SClusterInfo> clusterInfos;
-	float clusterRange;
-	float pylonRange;
-	float pylonLinkInc;
+	float clusterRange = 0.f;
+	float pylonRange = 0.f;
+	float pylonLinkInc = 0.f;
 	CCircuitDef* pylonDef;  // TODO: Move into CEnergyGrid?
 
 	std::unordered_map<CCircuitDef*, SEnergyCond> engyLimits;
@@ -215,7 +216,7 @@ private:
 	};
 	CAvailList<SGeoExt> geoDefs;
 
-	float costRatio;
+	float costRatio = 0.f;
 	struct SEnergyExt {
 		float make;
 		SEnergyCond cond;  // condition
@@ -224,9 +225,9 @@ private:
 	CAvailList<SEnergyExt> energyDefs;
 	void ReclaimOldEnergy(const SEnergyExt* energyExt);
 
-	float ecoStep;
-	float ecoFactor;
-	float ecoEMRatio;  // energy to metal ratio
+	float ecoStep = 0.f;
+	float ecoFactor = 0.f;
+	float ecoEMRatio = 0.f;  // energy to metal ratio
 
 	struct SEnergyFactorInfo {
 		float startFactor;
@@ -235,7 +236,7 @@ private:
 		int endFrame;
 		float fraction;
 	} efInfo;
-	float energyFactor;
+	float energyFactor = 0.f;
 
 	struct SBuildDelayInfo {
 		int startDelay;
@@ -244,17 +245,17 @@ private:
 		int endFrame;
 		float fraction;
 	} bdInfo;
-	int buildDelay;  // frames
+	int buildDelay = 0;  // frames
 
 	std::vector<float> metalIncomes;
 	std::vector<float> energyIncomes;
 	int indexRes;
 	float metalProduced;
 	float metalUsed;
-	float metalMod;
-	int mexMax;
-	bool isAllyMexMax;
-	unsigned numMexUp;
+	float metalMod = 0.f;
+	int mexMax = 0;
+	bool isAllyMexMax = false;
+	unsigned numMexUp = 0;
 
 	struct SPullMtoS {
 		float pull;
@@ -264,7 +265,7 @@ private:
 		inline bool operator() (const SPullMtoS& lhs, const int rhs) { return lhs.mex < rhs; }
 	};
 	std::vector<SPullMtoS> mspInfos;
-	float pullMtoS;  // mobile to static metal pull ratio
+	float pullMtoS = 0.f;  // mobile to static metal pull ratio
 
 	bool isMetalEmpty;
 	bool isMetalFull;
@@ -275,8 +276,6 @@ private:
 	float reclConvertEff;
 	float reclEnergyEff;
 
-	int metalPullFrame;
-	int energyPullFrame;
 	struct SResourceInfo {
 		int pullFrame;
 		float current;

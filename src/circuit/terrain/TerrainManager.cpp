@@ -70,8 +70,6 @@ CTerrainManager::CTerrainManager(CCircuitAI* circuit, CTerrainData* terrainData)
 	blockingMap.rowsAlly = mapHeight / (GRID_RATIO_ALLY * 2);
 	SBlockingMap::SBlockCellAlly cellAlly = {0};
 	blockingMap.gridAlly.resize(blockingMap.columnsAlly * blockingMap.rowsAlly, cellAlly);
-
-	ReadConfig();
 }
 
 CTerrainManager::~CTerrainManager()

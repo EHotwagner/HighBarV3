@@ -100,6 +100,7 @@ CCircuitAI::CCircuitAI(OOAICallback* clb)
 		, metalRes(nullptr)
 		, energyRes(nullptr)
 		, allyTeam(nullptr)
+		, isAllyTeamInit(false)
 		, actionIterator(0)
 		, isCheating(false)
 		, isAllyAware(true)
@@ -221,8 +222,14 @@ int CCircuitAI::HandleGameEvent(int topic, const void* data)
 				LOG("Exception: %s", e.what());
 				NotifyGameEnd();
 				ret = 0;
+			} catch (const std::exception& e) {
+				Release(RELEASE_CORRUPTED);
+				LOG("Lib exception: %s", e.what());
+				ret = ERROR_INIT;  // non-zero value deletes AI
 			} catch (...) {
-				ret = ERROR_INIT;
+				Release(RELEASE_CORRUPTED);  // DestroyGameAttribute
+				LOG("Unknown exception");
+				ret = ERROR_INIT;  // non-zero value deletes AI
 			}
 			return ret;
 		} break;
@@ -597,12 +604,23 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 //	}
 
 	allyTeam = setupManager->GetAllyTeam();
+	// TODO: isAllyTeamInit is a workaround: when config has issues and exception is thrown between
+	// allyTeam assignment and allyTeam->Init() call then allyTeam->Release() is invoked.
+	// Assignment and Init() should be simultaneous, but it has dependency on data from
+	// terrainManager and economyManager and vice versa. Instead terrainManager and economyManager could
+	// receive temporary structs with required info (seems only team size required).
+	isAllyTeamInit = false;
 	isAllyAware &= allyTeam->GetSize() > 1;
 
 	terrainManager = std::make_shared<CTerrainManager>(this, &gameAttribute->GetTerrainData());
+	terrainManager->InitConfig();
 	economyManager = std::make_shared<CEconomyManager>(this);
+	// TODO: Move all ReadConfig() out of constructors: on bad json
+	// throws exception and leaks allocations in between.
+	economyManager->InitHandlers();
 	economy = callback->GetEconomy();
 
+	isAllyTeamInit = true;
 	allyTeam->Init(this, decloakRadius);
 	mapManager = allyTeam->GetMapManager();
 	enemyManager = allyTeam->GetEnemyManager();
@@ -762,8 +780,10 @@ int CCircuitAI::Release(int reason)
 		delete kv.second;
 	}
 	enemyInfos.clear();
-	if (allyTeam != nullptr) {
+	if (allyTeam != nullptr && isAllyTeamInit) {
 		allyTeam->Release();
+		allyTeam = nullptr;
+//		isAllyTeamInit = false;
 	}
 
 	DestroyGameAttribute();

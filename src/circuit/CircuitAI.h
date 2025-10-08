@@ -182,6 +182,7 @@ private:
 	Units teamUnits;  // owner
 	EnemyInfos enemyInfos;  // owner
 	CAllyTeam* allyTeam;
+	bool isAllyTeamInit;
 
 	std::vector<CCircuitUnit*> actionUnits;
 	unsigned int actionIterator;

@@ -56,6 +56,7 @@ public:
 	}
 
 public:
+	void InitConfig() { ReadConfig(); }
 	void Init();
 	void AddBlocker(CCircuitDef* cdef, const springai::AIFloat3& pos, int facing, bool isOffset = false);
 	void DelBlocker(CCircuitDef* cdef, const springai::AIFloat3& pos, int facing, bool isOffset = false);

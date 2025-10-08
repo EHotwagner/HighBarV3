@@ -165,7 +165,7 @@ void CBMexTask::OnUnitIdle(CCircuitUnit* unit)
 void CBMexTask::SetBuildPos(const AIFloat3& pos)
 {
 	FindFacing(pos);
-	// NOTE: May require replacing IBuilderTask::SetBuildPos(pos); and saving raw pos in BuildPos
+	// NOTE: May require replacing IBuilderTask::SetBuildPos(pos); and saving raw pos in buildPos
 	// because cmd_mex_denier.lua can't into multiples of 16
 	// Downside is MexUpTask would also require changes.
 	IBuilderTask::SetBuildPos(pos);

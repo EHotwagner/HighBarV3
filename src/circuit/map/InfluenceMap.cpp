@@ -144,7 +144,7 @@ void CInfluenceMap::Apply()
 			} else {
 				AddStaticArmed(u);
 			}
-		} else {
+		} else if (!u->GetCircuitDef()->IsAbleToFly()) {
 			AddUnarmed(u);
 		}
 	}

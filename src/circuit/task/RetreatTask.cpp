@@ -174,11 +174,13 @@ void CRetreatTask::Update()
 				? (healthPerc > 0.98f) && unit->IsShieldCharged(circuit->GetSetupManager()->GetFullShield())
 				: healthPerc > 0.98f;
 
+		CCircuitDef* cdef = unit->GetCircuitDef();
 		if (isRepaired && !unit->IsDisarmed(frame)) {
 			Recovered(unit);
 		} else if (unit->IsForceUpdate(frame) || isExecute) {
 			Start(unit);
-		} else if ((circuit->GetBindedRole(unit->GetCircuitDef()->GetMainRole()) == ROLE_TYPE(BUILDER))
+		} else if ((circuit->GetBindedRole(cdef->GetMainRole()) == ROLE_TYPE(BUILDER))
+			&& (!cdef->IsRoleComm() || (healthPerc >= cdef->GetRetreat()))
 			&& (circuit->GetInflMap()->GetEnemyInflAt(unit->GetPos(frame)) < INFL_EPS))
 		{
 			Recovered(unit);

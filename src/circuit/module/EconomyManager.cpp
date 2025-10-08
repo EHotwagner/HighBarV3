@@ -79,7 +79,19 @@ CEconomyManager::CEconomyManager(CCircuitAI* circuit)
 	//       https://ru.wikipedia.org/wiki/Марковский_процесс_принятия_решений
 
 	circuit->GetScheduler()->RunOnInit(CScheduler::GameJob(&CEconomyManager::Init, this));
+}
 
+CEconomyManager::~CEconomyManager()
+{
+	delete metalRes;
+	delete energyRes;
+	delete economy;
+
+	delete factoryTask;
+}
+
+void CEconomyManager::InitHandlers()
+{
 	/*
 	 * resources
 	 */
@@ -241,7 +253,7 @@ CEconomyManager::CEconomyManager(CCircuitAI* circuit)
 				finishedHandler[cdef.GetId()] = mexFinishedHandler;
 				metalDefs.AddDef(&cdef);
 				cdef.SetIsMex(true);
-				IncPurpose(cdef.GetId()); // avoid reclaiming of multi-pyrpose old converter/energy
+				IncPurpose(cdef.GetId());  // avoid reclaiming of multi-purpose old converter/energy
 				continue;  // NOTE: won't deal with spot requirement if considered as anything else.
 			}
 			if (((it = customParams.find("energyconv_capacity")) != customParams.end()) && (utils::string_to_float(it->second) > 0.f)
@@ -249,7 +261,7 @@ CEconomyManager::CEconomyManager(CCircuitAI* circuit)
 			{
 				finishedHandler[cdef.GetId()] = convertFinishedHandler;
 				convertDefs.AddDef(&cdef);
-				IncPurpose(cdef.GetId()); // avoid reclaiming of multi-pyrpose old converter/energy
+				IncPurpose(cdef.GetId());  // avoid reclaiming of multi-purpose old converter/energy
 			}
 
 			// energy
@@ -268,25 +280,31 @@ CEconomyManager::CEconomyManager(CCircuitAI* circuit)
 					finishedHandler[cdef.GetId()] = energyFinishedHandler;
 					energyDefs.AddDef(&cdef);
 				}
-				IncPurpose(cdef.GetId()); // avoid reclaiming of multi-pyrpose old converter/energy
+				IncPurpose(cdef.GetId());  // avoid reclaiming of multi-purpose old converter/energy
 			}
 
 			// storage
 			// NOTE: have to manually filter spot units, as mex placement rules are re-defined in game and break in-engine validation
 			if ((cdef.GetDef()->GetStorage(metalRes) >= 1000.f)/* && !cdef.IsMex()*/) {
 				storeMDefs.AddDef(&cdef);
-				IncPurpose(cdef.GetId()); // avoid reclaiming of multi-pyrpose old converter/energy
+				IncPurpose(cdef.GetId());  // avoid reclaiming of multi-purpose old converter/energy
 			}
 			if ((cdef.GetDef()->GetStorage(energyRes) > 1000.f) && !cdef.GetDef()->IsNeedGeo()) {
 				storeEDefs.AddDef(&cdef);
-				IncPurpose(cdef.GetId()); // avoid reclaiming of multi-pyrpose old converter/energy
+				IncPurpose(cdef.GetId());  // avoid reclaiming of multi-purpose old converter/energy
 			}
 
 			if (customParams.find("isairbase") != customParams.end()) {
 				createdHandler[cdef.GetId()] = airpadCreatedHandler;
 				destroyedHandler[cdef.GetId()] = airpadDestroyedHandler;
 				airpadDefs.AddDef(&cdef);
-				IncPurpose(cdef.GetId()); // avoid reclaiming of multi-pyrpose old converter/energy
+				IncPurpose(cdef.GetId());  // avoid reclaiming of multi-purpose old converter/energy
+			}
+
+			if ((cdef.GetDef()->GetResourceMake(metalRes) - cdef.GetUpkeepM() > 0.f)
+				|| cdef.GetDef()->IsBuilder())
+			{
+				IncPurpose(cdef.GetId());  // avoid reclaiming of multi-purpose old converter/energy
 			}
 
 		} else {
@@ -319,15 +337,6 @@ CEconomyManager::CEconomyManager(CCircuitAI* circuit)
 		pylonRange = PYLON_RANGE;
 	}
 	// FIXME: BA
-}
-
-CEconomyManager::~CEconomyManager()
-{
-	delete metalRes;
-	delete energyRes;
-	delete economy;
-
-	delete factoryTask;
 }
 
 void CEconomyManager::ReadConfig(float& outMinEInc)
@@ -989,7 +998,7 @@ IBuilderTask* CEconomyManager::UpdateMetalTasks(const AIFloat3& position, CCircu
 		const std::vector<CCircuitDef*>& mexDefOptions = metalDefs.GetBuildDefs(unit->GetCircuitDef());
 		std::vector<std::pair<CCircuitDef*, float>> mexDefs;
 		float maxRange = 0.f;
-		for (auto it = mexDefOptions.begin(); it != mexDefOptions.end(); ++it){
+		for (auto it = mexDefOptions.begin(); it != mexDefOptions.end(); ++it) {
 			CCircuitDef* mDef = *it;
 			if (mDef->IsAvailable(frame)) {
 				mexDefs.push_back(std::make_pair(mDef, mDef->GetExtractsM()));
