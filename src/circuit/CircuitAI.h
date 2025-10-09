@@ -148,6 +148,7 @@ private:
 	void UnregisterTeamUnit(CCircuitUnit* unit);
 	void DeleteTeamUnit(CCircuitUnit* unit);
 public:
+	void GiveUnits(std::vector<CCircuitUnit*>&& units, int newTeamId);
 	void Garbage(CCircuitUnit* unit, const char* reason);
 	CCircuitUnit* GetTeamUnit(ICoreUnit::Id unitId) const;
 	const Units& GetTeamUnits() const { return teamUnits; }

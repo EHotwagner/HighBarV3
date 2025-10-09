@@ -699,6 +699,9 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 			scheduler->RunJobEvery(mergeTask, FRAMES_PER_SEC, FRAMES_PER_SEC * 10);
 #if 0
 		} else if (allyTeam->GetAliveSize() > 2) {
+			// FIXME: Follower AI shares all its mobile non-builder-role units to Leader AI.
+			// Results in constantly building scouts or anti-air due to highest importance in response
+			// and having them always 0 due to sharing.
 			mergeTask = CScheduler::GameJob([this] {
 				if (allyTeam->GetLeaderId() == teamId) {
 					scheduler->RemoveJob(mergeTask);
@@ -1089,7 +1092,8 @@ int CCircuitAI::UnitFinished(CCircuitUnit* unit)
 		module->UnitFinished(unit);
 	}
 
-	if ((unit->GetTask()->GetType() != IUnitTask::Type::NIL)
+	if (!unit->IsDead()  // AiUnitAdded script can give away unit by now
+		&& (unit->GetTask()->GetType() != IUnitTask::Type::NIL)
 		&& (unit->GetUnit()->GetRulesParamFloat("resurrected", 0.f) != 0.f))
 	{
 		unit->GetTask()->GetManager()->Resurrected(unit);
@@ -1475,6 +1479,20 @@ void CCircuitAI::DeleteTeamUnit(CCircuitUnit* unit)
 {
 	garbage.erase(unit);
 	delete unit;
+}
+
+void CCircuitAI::GiveUnits(std::vector<CCircuitUnit*>&& units, int newTeamId)
+{
+	// NOTE: See notes in MobileSlave or other economy->SendUnits places
+	std::vector<Unit*> migrants;
+	migrants.reserve(units.size());
+	for (CCircuitUnit* unit : units) {
+		migrants.push_back(unit->GetUnit());
+		// Units only marked for deletion, should be safe
+		UnitDestroyed(unit, nullptr);
+		UnregisterTeamUnit(unit);
+	}
+	economy->SendUnits(migrants, newTeamId);
 }
 
 void CCircuitAI::Garbage(CCircuitUnit* unit, const char* reason)

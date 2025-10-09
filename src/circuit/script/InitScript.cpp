@@ -155,6 +155,16 @@ static int CCircuitAI_GetLeadTeamId(CCircuitAI* circuit)
 	return circuit->GetAllyTeam()->GetLeaderId();
 }
 
+static void CCircuitAI_GiveUnits(CCircuitAI* circuit, const CScriptArray* array, int newTeamId)
+{
+	std::vector<CCircuitUnit*> units;
+	units.reserve(array->GetSize());
+	for (asUINT i = 0; i < array->GetSize(); ++i) {
+		units.push_back(*static_cast<CCircuitUnit* const*>(array->At(i)));
+	}
+	circuit->GiveUnits(std::move(units), newTeamId);
+}
+
 static const std::string CCircuitDef_GetName(CCircuitDef* cdef)
 {
 	return cdef->GetDef()->GetName();
@@ -263,6 +273,7 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("CCircuitAI", "int GetLeadTeamId() const", asFUNCTION(CCircuitAI_GetLeadTeamId), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitAI", "Type GetSideId() const", asMETHOD(CCircuitAI, GetSideId), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitAI", "const string& GetSideName() const", asMETHOD(CCircuitAI, GetSideName), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CCircuitAI", "void GiveUnits(const array<CCircuitUnit@>@+, int)", asFUNCTION(CCircuitAI_GiveUnits), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 
 	CMaskHandler* sideMasker = &circuit->GetGameAttribute()->GetSideMasker();
 	CMaskHandler* roleMasker = &circuit->GetGameAttribute()->GetRoleMasker();
