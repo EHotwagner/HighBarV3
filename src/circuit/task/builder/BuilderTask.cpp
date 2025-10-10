@@ -327,6 +327,9 @@ void IBuilderTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 	CCircuitDef* cdef = unit->GetCircuitDef();
 	const float healthPerc = unit->GetHealthPercent();
 	if ((healthPerc > cdef->GetRetreat()) && !unit->IsDisarmed(frame)) {
+		if (healthPerc < cdef->GetSelfDHP()) {
+			unit->CmdSelfD(true);
+		}
 		return;
 	}
 

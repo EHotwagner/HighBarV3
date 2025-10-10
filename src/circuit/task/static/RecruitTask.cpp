@@ -199,7 +199,9 @@ void CRecruitTask::OnUnitIdle(CCircuitUnit* unit)
 
 void CRecruitTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 {
-	// TODO: React: analyze, abort, create appropriate task
+	if (unit->GetHealthPercent() < unit->GetCircuitDef()->GetSelfDHP()) {
+		unit->CmdSelfD(true);
+	}
 }
 
 void CRecruitTask::OnUnitDestroyed(CCircuitUnit* unit, CEnemyInfo* attacker)

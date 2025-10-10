@@ -28,6 +28,8 @@
 #include "Log.h"
 #include "Drawer.h"
 #include "Game.h"
+#include "Team.h"
+#include "Lua.h"
 
 namespace circuit {
 
@@ -165,9 +167,49 @@ static void CCircuitAI_GiveUnits(CCircuitAI* circuit, const CScriptArray* array,
 	circuit->GiveUnits(std::move(units), newTeamId);
 }
 
+static std::string CCircuitAI_CallRules(CCircuitAI* circuit, const std::string& data)
+{
+	return circuit->GetLua()->CallRules(data.c_str(), data.size());
+}
+
+static std::string CCircuitAI_CallUI(CCircuitAI* circuit, const std::string& data)
+{
+	return circuit->GetLua()->CallUI(data.c_str(), data.size());
+}
+
+static float CCircuitAI_GetGameRulesParamFloat(CCircuitAI* circuit, const std::string& key, float defVal)
+{
+	return circuit->GetGame()->GetRulesParamFloat(key.c_str(), defVal);
+}
+
+static std::string CCircuitAI_GetGameRulesParamString(CCircuitAI* circuit, const std::string& key, const std::string& defVal)
+{
+	return circuit->GetGame()->GetRulesParamString(key.c_str(), defVal.c_str());
+}
+
+static float CCircuitAI_GetTeamRulesParamFloat(CCircuitAI* circuit, const std::string& key, float defVal)
+{
+	return circuit->GetTeam()->GetRulesParamFloat(key.c_str(), defVal);
+}
+
+static std::string CCircuitAI_GetTeamRulesParamString(CCircuitAI* circuit, const std::string& key, const std::string& defVal)
+{
+	return circuit->GetTeam()->GetRulesParamString(key.c_str(), defVal.c_str());
+}
+
 static const std::string CCircuitDef_GetName(CCircuitDef* cdef)
 {
 	return cdef->GetDef()->GetName();
+}
+
+static float CCircuitUnit_GetRulesParamFloat(CCircuitUnit* unit, const std::string& key, float defVal)
+{
+	return unit->GetUnit()->GetRulesParamFloat(key.c_str(), defVal);
+}
+
+static std::string CCircuitUnit_GetRulesParamString(CCircuitUnit* unit, const std::string& key, const std::string& defVal)
+{
+	return unit->GetUnit()->GetRulesParamString(key.c_str(), defVal.c_str());
 }
 
 CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
@@ -274,6 +316,14 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("CCircuitAI", "Type GetSideId() const", asMETHOD(CCircuitAI, GetSideId), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitAI", "const string& GetSideName() const", asMETHOD(CCircuitAI, GetSideName), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitAI", "void GiveUnits(const array<CCircuitUnit@>@+, int)", asFUNCTION(CCircuitAI_GiveUnits), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	// Lua<-->AI communications [in Spring 0.83+]
+	r = engine->RegisterObjectMethod("CCircuitAI", "string CallRules(const string& in)", asFUNCTION(CCircuitAI_CallRules), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CCircuitAI", "string CallUI(const string& in)", asFUNCTION(CCircuitAI_CallUI), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	// RulesParams accessors on AI (game/team)
+	r = engine->RegisterObjectMethod("CCircuitAI", "float GetGameRulesParam(const string& in, float) const", asFUNCTION(CCircuitAI_GetGameRulesParamFloat), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CCircuitAI", "string GetGameRulesParam(const string& in, const string& in) const", asFUNCTION(CCircuitAI_GetGameRulesParamString), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CCircuitAI", "float GetTeamRulesParam(const string& in, float) const", asFUNCTION(CCircuitAI_GetTeamRulesParamFloat), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CCircuitAI", "string GetTeamRulesParam(const string& in, const string& in) const", asFUNCTION(CCircuitAI_GetTeamRulesParamString), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 
 	CMaskHandler* sideMasker = &circuit->GetGameAttribute()->GetSideMasker();
 	CMaskHandler* roleMasker = &circuit->GetGameAttribute()->GetRoleMasker();
@@ -334,6 +384,10 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("CCircuitUnit", "void TglAttribute(Type)", asMETHOD(CCircuitUnit, TglAttribute), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitUnit", "bool IsAttrAny(Mask) const", asMETHOD(CCircuitUnit, IsAttrAny), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitUnit", "void SetFireState(int)", asMETHOD(CCircuitUnit, TrySetFireState), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CCircuitUnit", "void SelfDestruct(bool)", asMETHOD(CCircuitUnit, CmdSelfD), asCALL_THISCALL); ASSERT(r >= 0);
+	// RulesParams accessor on Unit
+	r = engine->RegisterObjectMethod("CCircuitUnit", "float GetRulesParam(const string& in, float) const", asFUNCTION(CCircuitUnit_GetRulesParamFloat), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CCircuitUnit", "string GetRulesParam(const string& in, const string& in) const", asFUNCTION(CCircuitUnit_GetRulesParamString), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 
 	CSetupManager* setupMgr = circuit->GetSetupManager();
 	r = engine->RegisterObjectType("CSetupManager", 0, asOBJ_REF | asOBJ_NOHANDLE); ASSERT(r >= 0);
@@ -467,6 +521,7 @@ bool CInitScript::Init()
 	asIScriptModule* mod = script->GetEngine()->GetModule(CScriptManager::mainName.c_str());
 	int r = mod->SetDefaultNamespace("Main"); ASSERT(r >= 0);
 	mainInfo.update = script->GetFunc(mod, "void AiUpdate()");
+	mainInfo.luaMessage = script->GetFunc(mod, "void AiLuaMessage(const string& in)");
 	asIScriptFunction* main = script->GetFunc(mod, "void AiMain()");
 	if (main == nullptr) {
 		return false;
@@ -484,6 +539,18 @@ void CInitScript::Update()
 		return;
 	}
 	asIScriptContext* ctx = script->PrepareContext(mainInfo.update);
+	script->Exec(ctx);
+	script->ReturnContext(ctx);
+}
+
+void CInitScript::LuaMessage(const char* inData)
+{
+	if (mainInfo.luaMessage == nullptr) {
+		return;
+	}
+	asIScriptContext* ctx = script->PrepareContext(mainInfo.luaMessage);
+	std::string data(inData);
+	ctx->SetArgAddress(0, &data);
 	script->Exec(ctx);
 	script->ReturnContext(ctx);
 }

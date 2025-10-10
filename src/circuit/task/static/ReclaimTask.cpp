@@ -91,7 +91,9 @@ void CSReclaimTask::Update()
 
 void CSReclaimTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 {
-	// TODO: Terraform attacker into dust
+	if (unit->GetHealthPercent() < unit->GetCircuitDef()->GetSelfDHP()) {
+		unit->CmdSelfD(true);
+	}
 }
 
 } // namespace circuit

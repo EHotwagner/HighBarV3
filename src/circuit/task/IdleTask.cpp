@@ -99,6 +99,8 @@ void CIdleTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 			task->AssignTo(unit);
 			task->Start(unit);
 		}
+	} else if (healthPerc < unit->GetCircuitDef()->GetSelfDHP()) {
+		unit->CmdSelfD(true);
 	}
 }
 

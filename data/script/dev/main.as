@@ -39,4 +39,8 @@ void AiUpdate()  // SlowUpdate, every 30 frames with initial offset of skirmishA
 {
 }
 
+void AiLuaMessage(const string& in data)  // Spring.SendSkirmishAIMessage(teamID, msg) from unsynced lua
+{
+}
+
 }  // namespace Main

@@ -58,6 +58,7 @@ public:
 	void RegisterMgr();
 	bool Init() override;
 	void Update();
+	void LuaMessage(const char* inData);
 
 private:
 	CMaskHandler::TypeMask AddRole(const std::string& name, int actAsRole);
@@ -78,6 +79,7 @@ private:
 
 	struct SScriptInfo {
 		asIScriptFunction* update = nullptr;
+		asIScriptFunction* luaMessage = nullptr;
 	} mainInfo;
 
 	mutable spring::mutex mtx;

@@ -126,6 +126,9 @@ void IFighterTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 		if (cdef->IsRoleHeavy() && (healthPerc < 0.9f)) {
 			circuit->GetBuilderManager()->Enqueue(TaskB::Repair(IBuilderTask::Priority::NOW, unit));
 		}
+		if (healthPerc < cdef->GetSelfDHP()) {
+			unit->CmdSelfD(true);
+		}
 		return;
 	} else if (healthPerc < 0.2f) {  // stuck units workaround: they don't shoot and don't see distant threat
 		CRetreatTask* task = manager->EnqueueRetreat();

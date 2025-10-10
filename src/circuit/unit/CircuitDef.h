@@ -343,6 +343,8 @@ public:
 
 	void SetRetreat(float value) { retreat = value; }
 	float GetRetreat() const { return retreat; }
+	void SetSelfDHP(float value) { selfDHP = value; }
+	float GetSelfDHP() const { return selfDHP; }
 
 	int GetMoveXSize() const { return moveXSize; }
 	int GetMoveZSize() const { return moveZSize; }
@@ -487,6 +489,7 @@ private:
 //	float altitude;
 	float jumpRange;
 	float retreat;
+	float selfDHP;
 
 	int moveXSize;
 	int moveZSize;

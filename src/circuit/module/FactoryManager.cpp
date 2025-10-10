@@ -445,6 +445,11 @@ void CFactoryManager::ReadConfig()
 			cdef->SetRetreat((float)rand() / RAND_MAX * (max - min) + min);
 		}
 
+		const Json::Value& selfDHP = behaviour["selfd_hp"];
+		if (!selfDHP.isNull()) {
+			cdef->SetSelfDHP(selfDHP.asFloat());
+		}
+
 		const Json::Value& pwrMod = behaviour["power"];
 		if (!pwrMod.isNull()) {
 			cdef->ModPower(pwrMod.asFloat());

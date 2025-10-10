@@ -6,6 +6,7 @@
  */
 
 #include "task/static/WaitTask.h"
+#include "unit/CircuitUnit.h"
 #include "util/Utils.h"
 
 namespace circuit {
@@ -21,6 +22,9 @@ CSWaitTask::~CSWaitTask()
 
 void CSWaitTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 {
+	if (unit->GetHealthPercent() < unit->GetCircuitDef()->GetSelfDHP()) {
+		unit->CmdSelfD(true);
+	}
 }
 
 } // namespace circuit

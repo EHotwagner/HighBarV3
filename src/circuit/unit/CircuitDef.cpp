@@ -169,6 +169,7 @@ CCircuitDef::CCircuitDef(CCircuitAI* circuit, UnitDef* def, std::unordered_set<I
 		, isOn(true)
 		, jumpRange(.0f)
 		, retreat(-1.f)
+		, selfDHP(-1.f)
 		, radius(-1.f)
 		, height(-1.f)
 		, topOffset(-1.f)

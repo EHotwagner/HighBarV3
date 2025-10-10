@@ -103,6 +103,9 @@
 //		"retreat": 0.8,
 //		"retreat": [0.5, 0.9],  // random between min and max value
 
+		// Self-destruction health percent, use when retreat < selfd_hp.
+//		"selfd_hp": 0.2,
+
 		// Ally threat multiplier
 //		"power": 1.0,
 		// Enemy threat multiplier

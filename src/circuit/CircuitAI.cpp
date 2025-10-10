@@ -1400,6 +1400,7 @@ int CCircuitAI::LuaMessage(const char* inData)
 	if (strncmp(inData, "ENABLE_CONTROL:", 15) == 0) {
 		EnableControl(inData + 15);
 	}
+	script->LuaMessage(inData);
 	return 0;  // signaling: OK
 }
 
