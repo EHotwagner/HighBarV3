@@ -364,7 +364,7 @@ void CContextMgr::SetSleeping(asIScriptContext *ctx, asUINT milliSeconds)
 
 void CContextMgr::RegisterThreadSupport(asIScriptEngine *engine)
 {
-	VARIABLE_IS_NOT_USED int r;
+	int r;
 
 	// Must set the get time callback function for this to work
 	assert( m_getTimeFunc != 0 );
@@ -377,7 +377,7 @@ void CContextMgr::RegisterThreadSupport(asIScriptEngine *engine)
 
 void CContextMgr::RegisterCoRoutineSupport(asIScriptEngine *engine)
 {
-	VARIABLE_IS_NOT_USED int r;
+	int r;
 
 	// The dictionary add-on must have been registered already
 	assert( engine->GetTypeInfoByDecl("dictionary") );

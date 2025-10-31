@@ -80,19 +80,43 @@ float fpFromIEEE(asUINT raw)
 {
 	// TODO: Identify CPU family to provide proper conversion
 	//        if the CPU doesn't natively use IEEE style floats
-	return *reinterpret_cast<float*>(&raw);
+	union conv
+	{
+		asUINT raw;
+		float fp;
+	} value;
+	value.raw = raw;
+	return value.fp;
 }
 asUINT fpToIEEE(float fp)
 {
-	return *reinterpret_cast<asUINT*>(&fp);
+	union conv
+	{
+		asUINT raw;
+		float fp;
+	} value;
+	value.fp = fp;
+	return value.raw;
 }
 double fpFromIEEE(asQWORD raw)
 {
-	return *reinterpret_cast<double*>(&raw);
+	union conv
+	{
+		asQWORD raw;
+		double fp;
+	} value;
+	value.raw = raw;
+	return value.fp;
 }
 asQWORD fpToIEEE(double fp)
 {
-	return *reinterpret_cast<asQWORD*>(&fp);
+	union conv
+	{
+		asQWORD raw;
+		double fp;
+	} value;
+	value.fp = fp;
+	return value.raw;
 }
 
 // closeTo() is used to determine if the binary representation of two numbers are 
@@ -132,7 +156,7 @@ bool closeTo(double a, double b, double epsilon)
 
 void RegisterScriptMath_Native(asIScriptEngine *engine)
 {
-	VARIABLE_IS_NOT_USED int r;
+	int r;
 
 	// Conversion between floating point and IEEE bits representations
 	r = engine->RegisterGlobalFunction("float fpFromIEEE(uint)", asFUNCTIONPR(fpFromIEEE, (asUINT), float), asCALL_CDECL); assert( r >= 0 );
@@ -278,7 +302,7 @@ void atan2_generic(asIScriptGeneric *gen)
 #endif
 void RegisterScriptMath_Generic(asIScriptEngine *engine)
 {
-	VARIABLE_IS_NOT_USED int r;
+	int r;
 
 #if AS_USE_FLOAT
 	// Trigonometric functions

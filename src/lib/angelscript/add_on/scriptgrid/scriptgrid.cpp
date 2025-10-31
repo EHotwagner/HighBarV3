@@ -108,7 +108,7 @@ static bool ScriptGridTemplateCallback(asITypeInfo *ti, bool &dontGarbageCollect
 	if( (typeId & asTYPEID_MASK_OBJECT) && !(typeId & asTYPEID_OBJHANDLE) )
 	{
 		asITypeInfo *subtype = ti->GetEngine()->GetTypeInfoById(typeId);
-		asDWORD flags = subtype->GetFlags();
+		asQWORD flags = subtype->GetFlags();
 		if( (flags & asOBJ_VALUE) && !(flags & asOBJ_POD) )
 		{
 			// Verify that there is a default constructor
@@ -182,7 +182,7 @@ static bool ScriptGridTemplateCallback(asITypeInfo *ti, bool &dontGarbageCollect
 		// that can potentially form a circular reference with the array then it is not 
 		// necessary to make the array garbage collected.
 		asITypeInfo *subtype = ti->GetEngine()->GetTypeInfoById(typeId);
-		asDWORD flags = subtype->GetFlags();
+		asQWORD flags = subtype->GetFlags();
 		if( !(flags & asOBJ_GC) )
 		{
 			if( (flags & asOBJ_SCRIPT_OBJECT) )
@@ -220,7 +220,7 @@ void RegisterScriptGrid(asIScriptEngine *engine)
 
 static void RegisterScriptGrid_Native(asIScriptEngine *engine)
 {
-	VARIABLE_IS_NOT_USED int r;
+	int r;
 
 	// Register the grid type as a template
 	r = engine->RegisterObjectType("grid<class T>", 0, asOBJ_REF | asOBJ_GC | asOBJ_TEMPLATE); assert( r >= 0 );

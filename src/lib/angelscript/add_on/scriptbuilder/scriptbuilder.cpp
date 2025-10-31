@@ -1,6 +1,9 @@
 #include "scriptbuilder.h"
 #include <vector>
 #include <assert.h>
+#ifdef _WIN32
+#include <windows.h> // MultiByteToWideChar()
+#endif
 using namespace std;
 
 #include <stdio.h>
@@ -19,7 +22,7 @@ BEGIN_AS_NAMESPACE
 
 // Helper functions
 static string GetCurrentDir();
-static string GetAbsolutePath(const string &path, const bool isVFS);
+static string GetAbsolutePath(const string &path);
 
 
 CScriptBuilder::CScriptBuilder()
@@ -95,11 +98,11 @@ int CScriptBuilder::AddSectionFromFile(const char *filename)
 {
 	// The file name stored in the set should be the fully resolved name because
 	// it is possible to name the same file in multiple ways using relative paths.
-	string fullpath = GetAbsolutePath(filename, readFunc != nullptr);
+	string fullpath = GetAbsolutePath(filename);
 
 	if( IncludeIfNotAlreadyIncluded(fullpath.c_str()) )
 	{
-		int r = readFunc == nullptr ? LoadScriptSection(fullpath.c_str()) : LoadScriptSectionVFS(fullpath.c_str());
+		int r = LoadScriptSection(fullpath.c_str());
 		if( r < 0 )
 			return r;
 		else
@@ -149,9 +152,11 @@ void CScriptBuilder::ClearAll()
 	currentNamespace = "";
 
 	foundDeclarations.clear();
+
 	typeMetadataMap.clear();
 	funcMetadataMap.clear();
 	varMetadataMap.clear();
+	classMetadataMap.clear();
 #endif
 }
 
@@ -170,20 +175,31 @@ bool CScriptBuilder::IncludeIfNotAlreadyIncluded(const char *filename)
 	return true;
 }
 
-int CScriptBuilder::LoadScriptSection(const char *filename)
+int CScriptBuilder::LoadScriptSection(const char* filename)
 {
 	// Open the script file
 	string scriptFile = filename;
 #if _MSC_VER >= 1500 && !defined(__S3E__)
+  #ifdef _WIN32
+	// Convert the filename from UTF8 to UTF16
+	wchar_t bufUTF16_name[10000] = {0};
+	wchar_t bufUTF16_mode[10] = {0};
+	MultiByteToWideChar(CP_UTF8, 0, filename, -1, bufUTF16_name, 10000);
+	MultiByteToWideChar(CP_UTF8, 0, "rb", -1, bufUTF16_mode, 10);
+
 	FILE *f = 0;
+	_wfopen_s(&f, bufUTF16_name, bufUTF16_mode);
+  #else
+	FILE* f = 0;
 	fopen_s(&f, scriptFile.c_str(), "rb");
+  #endif
 #else
 	FILE *f = fopen(scriptFile.c_str(), "rb");
 #endif
 	if( f == 0 )
 	{
 		// Write a message to the engine's message callback
-		string msg = "Failed to open script file '" + GetAbsolutePath(scriptFile, readFunc != nullptr) + "'";
+		string msg = "Failed to open script file '" + GetAbsolutePath(scriptFile) + "'";
 		engine->WriteMessage(filename, 0, 0, asMSGTYPE_ERROR, msg.c_str());
 
 		// TODO: Write the file where this one was included from
@@ -213,24 +229,7 @@ int CScriptBuilder::LoadScriptSection(const char *filename)
 	if( c == 0 && len > 0 )
 	{
 		// Write a message to the engine's message callback
-		string msg = "Failed to load script file '" + GetAbsolutePath(scriptFile, readFunc != nullptr) + "'";
-		engine->WriteMessage(filename, 0, 0, asMSGTYPE_ERROR, msg.c_str());
-		return -1;
-	}
-
-	// Process the script section even if it is zero length so that the name is registered
-	return ProcessScriptSection(code.c_str(), (unsigned int)(code.length()), filename, 0);
-}
-
-int CScriptBuilder::LoadScriptSectionVFS(const char *filename)
-{
-	string scriptFile = filename;
-	string code = readFunc(scriptFile);
-
-	if( code.empty() )
-	{
-		// Write a message to the engine's message callback
-		string msg = "Failed to load script file '" + GetAbsolutePath(scriptFile, readFunc != nullptr) + "'";
+		string msg = "Failed to load script file '" + GetAbsolutePath(scriptFile) + "'";
 		engine->WriteMessage(filename, 0, 0, asMSGTYPE_ERROR, msg.c_str());
 		return -1;
 	}
@@ -398,16 +397,26 @@ int CScriptBuilder::ProcessScriptSection(const char *script, unsigned int length
 		// Check if namespace so the metadata for members can be gathered
 		if( token == "namespace" )
 		{
-			// Get the identifier after "namespace"
+			// Get the scope after "namespace". It can be composed of multiple nested namespaces, e.g. A::B::C
+			// Keep track of the number of nested namespace scopes are declared for each block
+			int nestedNamespaces = 0;
 			do
 			{
-				pos += len;
-				t = engine->ParseToken(&modifiedScript[pos], modifiedScript.size() - pos, &len);
-			} while(t == asTC_COMMENT || t == asTC_WHITESPACE);
+				do
+				{
+					pos += len;
+					t = engine->ParseToken(&modifiedScript[pos], modifiedScript.size() - pos, &len);
+				} while (t == asTC_COMMENT || t == asTC_WHITESPACE);
 
-			if( currentNamespace != "" )
-				currentNamespace += "::";
-			currentNamespace += modifiedScript.substr(pos,len);
+				if (t == asTC_IDENTIFIER)
+				{
+					if (currentNamespace != "")
+						currentNamespace += "::";
+					currentNamespace += modifiedScript.substr(pos, len);
+					nestedNamespaces++;
+				}
+			} while (t == asTC_IDENTIFIER || (t == asTC_KEYWORD && modifiedScript.substr(pos, len) == "::"));
+			currentNamespaceStack.push_back(nestedNamespaces);
 
 			// Search until first { is encountered
 			while( pos < modifiedScript.length() )
@@ -431,14 +440,20 @@ int CScriptBuilder::ProcessScriptSection(const char *script, unsigned int length
 		// Check if end of namespace
 		if( currentNamespace != "" && token == "}" )
 		{
-			size_t found = currentNamespace.rfind( "::" );
-			if( found != string::npos )
+			assert(currentNamespaceStack.size() > 0);
+			int nestedNamespaces = currentNamespaceStack[currentNamespaceStack.size()-1];
+			currentNamespaceStack.pop_back();
+			while (nestedNamespaces-- > 0)
 			{
-				currentNamespace.erase( found );
-			}
-			else
-			{
-				currentNamespace = "";
+				size_t found = currentNamespace.rfind("::");
+				if (found != string::npos)
+				{
+					currentNamespace.erase(found);
+				}
+				else
+				{
+					currentNamespace = "";
+				}
 			}
 			pos += len;
 			continue;
@@ -777,7 +792,6 @@ int CScriptBuilder::Build()
 					// Look for the matching method instead
 					asITypeInfo *type = engine->GetTypeInfoById(typeId);
 					asIScriptFunction *func = type->GetMethodByDecl(decl->declaration.c_str());
-					assert(func);
 					if (func)
 						it->second.funcMetadataMap.insert(map<int, vector<string> >::value_type(func->GetId(), decl->metadata));
 				}
@@ -1047,11 +1061,13 @@ int CScriptBuilder::ExtractDeclaration(int pos, string &name, string &declaratio
 				}
 				else if( t == asTC_IDENTIFIER )
 				{
-					name = token;
+					// If a parenthesis is already found then the name is already known so it must not be overwritten
+					if( !hasParenthesis )
+						name = token;
 				}
 
 				// Skip trailing decorators
-				if( !hasParenthesis || nestedParenthesis > 0 || t != asTC_IDENTIFIER || (token != "final" && token != "override") )
+				if( !hasParenthesis || nestedParenthesis > 0 || t != asTC_IDENTIFIER || (token != "final" && token != "override" && token != "delete" && token != "property"))
 					declaration += token;
 
 				pos += len;
@@ -1120,13 +1136,12 @@ vector<string> CScriptBuilder::GetMetadataForTypeMethod(int typeId, asIScriptFun
 }
 #endif
 
-string GetAbsolutePath(const string &file, const bool isVFS)
+string GetAbsolutePath(const string &file)
 {
 	string str = file;
 
 	// If this is a relative path, complement it with the current path
-	if( !isVFS &&
-		!((str.length() > 0 && (str[0] == '/' || str[0] == '\\')) ||
+	if( !((str.length() > 0 && (str[0] == '/' || str[0] == '\\')) ||
 		  str.find(":") != string::npos) )
 	{
 		str = GetCurrentDir() + "/" + str;

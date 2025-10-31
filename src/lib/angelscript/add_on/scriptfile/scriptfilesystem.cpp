@@ -4,7 +4,7 @@
 
 #if defined(_WIN32)
 #include <direct.h> // _getcwd
-#include <windows.h> // FindFirstFile, GetFileAttributes
+#include <Windows.h> // FindFirstFile, GetFileAttributes
 
 #undef DeleteFile
 #undef CopyFile
@@ -30,7 +30,7 @@ CScriptFileSystem *ScriptFileSystem_Factory()
 
 void RegisterScriptFileSystem_Native(asIScriptEngine *engine)
 {
-	VARIABLE_IS_NOT_USED int r;
+	int r;
 
 	assert( engine->GetTypeInfoByName("string") );
 	assert( engine->GetTypeInfoByDecl("array<string>") );
@@ -59,7 +59,7 @@ void RegisterScriptFileSystem_Native(asIScriptEngine *engine)
 
 void RegisterScriptFileSystem_Generic(asIScriptEngine *engine)
 {
-	VARIABLE_IS_NOT_USED int r;
+	int r;
 
 	assert( engine->GetTypeInfoByName("string") );
 	assert( engine->GetTypeInfoByDecl("array<string>") );
@@ -99,13 +99,20 @@ CScriptFileSystem::CScriptFileSystem()
 	refCount = 1;
 
 	// Gets the application's current working directory as the starting point
-	// TODO: Replace backslash with slash to keep a unified naming convention
 	char buffer[1000];
+	char* ret = 0;
 #if defined(_WIN32)
-	currentPath = _getcwd(buffer, 1000);
+	ret = _getcwd(buffer, 1000);
 #else
-	currentPath = getcwd(buffer, 1000);
+	ret = getcwd(buffer, 1000);
 #endif
+	// TODO: check errno for proper error handling when getcwd returns null
+	currentPath = ret ? ret : "";
+
+	// Replace \ with / for consistency
+	for (unsigned int n = 0; n < currentPath.size(); n++)
+		if (currentPath[n] == '\\')
+			currentPath[n] = '/';
 }
 
 CScriptFileSystem::~CScriptFileSystem()
@@ -276,11 +283,15 @@ bool CScriptFileSystem::ChangeCurrentPath(const string &path)
 		newPath = currentPath + "/" + path;
 
 	// TODO: Resolve internal /./ and /../
-	// TODO: Replace backslash with slash to keep a unified naming convention
 
 	// Remove trailing slashes from the path
 	while(newPath.length() && (newPath[newPath.length()-1] == '/' || newPath[newPath.length()-1] == '\\') )
 		newPath.resize(newPath.length()-1);
+
+	// Replace \ with / for consistency
+	for (unsigned int n = 0; n < newPath.size(); n++)
+		if (newPath[n] == '\\')
+			newPath[n] = '/';
 
 	if (!IsDir(newPath))
 		return false;
