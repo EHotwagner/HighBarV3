@@ -45,7 +45,7 @@ static std::string unitTypeDbg;
 #endif
 
 CFactoryManager::CFactoryManager(CCircuitAI* circuit)
-		: IUnitModule(circuit, new CFactoryScript(circuit->GetScriptManager(), this))
+		: ITaskModule(circuit, new CFactoryScript(circuit->GetScriptManager(), this))
 		, metalRequire(0.f)
 		, energyRequire(0.f)
 		, isAssistRequired(false)
@@ -810,7 +810,7 @@ void CFactoryManager::DequeueTask(IUnitTask* task, bool done)
 		} break;
 		default: break;
 	}  // WAIT
-	IUnitModule::DequeueTask(task, done);
+	ITaskModule::DequeueTask(task, done);
 }
 
 void CFactoryManager::ApplySwitchFrame()

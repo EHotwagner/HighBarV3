@@ -29,6 +29,7 @@ class CScriptDictionary;
 namespace circuit {
 
 class CCircuitAI;
+class CCircuitUnit;
 
 class CInitScript: public IScript {
 public:
@@ -57,8 +58,11 @@ public:
 
 	void RegisterMgr();
 	bool Init() override;
+	// callins
 	void Update();
 	void LuaMessage(const char* inData);
+	void UnitFinished(CCircuitUnit* unit);
+	void UnitDestroyed(CCircuitUnit* unit);
 
 private:
 	CMaskHandler::TypeMask AddRole(const std::string& name, int actAsRole);
@@ -78,6 +82,8 @@ private:
 	std::string folderName;
 
 	struct SScriptInfo {
+		asIScriptFunction* unitFinished = nullptr;
+		asIScriptFunction* unitDestroyed = nullptr;
 		asIScriptFunction* update = nullptr;
 		asIScriptFunction* luaMessage = nullptr;
 	} mainInfo;

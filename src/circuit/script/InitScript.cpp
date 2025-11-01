@@ -537,6 +537,8 @@ bool CInitScript::Init()
 	int r = mod->SetDefaultNamespace("Main"); ASSERT(r >= 0);
 	mainInfo.update = script->GetFunc(mod, "void AiUpdate()");
 	mainInfo.luaMessage = script->GetFunc(mod, "void AiLuaMessage(const string& in)");
+	mainInfo.unitFinished = script->GetFunc(mod, "void AiUnitFinished(CCircuitUnit@)");
+	mainInfo.unitDestroyed = script->GetFunc(mod, "void AiUnitDestroyed(CCircuitUnit@)");
 	asIScriptFunction* main = script->GetFunc(mod, "void AiMain()");
 	if (main == nullptr) {
 		return false;
@@ -566,6 +568,28 @@ void CInitScript::LuaMessage(const char* inData)
 	asIScriptContext* ctx = script->PrepareContext(mainInfo.luaMessage);
 	std::string data(inData);
 	ctx->SetArgAddress(0, &data);
+	script->Exec(ctx);
+	script->ReturnContext(ctx);
+}
+
+void CInitScript::UnitFinished(CCircuitUnit* unit)
+{
+	if (mainInfo.unitFinished == nullptr) {
+		return;
+	}
+	asIScriptContext* ctx = script->PrepareContext(mainInfo.unitFinished);
+	ctx->SetArgObject(0, unit);
+	script->Exec(ctx);
+	script->ReturnContext(ctx);
+}
+
+void CInitScript::UnitDestroyed(CCircuitUnit* unit)
+{
+	if (mainInfo.unitDestroyed == nullptr) {
+		return;
+	}
+	asIScriptContext* ctx = script->PrepareContext(mainInfo.unitDestroyed);
+	ctx->SetArgObject(0, unit);
 	script->Exec(ctx);
 	script->ReturnContext(ctx);
 }

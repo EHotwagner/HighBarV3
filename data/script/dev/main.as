@@ -43,4 +43,16 @@ void AiLuaMessage(const string& in data)  // Spring.SendSkirmishAIMessage(teamID
 {
 }
 
+void AiUnitFinished(CCircuitUnit@ unit)
+{
+	// NOTE: Experimental. May be deprecated.
+	// Duplicates module's AiUnitAdded, but for any unit.
+}
+
+void AiUnitDestroyed(CCircuitUnit@ unit)
+{
+	// NOTE: Experimental. May be deprecated
+	// Duplicates module's AiUnitRemoved, but for any unit.
+}
+
 }  // namespace Main

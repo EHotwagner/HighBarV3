@@ -1099,6 +1099,11 @@ int CCircuitAI::UnitFinished(CCircuitUnit* unit)
 		unit->GetTask()->GetManager()->Resurrected(unit);
 	}
 
+	// FIXME: Experimental. Remove?
+	if (!IsLoadSave()) {
+		script->UnitFinished(unit);
+	}
+
 	return 0;  // signaling: OK
 }
 
@@ -1161,6 +1166,9 @@ int CCircuitAI::UnitDestroyed(CCircuitUnit* unit, CEnemyInfo* attacker)
 	for (auto& module : modules) {
 		module->UnitDestroyed(unit, attacker);
 	}
+
+	// FIXME: Experimental. Remove?
+	script->UnitDestroyed(unit);
 
 	return 0;  // signaling: OK
 }
@@ -1613,7 +1621,7 @@ CEnemyInfo* CCircuitAI::GetEnemyInfo(ICoreUnit::Id unitId) const
 void CCircuitAI::DisableControl(CCircuitUnit* unit)
 {
 //	if (unit->GetTask()->GetType() != IUnitTask::Type::NIL) {
-		IUnitModule* mgr = unit->GetTask()->GetManager();
+		ITaskModule* mgr = unit->GetTask()->GetManager();
 		mgr->AssignTask(unit, new CPlayerTask(mgr));
 //	}
 }

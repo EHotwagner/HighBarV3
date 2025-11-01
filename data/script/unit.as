@@ -62,7 +62,8 @@ TypeMask ANTI_STAT = aiAttrMasker.GetTypeMask("anti_stat");
 enum UseAs {
 	COMBAT = 0, FENCE, SUPER, STOCK,  // military
 	BUILDER, REZZER,  // builder
-	FACTORY, ASSIST  // factory
+	FACTORY, ASSIST,  // factory
+	ENERGY, GEO, MEX, CONVERT, STORE, AIRPAD  // economy
 }
 
 }  // namespace Unit

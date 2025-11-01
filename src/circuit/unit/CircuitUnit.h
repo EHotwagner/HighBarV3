@@ -61,7 +61,7 @@ namespace circuit {
 
 class CEnemyInfo;
 class CWeaponDef;
-class IUnitModule;
+class ITaskModule;
 class CDGunAction;
 class ITravelAction;
 
@@ -80,8 +80,8 @@ public:
 	void SetTaskFrame(int frame) { taskFrame = frame; }
 	int GetTaskFrame() const { return taskFrame; }
 
-	void SetManager(IUnitModule* mgr) { manager = mgr; }
-	IUnitModule* GetManager() const { return manager; }
+	void SetManager(ITaskModule* mgr) { manager = mgr; }
+	ITaskModule* GetManager() const { return manager; }
 
 	void SetArea(terrain::SArea* area) { this->area = area; }
 	terrain::SArea* GetArea() const { return area; }
@@ -196,7 +196,7 @@ private:
 	//       Proper fix: do not issue any commands OnUnitIdle, delay them until next frame?
 	int taskFrame;
 	ETaskState taskState;
-	IUnitModule* manager;
+	ITaskModule* manager;
 	terrain::SArea* area;  // = nullptr if a unit flies
 
 	CDGunAction* dgunAct;

@@ -29,7 +29,7 @@ namespace circuit {
 
 using namespace springai;
 
-CRetreatTask::CRetreatTask(IUnitModule* mgr, int timeout)
+CRetreatTask::CRetreatTask(ITaskModule* mgr, int timeout)
 		: IUnitTask(mgr, Priority::NORMAL, Type::RETREAT, timeout)
 		, repairer(nullptr)
 {

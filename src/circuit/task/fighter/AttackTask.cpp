@@ -31,7 +31,7 @@ namespace circuit {
 using namespace springai;
 using namespace terrain;
 
-CAttackTask::CAttackTask(IUnitModule* mgr, float minPower, float powerMod)
+CAttackTask::CAttackTask(ITaskModule* mgr, float minPower, float powerMod)
 		: ISquadTask(mgr, FightType::ATTACK, powerMod)
 		, minPower(minPower)
 {

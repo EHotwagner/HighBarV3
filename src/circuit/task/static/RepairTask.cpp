@@ -22,7 +22,7 @@ namespace circuit {
 
 using namespace springai;
 
-CSRepairTask::CSRepairTask(IUnitModule* mgr, Priority priority, CAllyUnit* target, int timeout)
+CSRepairTask::CSRepairTask(ITaskModule* mgr, Priority priority, CAllyUnit* target, int timeout)
 		: IRepairTask(mgr, priority, Type::FACTORY, target, timeout)
 {
 	static_cast<CFactoryManager*>(mgr)->MarkRepairUnit(target->GetId(), this);

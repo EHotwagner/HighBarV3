@@ -21,7 +21,7 @@ static void ConstructSResourceVal(SResource* mem, float m, float e)
 }
 
 CBuilderScript::CBuilderScript(CScriptManager* scr, CBuilderManager* mgr)
-		: IUnitModuleScript(scr, mgr)
+		: ITaskModuleScript(scr, mgr)
 {
 	asIScriptEngine* engine = script->GetEngine();
 

@@ -16,7 +16,7 @@ namespace circuit {
 using namespace springai;
 
 CMilitaryScript::CMilitaryScript(CScriptManager* scr, CMilitaryManager* mgr)
-		: IUnitModuleScript(scr, mgr)
+		: ITaskModuleScript(scr, mgr)
 {
 	asIScriptEngine* engine = script->GetEngine();
 

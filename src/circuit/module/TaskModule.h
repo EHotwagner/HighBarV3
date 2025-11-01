@@ -1,12 +1,12 @@
 /*
- * UnitModule.h
+ * TaskModule.h
  *
  *  Created on: Jan 20, 2015
  *      Author: rlcevg
  */
 
-#ifndef SRC_CIRCUIT_MODULE_UNITMODULE_H_
-#define SRC_CIRCUIT_MODULE_UNITMODULE_H_
+#ifndef SRC_CIRCUIT_MODULE_TASKMODULE_H_
+#define SRC_CIRCUIT_MODULE_TASKMODULE_H_
 
 #include "module/Module.h"
 
@@ -22,18 +22,11 @@ class CIdleTask;
 class CPlayerTask;
 class CRetreatTask;
 
-class IUnitModule: public IModule {  // CActionList; UnitManager and TaskManager
-public:
-	enum class UseAs: char {
-		COMBAT = 0, FENCE, SUPER, STOCK,  // military
-		BUILDER, REZZER,  // builder
-		FACTORY, ASSIST  // factory
-	};
-
+class ITaskModule: public IModule {  // CActionList; UnitManager and TaskManager
 protected:
-	IUnitModule(CCircuitAI* circuit, IScript* script);
+	ITaskModule(CCircuitAI* circuit, IScript* script);
 public:
-	virtual ~IUnitModule();
+	virtual ~ITaskModule();
 
 	void Init();
 	void Release();
@@ -53,8 +46,6 @@ public:
 	virtual IUnitTask* MakeTask(CCircuitUnit* unit);
 	void TaskAdded(IUnitTask* task);
 	void TaskRemoved(IUnitTask* task, bool done);
-	void UnitAdded(CCircuitUnit* unit, UseAs usage);
-	void UnitRemoved(CCircuitUnit* unit, UseAs usage);
 
 	// callouts
 	virtual IUnitTask* DefaultMakeTask(CCircuitUnit* unit) = 0;
@@ -86,4 +77,4 @@ protected:
 
 } // namespace circuit
 
-#endif // SRC_CIRCUIT_MODULE_UNITMODULE_H_
+#endif // SRC_CIRCUIT_MODULE_TASKMODULE_H_

@@ -25,7 +25,7 @@ using namespace springai;
 
 #define TARGET_DELAY	(FRAMES_PER_SEC * 10)
 
-CSuperTask::CSuperTask(IUnitModule* mgr)
+CSuperTask::CSuperTask(ITaskModule* mgr)
 		: IFighterTask(mgr, IFighterTask::FightType::SUPER, 1.f)
 		, targetFrame(0)
 		, targetPos(-RgtVector)

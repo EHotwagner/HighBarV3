@@ -59,7 +59,7 @@ namespace circuit {
 using namespace springai;
 
 CBuilderManager::CBuilderManager(CCircuitAI* circuit)
-		: IUnitModule(circuit, new CBuilderScript(circuit->GetScriptManager(), this))
+		: ITaskModule(circuit, new CBuilderScript(circuit->GetScriptManager(), this))
 		, assistCount(0)
 		, guardCount(0)
 		, buildTasksCount(0)
@@ -804,7 +804,7 @@ void CBuilderManager::DequeueTask(IUnitTask* task, bool done)
 		} break;
 		default: break;
 	}
-	IUnitModule::DequeueTask(task, done);
+	ITaskModule::DequeueTask(task, done);
 }
 
 void CBuilderManager::FallbackTask(CCircuitUnit* unit)

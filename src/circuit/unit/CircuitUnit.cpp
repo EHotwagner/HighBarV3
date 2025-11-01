@@ -9,7 +9,7 @@
 #include "unit/action/DGunAction.h"
 #include "unit/action/TravelAction.h"
 #include "unit/enemy/EnemyUnit.h"
-#include "module/UnitModule.h"
+#include "module/TaskModule.h"
 #include "setup/SetupManager.h"
 #include "terrain/TerrainManager.h"  // Only for CorrectPosition
 #include "CircuitAI.h"
