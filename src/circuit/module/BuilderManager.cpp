@@ -773,6 +773,18 @@ CRetreatTask* CBuilderManager::EnqueueRetreat()
 	return task;
 }
 
+void CBuilderManager::AssignTask(CCircuitUnit* unit, IUnitTask* task)
+{
+	ITaskModule::AssignTask(unit, task);
+	static_cast<CBuilderScript*>(script)->TaskAssigned(unit);
+}
+
+void CBuilderManager::AssignTask(CCircuitUnit* unit)
+{
+	ITaskModule::AssignTask(unit);
+	static_cast<CBuilderScript*>(script)->TaskAssigned(unit);
+}
+
 void CBuilderManager::DequeueTask(IUnitTask* task, bool done)
 {
 	switch (task->GetType()) {
@@ -816,8 +828,8 @@ void CBuilderManager::FallbackTask(CCircuitUnit* unit)
 	IUnitTask* task = Enqueue(TaskB::Patrol(IBuilderTask::Priority::LOW, pos, FRAMES_PER_SEC * 5));
 	task->AssignTo(unit);
 	task->Start(unit);
+	static_cast<CBuilderScript*>(script)->TaskAssigned(unit);
 }
-
 
 bool CBuilderManager::IsBuilderInArea(CCircuitDef* buildDef, const AIFloat3& position) const
 {

@@ -27,12 +27,10 @@ public:
 
 public:
 	void MakeDefence(int cluster, const springai::AIFloat3& pos);
-	bool IsAirValid();
 
 private:
 	struct SScriptInfo {
 		asIScriptFunction* makeDefence = nullptr;
-		asIScriptFunction* isAirValid = nullptr;
 	} militaryInfo;
 };
 

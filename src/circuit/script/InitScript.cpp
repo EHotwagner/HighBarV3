@@ -35,6 +35,8 @@ namespace circuit {
 
 using namespace springai;
 
+asITypeInfo* gUnitArrayType;  // cache
+
 CInitScript::SInitInfo::SInitInfo(const SInitInfo& o)
 {
 	armor = o.armor;
@@ -214,9 +216,10 @@ static std::string CCircuitUnit_GetRulesParamString(CCircuitUnit* unit, const st
 
 static CScriptArray* IUnitTask_GetUnits(IUnitTask* task)
 {
-	asIScriptEngine* engine = asGetActiveContext()->GetEngine(); // Get engine from active context
-	asITypeInfo* arrayType = engine->GetTypeInfoByDecl("array<CCircuitUnit@>");  // TODO: cache
-	CScriptArray* arr = CScriptArray::Create(arrayType, task->GetAssignees().size());
+	// Without caching arrayType can be extracted by:
+//	asIScriptEngine* engine = asGetActiveContext()->GetEngine(); // Get engine from active context
+//	asITypeInfo* arrayType = engine->GetTypeInfoByDecl("array<CCircuitUnit@>");
+	CScriptArray* arr = CScriptArray::Create(gUnitArrayType, task->GetAssignees().size());
 	asUINT i = 0;
 	for (CCircuitUnit* unit : task->GetAssignees()) {
 		arr->SetValue(i++, &unit);
@@ -312,6 +315,7 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("IUnitTask", "const AIFloat3& GetBuildPos() const", asMETHODPR(IBuilderTask, GetPosition, () const, const AIFloat3&), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("IUnitTask", "CCircuitDef@ GetBuildDef() const", asMETHODPR(IBuilderTask, GetBuildDef, () const, CCircuitDef*), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectProperty("IUnitTask", "CCircuitUnit@ const target", asOFFSET(IBuilderTask, target)); ASSERT(r >= 0);
+	gUnitArrayType = engine->GetTypeInfoByDecl("array<CCircuitUnit@>");
 	r = engine->RegisterObjectMethod("IUnitTask", "array<CCircuitUnit@>@ GetUnits() const", asFUNCTION(IUnitTask_GetUnits), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 
 	r = engine->RegisterObjectProperty("CCircuitAI", "const int frame", asOFFSET(CCircuitAI, lastFrame)); ASSERT(r >= 0);
@@ -525,6 +529,7 @@ void CInitScript::RegisterMgr()
 	r = engine->RegisterObjectMethod("CEnemyManager", "float GetEnemyThreat(Type) const", asMETHODPR(CEnemyManager, GetEnemyThreat, (CCircuitDef::RoleT) const, float), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectProperty("CEnemyManager", "const float mobileThreat", asOFFSET(CEnemyManager, mobileThreat)); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CEnemyManager", "float GetEnemyCost(Type) const", asMETHOD(CEnemyManager, GetEnemyCost), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectProperty("CEnemyManager", "float maxAAThreat", asOFFSET(CEnemyManager, maxAAThreat)); ASSERT(r >= 0);
 }
 
 bool CInitScript::Init()

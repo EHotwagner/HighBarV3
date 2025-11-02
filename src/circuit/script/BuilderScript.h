@@ -20,6 +20,14 @@ public:
 	virtual ~CBuilderScript();
 
 	virtual bool Init() override;
+
+public:
+	void TaskAssigned(CCircuitUnit* unit);
+
+private:
+	struct SScriptInfo {
+		asIScriptFunction* taskAssigned = nullptr;
+	} builderInfo;
 };
 
 } // namespace circuit

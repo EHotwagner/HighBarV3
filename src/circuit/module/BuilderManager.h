@@ -279,6 +279,8 @@ public:
 		return static_cast<IBuilderTask*>(Enqueue(ti));
 	}
 
+	virtual void AssignTask(CCircuitUnit* unit, IUnitTask* task) override;
+	virtual void AssignTask(CCircuitUnit* unit) override;
 private:
 	virtual void DequeueTask(IUnitTask* task, bool done = false) override;
 

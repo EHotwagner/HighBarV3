@@ -31,8 +31,8 @@ public:
 	void Init();
 	void Release();
 
-	void AssignTask(CCircuitUnit* unit, IUnitTask* task);
-	void AssignTask(CCircuitUnit* unit);
+	virtual void AssignTask(CCircuitUnit* unit, IUnitTask* task);
+	virtual void AssignTask(CCircuitUnit* unit);
 protected:
 	virtual void DequeueTask(IUnitTask* task, bool done = false);
 
