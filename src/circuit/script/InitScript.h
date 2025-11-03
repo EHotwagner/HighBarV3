@@ -76,6 +76,9 @@ private:
 	template<typename T> T Max(T l, T r) const { return std::max(l, r); }
 	int Random(int min, int max) const { return min + rand() % (max - min + 1); }
 
+	void SendMessage(const std::string& msg, int toTeamId = -1);
+	void ReceiveMessage(const std::string& msg, int fromTeamId);
+
 	void Run(asIScriptFunction* exec, CScriptDictionary* arg);
 
 	CCircuitAI* circuit;
@@ -86,6 +89,7 @@ private:
 		asIScriptFunction* unitDestroyed = nullptr;
 		asIScriptFunction* update = nullptr;
 		asIScriptFunction* luaMessage = nullptr;
+		asIScriptFunction* receiveMessage = nullptr;
 	} mainInfo;
 
 	mutable spring::mutex mtx;

@@ -36,6 +36,7 @@ namespace circuit {
 using namespace springai;
 
 asITypeInfo* gUnitArrayType;  // cache
+asITypeInfo* gIdArrayType;  // cache
 
 CInitScript::SInitInfo::SInitInfo(const SInitInfo& o)
 {
@@ -159,6 +160,17 @@ static int CCircuitAI_GetLeadTeamId(CCircuitAI* circuit)
 	return circuit->GetAllyTeam()->GetLeaderId();
 }
 
+static CScriptArray* CCircuitAI_GetTeamIds(CCircuitAI* circuit)
+{
+	CAllyTeam* allyTeam = circuit->GetAllyTeam();
+	CScriptArray* arr = CScriptArray::Create(gIdArrayType, allyTeam->GetSize());
+	asUINT i = 0;
+	for (CAllyTeam::Id teamId : allyTeam->GetTeamIds()) {
+		*(CAllyTeam::Id*)arr->At(i++) = teamId;
+	}
+	return arr;
+}
+
 static void CCircuitAI_GiveUnits(CCircuitAI* circuit, const CScriptArray* array, int newTeamId)
 {
 	std::vector<CCircuitUnit*> units;
@@ -253,6 +265,7 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterGlobalFunction("int AiMax(int, int)", asMETHODPR(CInitScript, Max<int>, (int, int) const, int), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);
 	r = engine->RegisterGlobalFunction("float AiMax(float, float)", asMETHODPR(CInitScript, Max<float>, (float, float) const, float), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);
 	r = engine->RegisterGlobalFunction("int AiRandom(int, int)", asMETHOD(CInitScript, Random), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);
+	r = engine->RegisterGlobalFunction("void AiSendMessage(const string& in, int = -1)", asMETHOD(CInitScript, SendMessage), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);
 	r = engine->RegisterFuncdef("void AiOnFinish(dictionary@+)"); ASSERT(r >= 0);
 	r = engine->RegisterFuncdef("AiOnFinish@+ AiExec(dictionary@+)"); ASSERT(r >= 0);
 	r = engine->RegisterGlobalFunction("void AiRun(AiExec@+, dictionary@)", asMETHOD(CInitScript, Run), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);
@@ -333,6 +346,8 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("CCircuitAI", "int GetLeadTeamId() const", asFUNCTION(CCircuitAI_GetLeadTeamId), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitAI", "Type GetSideId() const", asMETHOD(CCircuitAI, GetSideId), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitAI", "const string& GetSideName() const", asMETHOD(CCircuitAI, GetSideName), asCALL_THISCALL); ASSERT(r >= 0);
+	gIdArrayType = engine->GetTypeInfoByDecl("array<Id>");
+	r = engine->RegisterObjectMethod("CCircuitAI", "array<Id>@ GetTeamIds() const", asFUNCTION(CCircuitAI_GetTeamIds), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitAI", "void GiveUnits(const array<CCircuitUnit@>@+, int)", asFUNCTION(CCircuitAI_GiveUnits), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
 	// Lua<-->AI communications [in Spring 0.83+]
 	r = engine->RegisterObjectMethod("CCircuitAI", "string CallRules(const string& in)", asFUNCTION(CCircuitAI_CallRules), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
@@ -542,6 +557,7 @@ bool CInitScript::Init()
 	int r = mod->SetDefaultNamespace("Main"); ASSERT(r >= 0);
 	mainInfo.update = script->GetFunc(mod, "void AiUpdate()");
 	mainInfo.luaMessage = script->GetFunc(mod, "void AiLuaMessage(const string& in)");
+	mainInfo.receiveMessage = script->GetFunc(mod, "void AiMessage(const string& in, int)");
 	mainInfo.unitFinished = script->GetFunc(mod, "void AiUnitFinished(CCircuitUnit@)");
 	mainInfo.unitDestroyed = script->GetFunc(mod, "void AiUnitDestroyed(CCircuitUnit@)");
 	asIScriptFunction* main = script->GetFunc(mod, "void AiMain()");
@@ -644,6 +660,52 @@ int CInitScript::Dice(const CScriptArray* array) const
 		}
 	}
 	return -1;
+}
+
+void CInitScript::SendMessage(const std::string& msg, int toTeamId)
+{
+	// NOTE: Can access ai->script because of "friend class CInitScript;"
+	if (toTeamId < 0) {
+		for (CCircuitAI* ai : circuit->GetGameAttribute()->GetCircuits()) {
+			if (ai->IsInitialized()
+				&& (ai->GetTeamId() != circuit->GetTeamId())
+				&& (ai->GetAllyTeamId() == circuit->GetAllyTeamId())
+				&& ai->script->mainInfo.receiveMessage != nullptr)
+			{
+				int fromTeamId = circuit->GetTeamId();
+				ai->GetScheduler()->RunJobAfter(CScheduler::GameJob([ai, msg, fromTeamId]() {
+					ai->script->ReceiveMessage(msg, fromTeamId);
+				}));
+			}
+		}
+	} else {
+		for (CCircuitAI* ai : circuit->GetGameAttribute()->GetCircuits()) {
+			if (ai->IsInitialized()
+				&& (ai->GetTeamId() == toTeamId)
+				&& (ai->GetAllyTeamId() == circuit->GetAllyTeamId())
+				&& ai->script->mainInfo.receiveMessage != nullptr)
+			{
+				int fromTeamId = circuit->GetTeamId();
+				ai->GetScheduler()->RunJobAfter(CScheduler::GameJob([ai, msg, fromTeamId]() {
+					ai->script->ReceiveMessage(msg, fromTeamId);
+				}));
+				return;
+			}
+		}
+	}
+}
+
+void CInitScript::ReceiveMessage(const std::string& msg, int fromTeamId)
+{
+	// NOTE: Check done in CInitScript::SendMessage
+//	if (mainInfo.receiveMessage == nullptr) {
+//		return;
+//	}
+	asIScriptContext* ctx = script->PrepareContext(mainInfo.receiveMessage);
+	ctx->SetArgAddress(0, &const_cast<std::string&>(msg));
+	ctx->SetArgDWord(1, fromTeamId);
+	script->Exec(ctx);
+	script->ReturnContext(ctx);
 }
 
 void CInitScript::Run(asIScriptFunction* exec, CScriptDictionary* arg)

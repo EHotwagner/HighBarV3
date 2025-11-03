@@ -43,6 +43,10 @@ void AiLuaMessage(const string& in data)  // Spring.SendSkirmishAIMessage(teamID
 {
 }
 
+void AiMessage(const string& in data, int fromTeamId)  // AiSendMessage(msg, toTeamId = -1)
+{
+}
+
 void AiUnitFinished(CCircuitUnit@ unit)
 {
 	// NOTE: Experimental. May be deprecated.
