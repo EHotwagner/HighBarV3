@@ -64,14 +64,15 @@ void CSReclaimTask::Update()
 		circuit->UpdateFriendlyUnits();
 		auto& us = circuit->GetCallback()->GetFriendlyUnitsIn(position, radius * 0.9f);
 		for (Unit* u : us) {
-			CAllyUnit* candUnit = circuit->GetFriendlyUnit(u);
-			if ((candUnit == nullptr) || builderMgr->IsReclaimUnit(candUnit)
-				|| candUnit->GetCircuitDef()->IsAttrNoRepair())
+			auto [cand, isTeam] = circuit->GetTeamOrAllyUnit(u);
+			if ((cand == nullptr)  // no self-check
+				|| builderMgr->IsReclaimUnit(cand)
+				|| (isTeam ? static_cast<CCircuitUnit*>(cand)->IsAttrNoRepair() : cand->GetCircuitDef()->IsAttrNoRepair()))
 			{
 				continue;
 			}
 			if (!u->IsBeingBuilt() && (u->GetHealth() < u->GetMaxHealth())) {
-				repairTarget = candUnit;
+				repairTarget = cand;
 				break;
 			}
 		}

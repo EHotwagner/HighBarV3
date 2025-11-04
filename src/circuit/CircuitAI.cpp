@@ -1531,6 +1531,17 @@ CAllyUnit* CCircuitAI::GetFriendlyUnit(Unit* u) const
 	return nullptr;
 }
 
+std::pair<CAllyUnit*, bool> CCircuitAI::GetTeamOrAllyUnit(springai::Unit* u) const
+{
+	if (u->GetTeam() == teamId) {
+		return std::make_pair(GetTeamUnit(u->GetUnitId()), true);
+	} else if (u->GetAllyTeam() == allyTeamId) {
+		return std::make_pair(allyTeam->GetFriendlyUnit(u->GetUnitId()), false);
+	}
+
+	return std::make_pair(nullptr, false);
+}
+
 std::pair<CEnemyInfo*, bool> CCircuitAI::RegisterEnemyInfo(ICoreUnit::Id unitId, bool isInLOS)
 {
 	CEnemyInfo* unit = GetEnemyInfo(unitId);

@@ -207,7 +207,9 @@ void CBuilderManager::InitHandlers()
 	 * building handlers
 	 */
 	auto buildingDamagedHandler = [this](CCircuitUnit* unit, CEnemyInfo* attacker) {
-		Enqueue(TaskB::Repair(IBuilderTask::Priority::HIGH, unit));
+		if (!unit->IsAttrNoRepair()) {
+			Enqueue(TaskB::Repair(IBuilderTask::Priority::HIGH, unit));
+		}
 	};
 	auto buildingDestroyedHandler = [this](CCircuitUnit* unit, CEnemyInfo* attacker) {
 		int frame = this->circuit->GetLastFrame();

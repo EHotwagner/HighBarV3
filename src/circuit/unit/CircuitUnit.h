@@ -188,8 +188,9 @@ public:
 	void DelAttribute(CCircuitDef::AttrType type) { attr &= ~CCircuitDef::GetMask(static_cast<CCircuitDef::AttrT>(type)); }
 	void TglAttribute(CCircuitDef::AttrType type) { attr ^= CCircuitDef::GetMask(static_cast<CCircuitDef::AttrT>(type)); }
 	bool IsAttrAny(CCircuitDef::AttrM value) const { return (attr & value) != 0; }
-	bool IsAttrSolo() const { return attr & CCircuitDef::AttrMask::SOLO; }
-	bool IsAttrBase() const { return attr & CCircuitDef::AttrMask::BASE; }
+	bool IsAttrSolo()     const { return attr & CCircuitDef::AttrMask::SOLO; }
+	bool IsAttrBase()     const { return attr & CCircuitDef::AttrMask::BASE; }
+	bool IsAttrNoRepair() const { return attr & CCircuitDef::AttrMask::NO_REPAIR; }
 
 private:
 	// NOTE: taskFrame assigned on task change and OnUnitIdle to workaround idle spam.

@@ -182,7 +182,7 @@ public:
 	bool IsAttrRearm()    const { return attr & AttrMask::REARM; }
 	bool IsAttrNoDGun()   const { return attr & AttrMask::NO_DGUN; }
 	bool IsAttrAntiStat() const { return attr & AttrMask::ANTI_STAT; }
-	bool IsAttrNoRepair() const { return attr & AttrMask::NO_REPAIR; }
+	bool IsAttrNoRepair() const { return attr & AttrMask::NO_REPAIR; }  // also per-unit
 
 	bool IsHoldFire()   const { return fireState == FireType::HOLD; }
 	bool IsReturnFire() const { return fireState == FireType::RETURN; }

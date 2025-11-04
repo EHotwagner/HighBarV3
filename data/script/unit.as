@@ -57,6 +57,7 @@ TypeMask FENCE     = aiAttrMasker.GetTypeMask("fence");
 TypeMask REARM     = aiAttrMasker.GetTypeMask("rearm");
 TypeMask NO_DGUN   = aiAttrMasker.GetTypeMask("no_dgun");
 TypeMask ANTI_STAT = aiAttrMasker.GetTypeMask("anti_stat");
+TypeMask NO_REPAIR = aiAttrMasker.GetTypeMask("no_repair");
 }  // namespace Attr
 
 enum UseAs {

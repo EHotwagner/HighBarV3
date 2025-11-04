@@ -1403,30 +1403,30 @@ IUnitTask* CFactoryManager::CreateAssistTask(CCircuitUnit* unit)
 	// NOTE: OOAICallback::GetFriendlyUnitsIn depends on unit's radius
 	auto& units = circuit->GetCallback()->GetFriendlyUnitsIn(pos, radius * 0.9f);
 	for (Unit* u : units) {
-		CAllyUnit* candUnit = circuit->GetFriendlyUnit(u);
-		if ((candUnit == nullptr) || (candUnit == unit)
-			|| builderMgr->IsReclaimUnit(candUnit)
-			|| candUnit->GetCircuitDef()->IsAttrNoRepair())
+		auto [cand, isTeam] = circuit->GetTeamOrAllyUnit(u);
+		if ((cand == nullptr) || (cand == unit)
+			|| builderMgr->IsReclaimUnit(cand)
+			|| (isTeam ? static_cast<CCircuitUnit*>(cand)->IsAttrNoRepair() : cand->GetCircuitDef()->IsAttrNoRepair()))
 		{
 			continue;
 		}
 		if (u->IsBeingBuilt()) {
-			CCircuitDef* cdef = candUnit->GetCircuitDef();
+			CCircuitDef* cdef = cand->GetCircuitDef();
 			const float maxHealth = u->GetMaxHealth();
 			const float buildTime = cdef->GetBuildTime() * (maxHealth - u->GetHealth()) / maxHealth;
 			if (buildTime >= curCost) {
 				continue;
 			}
-			if (IsHighPriority(candUnit) ||
+			if (IsHighPriority(cand) ||
 				(!isMetalEmpty && cdef->IsAssistable()) ||
 				(*cdef == *terraDef) ||
 				(buildTime < maxCost))
 			{
 				curCost = buildTime;
-				buildTarget = candUnit;
+				buildTarget = cand;
 			}
 		} else if ((repairTarget == nullptr) && (u->GetHealth() < u->GetMaxHealth())) {
-			repairTarget = candUnit;
+			repairTarget = cand;
 			if (isMetalEmpty) {
 				break;
 			}

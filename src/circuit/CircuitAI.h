@@ -157,6 +157,7 @@ public:
 	CAllyUnit* GetFriendlyUnit(springai::Unit* u) const;
 	CAllyUnit* GetFriendlyUnit(ICoreUnit::Id unitId) const { return allyTeam->GetFriendlyUnit(unitId); }
 	const CAllyTeam::AllyUnits& GetFriendlyUnits() const { return allyTeam->GetFriendlyUnits(); }
+	std::pair<CAllyUnit*, bool> GetTeamOrAllyUnit(springai::Unit* u) const;
 
 	using EnemyInfos = std::map<ICoreUnit::Id, CEnemyInfo*>;
 private:
