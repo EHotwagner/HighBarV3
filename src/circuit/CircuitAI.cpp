@@ -53,7 +53,6 @@
 #include "Cheats.h"
 //#include "WrappCurrentCommand.h"
 
-#include <regex>
 #include <fstream>
 
 namespace circuit {
@@ -1347,7 +1346,7 @@ int CCircuitAI::Load(std::istream& is)
 	for (auto& kv : teamUnits) {
 		CCircuitUnit* unit = kv.second;
 		if (unit->GetUnit()->GetRulesParamFloat("disableAiControl", 0) > 0.f) {
-			DisableControl(unit);
+			UnitControl(unit, false);
 		}
 	}
 
@@ -1402,12 +1401,6 @@ int CCircuitAI::Save(std::ostream& os)
 
 int CCircuitAI::LuaMessage(const char* inData)
 {
-	if (strncmp(inData, "DISABLE_CONTROL:", 16) == 0) {
-		DisableControl(inData + 16);
-	} else
-	if (strncmp(inData, "ENABLE_CONTROL:", 15) == 0) {
-		EnableControl(inData + 15);
-	}
 	script->LuaMessage(inData);
 	return 0;  // signaling: OK
 }
@@ -1629,42 +1622,19 @@ CEnemyInfo* CCircuitAI::GetEnemyInfo(ICoreUnit::Id unitId) const
 	return (it != enemyInfos.end()) ? it->second : nullptr;
 }
 
-void CCircuitAI::DisableControl(CCircuitUnit* unit)
+bool CCircuitAI::UnitControl(CCircuitUnit* unit, bool isEnable)
 {
-//	if (unit->GetTask()->GetType() != IUnitTask::Type::NIL) {
-		ITaskModule* mgr = unit->GetTask()->GetManager();
-		mgr->AssignTask(unit, new CPlayerTask(mgr));
-//	}
-}
-
-void CCircuitAI::DisableControl(const std::string data)
-{
-	std::smatch section;
-	std::string::const_iterator start = data.begin();
-	std::string::const_iterator end = data.end();
-	std::regex patternUnit("\\w+");
-	while (std::regex_search(start, end, section, patternUnit)) {
-		CCircuitUnit* unit = GetTeamUnit(utils::string_to_int(section[0]));
-		if (unit != nullptr) {
-			DisableControl(unit);
-		}
-		start = section[0].second;
-	}
-}
-
-void CCircuitAI::EnableControl(const std::string data)
-{
-	std::smatch section;
-	std::string::const_iterator start = data.begin();
-	std::string::const_iterator end = data.end();
-	std::regex patternUnit("\\w+");
-	while (std::regex_search(start, end, section, patternUnit)) {
-		CCircuitUnit* unit = GetTeamUnit(utils::string_to_int(section[0]));
-		if ((unit != nullptr)/* && (unit->GetTask()->GetType() != IUnitTask::Type::NIL)*/) {
+	if ((unit != nullptr)/* && (unit->GetTask()->GetType() != IUnitTask::Type::NIL)*/) {
+		if (isEnable) {
+			// TODO: Check current task is CPlayerTask?
 			unit->GetTask()->RemoveAssignee(unit);
+		} else {
+			ITaskModule* mgr = unit->GetTask()->GetManager();
+			mgr->AssignTask(unit, new CPlayerTask(mgr));
 		}
-		start = section[0].second;
+		return true;
 	}
+	return false;
 }
 
 void CCircuitAI::UpdateActions()

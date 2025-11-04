@@ -41,6 +41,10 @@ void AiUpdate()  // SlowUpdate, every 30 frames with initial offset of skirmishA
 
 void AiLuaMessage(const string& in data)  // Spring.SendSkirmishAIMessage(teamID, msg) from unsynced lua
 {
+	if (data.findLast("DISABLE_CONTROL:", 0) == 0)
+		UnitControl(data.substr(16), false);
+	else if (data.findLast("ENABLE_CONTROL:", 0) == 0)
+		UnitControl(data.substr(15), true);
 }
 
 void AiMessage(const string& in data, int fromTeamId)  // AiSendMessage(msg, toTeamId = -1)
@@ -60,3 +64,11 @@ void AiUnitDestroyed(CCircuitUnit@ unit)
 }
 
 }  // namespace Main
+
+
+void UnitControl(const string& in idList, bool isEnable)
+{
+	const array<string>@ ids = idList.split(",");
+	for (uint i = 0; i < ids.length(); ++i)
+		ai.UnitControl(parseInt(ids[i]), isEnable);
+}

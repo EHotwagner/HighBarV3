@@ -82,7 +82,7 @@ public:
 	 * REARM:     use CMD_FIND_PAD when weapon is not ready
 	 * NO_DGUN:   do not use DGun
 	 * ANTI_STAT: only static targets
-	 * NO_REPAIR: do not repair marked unit
+	 * NO_REPAIR: do not repair marked unit. Doesn't work with Patrol command or Ally units
 	 */
 	enum class AttrType: RoleT {NONE = -1,
 		MELEE = 0, BOOST, NO_JUMP, NO_STRAFE,

@@ -172,9 +172,8 @@ public:
 
 	CAllyTeam* GetAllyTeam() const { return allyTeam; }
 
-	void DisableControl(CCircuitUnit* unit);
-	void DisableControl(const std::string data);
-	void EnableControl(const std::string data);
+	bool UnitControl(CCircuitUnit* unit, bool isEnable);
+	bool UnitControl(ICoreUnit::Id unitId, bool isEnable) { return UnitControl(GetTeamUnit(unitId), isEnable); }
 
 	void AddActionUnit(CCircuitUnit* unit) { actionUnits.push_back(unit); }
 
