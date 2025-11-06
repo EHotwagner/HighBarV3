@@ -491,7 +491,7 @@ void CFactoryManager::ReadConfig()
 				cdef->SetRange(CCircuitDef::RangeType::WATER, range.get((unsigned)2, cdef->GetMaxRange(CCircuitDef::RangeType::WATER)).asFloat());
 			} else if (range.isObject()) {
 				cdef->SetRange(CCircuitDef::RangeType::AIR, range.get("air", cdef->GetMaxRange(CCircuitDef::RangeType::AIR)).asFloat());
-				cdef->SetRange(CCircuitDef::RangeType::LAND, range.get("land", cdef->GetMaxRange(CCircuitDef::RangeType::LAND)).asFloat());
+				cdef->SetRange(CCircuitDef::RangeType::LAND, range.get("surf", cdef->GetMaxRange(CCircuitDef::RangeType::LAND)).asFloat());
 				cdef->SetRange(CCircuitDef::RangeType::WATER, range.get("water", cdef->GetMaxRange(CCircuitDef::RangeType::WATER)).asFloat());
 			}
 		}

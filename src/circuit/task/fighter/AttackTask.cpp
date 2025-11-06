@@ -293,7 +293,7 @@ void CAttackTask::FindTarget()
 				if (((edef->GetCategory() & canTargetCat) == 0)
 					|| ((edef->GetCategory() & noChaseCat) != 0)
 					|| (isAntiStatic && edef->IsMobile())
-					|| circuit->GetCircuitDef(edef->GetId())->IsIgnore()
+					|| circuit->GetCircuitDef(edef->GetId())->IsIgnore()  // NOTE: groups are created by leader, ignore flags could be different
 					|| (edef->IsAbleToFly() && !(IsInWater ? cdef->HasSubToAir() : cdef->HasSurfToAir())))  // notAA
 				{
 					continue;

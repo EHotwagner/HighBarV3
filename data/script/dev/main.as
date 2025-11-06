@@ -23,7 +23,7 @@ void AiMain()
 // 			AiLog("minRange = " + cdef.minRange +
 // 				", maxRange = " + cdef.GetMaxRange() +
 // 				", maxRange[AIR] = " + cdef.GetMaxRange(Unit::RangeType::AIR) +
-// 				", maxRange[LAND] = " + cdef.GetMaxRange(Unit::RangeType::LAND) +
+// 				", maxRange[SURF] = " + cdef.GetMaxRange(Unit::RangeType::SURF) +
 // 				", maxRange[WATER] = " + cdef.GetMaxRange(Unit::RangeType::WATER));
 // 			cdef.SetRange(cdef.GetMaxRange() * 0.5f);
 // 		}

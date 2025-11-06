@@ -128,8 +128,8 @@
 
 		// Weapon range override, in elmos
 //		"range": 800.0,
-//		"range": [100.0, 500.0, 200.0],  // [<air>, <land>, <water>]
-//		"range": {"air": 100.0, "land": 500.0, "water": 200.0},
+//		"range": [100.0, 500.0, 200.0],  // [<air>, <surf>, <water>]
+//		"range": {"air": 100.0, "surf": 500.0, "water": 200.0},
 
 		// Ignore enemy
 //		"ignore": false,
@@ -580,7 +580,7 @@
 		"role":["super"],
 		"threat": {"air": 0.0, "water": 0.0, "surf": 0.1},
 		"power": 0.1, //cause of its paralyzer weaponry
-		"range": {"land": 540.0},
+		"range": {"surf": 540.0},
 		"retreat": 0.4
 	},
 

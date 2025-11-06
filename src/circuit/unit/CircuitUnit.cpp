@@ -306,7 +306,6 @@ void CCircuitUnit::CmdPatrolTo(const AIFloat3& pos, short options, int timeout)
 {
 	assert(utils::is_in_map(pos));
 	unit->PatrolTo(pos, options, timeout);
-
 }
 
 void CCircuitUnit::CmdAttackGround(const AIFloat3& pos, short options, int timeout)

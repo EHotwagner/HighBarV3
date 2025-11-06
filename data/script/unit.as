@@ -68,7 +68,7 @@ enum UseAs {
 }
 
 enum RangeType {
-	AIR = 0, LAND, WATER
+	AIR = 0, SURF, WATER
 }
 
 }  // namespace Unit
