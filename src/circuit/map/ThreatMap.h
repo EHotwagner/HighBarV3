@@ -59,6 +59,7 @@ public:
 	float GetUnitPower(CCircuitUnit* unit) const;
 	int GetSquareSize() const { return squareSize; }
 	int GetMapSize() const { return mapSize; }
+    float GetRangeUnitCountCompensatorScale();
 
 private:
 	void ApplyRange(CCircuitDef* cdef);
