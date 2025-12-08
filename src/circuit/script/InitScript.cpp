@@ -23,8 +23,9 @@
 #include "angelscript/include/angelscript.h"
 #include "angelscript/add_on/scriptarray/scriptarray.h"
 #include "angelscript/add_on/scriptdictionary/scriptdictionary.h"
-#include "asbind20/asbind.hpp"
-#include "asbind20/operators.hpp"  // _this, const_this, param<T>, ->return<T>()
+// FIXME: MinGW didn't like asbind20
+//#include "asbind20/asbind.hpp"
+//#include "asbind20/operators.hpp"  // _this, const_this, param<T>, ->return<T>()
 
 #include "spring/SpringMap.h"
 
@@ -76,9 +77,29 @@ static void AddWaterArmor(CCircuitDef::SArmorInfo* mem, int type)
 	mem->waterTypes.push_back(type);
 }
 
-static void ConstructVec3Val(float3* mem, float x, float y, float z)
+static void ConstructVec3(float3* mem)
+{
+	new(mem) float3();
+}
+
+static void ConstructCopyVec3(AIFloat3* mem, const AIFloat3& o)
+{
+	new(mem) float3(o);
+}
+
+static void ConstructVec3Val1(float3* mem, float a)
+{
+	new(mem) float3(a);
+}
+
+static void ConstructVec3Val3(float3* mem, float x, float y, float z)
 {
 	new(mem) float3(x, y, z);
+}
+
+static std::string ConvertVec3ToStr(const float3& f)
+{
+	return f.str();  // static_cast<const AIFloat3&>(f).ToString();
 }
 
 static void ConstructSArmorInfo(CCircuitDef::SArmorInfo* mem)
@@ -241,82 +262,148 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	// RegisterSpringai
 	static_assert(std::is_base_of<float3, AIFloat3>::value, "AIFloat3 must be a subclass of float3!");
 	static_assert(sizeof(AIFloat3) == sizeof(float3), "Memory layout of AIFloat3 must be same as float3");
-	asbind20::value_class<float3>(
-		engine,
-		"AIFloat3",
-		// value_class is asOBJ_VALUE. Other flags will be automatically set using asGetTypeTraits<T>()
-		asOBJ_POD | asOBJ_APP_CLASS_ALLFLOATS | asOBJ_APP_CLASS_MORE_CONSTRUCTORS
-	)
-		.behaviours_by_traits()
-		.constructor<float>("float", asbind20::use_explicit)
-		.constructor_function("float, float, float", &ConstructVec3Val)
-		.property("float x", &float3::x)
-		.property("float y", &float3::y)
-		.property("float z", &float3::z)
-		.opAdd()                                             // float3 operator+ (const float3& f) const
-		.use(asbind20::const_this + asbind20::param<float>)  // float3 operator+ (const float f) const
-		.opAddAssign()                                       // float3& operator+= (const float3& f)
-		.opSub()                                             // float3 operator- (const float3& f) const
-		.use(asbind20::const_this - asbind20::param<float>)  // float3 operator- (const float f) const
-		.method("void opSubAssign(const AIFloat3& in)", &float3::operator-=)  // bad opSubAssign in float3
-		.opNeg()                                             // constexpr float3 operator- () const
-		.opMul()                                             // float3 operator* (const float3& f) const
-		.use(asbind20::const_this * asbind20::param<float>)  // float3 operator* (const float f) const
-//		.use(asbind20::param<float> * asbind20::const_this)  // inline float3 operator*(float f, const float3& v)
-		.method("void opMulAssign(const AIFloat3& in)", asbind20::overload_cast<float>(&float3::operator*=))  // bad opMulAssign in float3
-		.use(asbind20::_this *= asbind20::param<float>)      // float3& operator*= (float f)
-		.opDiv()                                             // float3 operator/ (const float3& f) const
-		.use(asbind20::const_this / asbind20::param<float>)  // float3 operator/ (const float f) const
-		.method("void opDivAssign(const AIFloat3& in)", asbind20::overload_cast<const float3&>(&float3::operator/=))  // bad opDivAssign in float3
-		.method("void opDivAssign(const float)", asbind20::overload_cast<float>(&float3::operator/=))  // void operator/= (const float f)
-		.opEquals()                                          // bool operator== (const float3& f) const
-		.use(asbind20::_this[asbind20::param<int>])          // float& operator[] (const int t)
-		.use(asbind20::const_this[asbind20::param<int>])     // const float& operator[] (const int t) const
-		.method("bool equals(const AIFloat3& in, const AIFloat3& in) const", &float3::equals)
-		.method("bool same(const AIFloat3& in) const", &float3::same)
-		.method("bool binarySame(const AIFloat3& in) const", &float3::binarySame)
-		.method("float dot(const AIFloat3& in) const", &float3::dot)
-		.method("float dot2D(const AIFloat3& in) const", &float3::dot2D)
-		.method("AIFloat3 cross(const AIFloat3& in) const", &float3::cross)
-		.method("AIFloat3 rotate(float, const AIFloat3& in) const", &float3::rotate<false>)
-		.method("AIFloat3 rotateByUpVector(const AIFloat3& in, const AIFloat3& in) const", &float3::rotateByUpVector)
-		.method("AIFloat3 rotate2D(const AIFloat3& in) const", &float3::rotate2D)
-		.method("AIFloat3 snapToAxis() const", &float3::snapToAxis)
-		.method("float distance(const AIFloat3& in) const", &float3::distance)
-		.method("float distance2D(const AIFloat3& in) const", asbind20::overload_cast<const float3&>(&float3::distance2D, asbind20::const_))
-		.method("float SqDistance(const AIFloat3& in) const", &float3::SqDistance)
-		.method("float SqDistance2D(const AIFloat3& in) const", &float3::SqDistance2D)
-		.method("float Length() const", &float3::Length)
-		.method("float Length2D() const", &float3::Length2D)
-		.method("float SqLength() const", &float3::SqLength)
-		.method("float SqLength2D() const", &float3::SqLength2D)
-		.method("float LengthNormalize()", &float3::LengthNormalize)
-		.method("float LengthNormalize2D()", &float3::LengthNormalize2D)
-		.method("AIFloat3& Normalize()", &float3::Normalize)
-		.method("AIFloat3& Normalize2D()", &float3::Normalize2D)
-		.method("AIFloat3& SafeNormalize()", &float3::SafeNormalize)
-		.method("AIFloat3& SafeNormalize2D()", &float3::SafeNormalize2D)
-		.method("AIFloat3 PickNonParallel() const", &float3::PickNonParallel)
-		.method("bool Normalized() const", &float3::Normalized)
-		.method("bool CheckNaNs() const", &float3::CheckNaNs)
-		.method("bool IsInMap() const", &float3::IsInMap)
-		.method("void ClampInMap() const", &float3::ClampInMap)
-		.method("string str() const", &float3::str)
-		.method("string ToString() const", &AIFloat3::ToString)  // HAX
-		.method("string opImplConv() const", [](const float3& f) {
-			return f.str();  // static_cast<const AIFloat3&>(f).ToString();
-		});
-	// NOTE: ".use(asbind20::param<float> * asbind20::const_this)" makes IDE go "Syntax error" (but compiles)
-	int r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opMul_r(float) const", asFUNCTIONPR(operator*, (float, const float3&), float3), asCALL_CDECL_OBJLAST); ASSERT(r >= 0);
-	asbind20::global(engine)
-		.function("AIFloat3 AiMin(const AIFloat3, const AIFloat3)", &float3::min)
-		.function("AIFloat3 AiMax(const AIFloat3, const AIFloat3)", &float3::max)
-		.function("AIFloat3 AiFabs(const AIFloat3)", &float3::fabs)
-		.function("AIFloat3 AiSign(const AIFloat3)", &float3::sign);
+	// FIXME: MinGW didn't like asbind20
+//	asbind20::value_class<float3>(
+//		engine,
+//		"AIFloat3",
+//		// value_class is asOBJ_VALUE. Other flags will be automatically set using asGetTypeTraits<T>()
+//		asOBJ_POD | asOBJ_APP_CLASS_ALLFLOATS | asOBJ_APP_CLASS_MORE_CONSTRUCTORS
+//	)
+//		.behaviours_by_traits()
+//		.constructor<float>("float", asbind20::use_explicit)
+//		.constructor_function("float, float, float", &ConstructVec3Val)
+//		.property("float x", &float3::x)
+//		.property("float y", &float3::y)
+//		.property("float z", &float3::z)
+//		.opAdd()                                             // float3 operator+ (const float3& f) const
+//		.use(asbind20::const_this + asbind20::param<float>)  // float3 operator+ (const float f) const
+//		.opAddAssign()                                       // float3& operator+= (const float3& f)
+//		.opSub()                                             // float3 operator- (const float3& f) const
+//		.use(asbind20::const_this - asbind20::param<float>)  // float3 operator- (const float f) const
+//		.method("void opSubAssign(const AIFloat3& in)", &float3::operator-=)  // bad opSubAssign in float3
+//		.opNeg()                                             // constexpr float3 operator- () const
+//		.opMul()                                             // float3 operator* (const float3& f) const
+//		.use(asbind20::const_this * asbind20::param<float>)  // float3 operator* (const float f) const
+////		.use(asbind20::param<float> * asbind20::const_this)  // inline float3 operator*(float f, const float3& v)
+//		.method("void opMulAssign(const AIFloat3& in)", asbind20::overload_cast<float>(&float3::operator*=))  // bad opMulAssign in float3
+//		.use(asbind20::_this *= asbind20::param<float>)      // float3& operator*= (float f)
+//		.opDiv()                                             // float3 operator/ (const float3& f) const
+//		.use(asbind20::const_this / asbind20::param<float>)  // float3 operator/ (const float f) const
+//		.method("void opDivAssign(const AIFloat3& in)", asbind20::overload_cast<const float3&>(&float3::operator/=))  // bad opDivAssign in float3
+//		.method("void opDivAssign(const float)", asbind20::overload_cast<float>(&float3::operator/=))  // void operator/= (const float f)
+//		.opEquals()                                          // bool operator== (const float3& f) const
+//		.use(asbind20::_this[asbind20::param<int>])          // float& operator[] (const int t)
+//		.use(asbind20::const_this[asbind20::param<int>])     // const float& operator[] (const int t) const
+//		.method("bool equals(const AIFloat3& in, const AIFloat3& in) const", &float3::equals)
+//		.method("bool same(const AIFloat3& in) const", &float3::same)
+//		.method("bool binarySame(const AIFloat3& in) const", &float3::binarySame)
+//		.method("float dot(const AIFloat3& in) const", &float3::dot)
+//		.method("float dot2D(const AIFloat3& in) const", &float3::dot2D)
+//		.method("AIFloat3 cross(const AIFloat3& in) const", &float3::cross)
+//		.method("AIFloat3 rotate(float, const AIFloat3& in) const", &float3::rotate<false>)
+//		.method("AIFloat3 rotateByUpVector(const AIFloat3& in, const AIFloat3& in) const", &float3::rotateByUpVector)
+//		.method("AIFloat3 rotate2D(const AIFloat3& in) const", &float3::rotate2D)
+//		.method("AIFloat3 snapToAxis() const", &float3::snapToAxis)
+//		.method("float distance(const AIFloat3& in) const", &float3::distance)
+//		.method("float distance2D(const AIFloat3& in) const", asbind20::overload_cast<const float3&>(&float3::distance2D, asbind20::const_))
+//		.method("float SqDistance(const AIFloat3& in) const", &float3::SqDistance)
+//		.method("float SqDistance2D(const AIFloat3& in) const", &float3::SqDistance2D)
+//		.method("float Length() const", &float3::Length)
+//		.method("float Length2D() const", &float3::Length2D)
+//		.method("float SqLength() const", &float3::SqLength)
+//		.method("float SqLength2D() const", &float3::SqLength2D)
+//		.method("float LengthNormalize()", &float3::LengthNormalize)
+//		.method("float LengthNormalize2D()", &float3::LengthNormalize2D)
+//		.method("AIFloat3& Normalize()", &float3::Normalize)
+//		.method("AIFloat3& Normalize2D()", &float3::Normalize2D)
+//		.method("AIFloat3& SafeNormalize()", &float3::SafeNormalize)
+//		.method("AIFloat3& SafeNormalize2D()", &float3::SafeNormalize2D)
+//		.method("AIFloat3 PickNonParallel() const", &float3::PickNonParallel)
+//		.method("bool Normalized() const", &float3::Normalized)
+//		.method("bool CheckNaNs() const", &float3::CheckNaNs)
+//		.method("bool IsInMap() const", &float3::IsInMap)
+//		.method("void ClampInMap()", &float3::ClampInMap)
+//		.method("string str() const", &float3::str)
+//		.method("string ToString() const", &AIFloat3::ToString)  // HAX
+//		.method("string opImplConv() const", [](const float3& f) {
+//			return f.str();  // static_cast<const AIFloat3&>(f).ToString();
+//		});
+//	// NOTE: ".use(asbind20::param<float> * asbind20::const_this)" makes IDE go "Syntax error" (but compiles)
+//	int r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opMul_r(float) const", asFUNCTIONPR(operator*, (float, const float3&), float3), asCALL_CDECL_OBJLAST); ASSERT(r >= 0);
+//	asbind20::global(engine)
+//		.function("AIFloat3 AiMin(const AIFloat3, const AIFloat3)", &float3::min)
+//		.function("AIFloat3 AiMax(const AIFloat3, const AIFloat3)", &float3::max)
+//		.function("AIFloat3 AiFabs(const AIFloat3)", &float3::fabs)
+//		.function("AIFloat3 AiSign(const AIFloat3)", &float3::sign);
+	int r = engine->RegisterObjectType("AIFloat3", sizeof(float3),
+			asOBJ_VALUE | asOBJ_POD | asOBJ_APP_CLASS_ALLFLOATS | asOBJ_APP_CLASS_MORE_CONSTRUCTORS | asGetTypeTraits<float3>()); ASSERT(r >= 0);
+	r = engine->RegisterObjectBehaviour("AIFloat3", asBEHAVE_CONSTRUCT, "void f()", asFUNCTION(ConstructVec3), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectBehaviour("AIFloat3", asBEHAVE_CONSTRUCT, "void f(const AIFloat3& in)", asFUNCTION(ConstructCopyVec3), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectBehaviour("AIFloat3", asBEHAVE_CONSTRUCT, "void f(float)", asFUNCTION(ConstructVec3Val1), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectBehaviour("AIFloat3", asBEHAVE_CONSTRUCT, "void f(float, float, float)", asFUNCTION(ConstructVec3Val3), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectProperty("AIFloat3", "float x", asOFFSET(float3, x)); ASSERT(r >= 0);
+	r = engine->RegisterObjectProperty("AIFloat3", "float y", asOFFSET(float3, y)); ASSERT(r >= 0);
+	r = engine->RegisterObjectProperty("AIFloat3", "float z", asOFFSET(float3, z)); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opAdd(const AIFloat3& in) const", asMETHODPR(float3, operator+, (const float3&) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opAdd(float) const", asMETHODPR(float3, operator+, (const float) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3& opAddAssign(const AIFloat3& in)", asMETHOD(float3, operator+=), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opSub(const AIFloat3& in) const", asMETHODPR(float3, operator-, (const float3&) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opSub(float) const", asMETHODPR(float3, operator-, (const float) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "void opSubAssign(const AIFloat3& in)", asMETHOD(float3, operator-=), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opNeg()", asMETHODPR(float3, operator-, () const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opMul(const AIFloat3& in) const", asMETHODPR(float3, operator*, (const float3&) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opMul(float) const", asMETHODPR(float3, operator*, (const float) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opMul_r(float) const", asFUNCTIONPR(operator*, (float, const float3&), float3), asCALL_CDECL_OBJLAST); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "void opMulAssign(const AIFloat3& in)", asMETHODPR(float3, operator*=, (const float3&), void), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3& opMulAssign(float)", asMETHODPR(float3, operator*=, (float), float3&), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opDiv(const AIFloat3& in) const", asMETHODPR(float3, operator/, (const float3&) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opDiv(float) const", asMETHODPR(float3, operator/, (const float) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "void opDivAssign(const AIFloat3& in)", asMETHODPR(float3, operator/=, (const float3&), void), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "void opDivAssign(float)", asMETHODPR(float3, operator/=, (const float), void), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "bool opEquals(const AIFloat3& in) const", asMETHOD(float3, operator==), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float& opIndex(int)", asMETHODPR(float3, operator[], (const int), float&), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "const float& opIndex(int) const", asMETHODPR(float3, operator[], (const int) const, const float&), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "bool equals(const AIFloat3& in, const AIFloat3& in) const", asMETHOD(float3, equals), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "bool same(const AIFloat3& in) const", asMETHOD(float3, same), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "bool binarySame(const AIFloat3& in) const", asMETHOD(float3, binarySame), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float dot(const AIFloat3& in) const", asMETHOD(float3, dot), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float dot2D(const AIFloat3& in) const", asMETHOD(float3, dot2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 cross(const AIFloat3& in) const", asMETHOD(float3, cross), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 rotate(float, const AIFloat3& in) const", asMETHODPR(float3, rotate<false>, (float angle, const float3& axis) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 rotateByUpVector(const AIFloat3& in, const AIFloat3& in) const", asMETHOD(float3, rotateByUpVector), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 rotate2D(const AIFloat3& in) const", asMETHOD(float3, rotate2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 snapToAxis() const", asMETHOD(float3, snapToAxis), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float distance(const AIFloat3& in) const", asMETHOD(float3, distance), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float distance2D(const AIFloat3& in) const", asMETHODPR(float3, distance2D, (const float3&) const, float), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float SqDistance(const AIFloat3& in) const", asMETHOD(float3, SqDistance), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float SqDistance2D(const AIFloat3& in) const", asMETHOD(float3, SqDistance2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float Length() const", asMETHOD(float3, Length), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float Length2D() const", asMETHOD(float3, Length2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float SqLength() const", asMETHOD(float3, SqLength), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float SqLength2D() const", asMETHOD(float3, SqLength2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float LengthNormalize()", asMETHOD(float3, LengthNormalize), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float LengthNormalize2D()", asMETHOD(float3, LengthNormalize2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3& Normalize()", asMETHOD(float3, Normalize), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3& Normalize2D()", asMETHOD(float3, Normalize2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3& SafeNormalize()", asMETHOD(float3, SafeNormalize), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3& SafeNormalize2D()", asMETHOD(float3, SafeNormalize2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 PickNonParallel() const", asMETHOD(float3, PickNonParallel), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "bool Normalized() const", asMETHOD(float3, Normalized), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "bool CheckNaNs() const", asMETHOD(float3, CheckNaNs), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "bool IsInMap() const", asMETHOD(float3, IsInMap), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "void ClampInMap()", asMETHOD(float3, ClampInMap), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "string str() const", asMETHOD(float3, str), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "string ToString() const", asMETHOD(AIFloat3, ToString), asCALL_THISCALL); ASSERT(r >= 0);  // HAX
+	r = engine->RegisterObjectMethod("AIFloat3", "string opImplConv() const", asFUNCTION(ConvertVec3ToStr), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterGlobalFunction("AIFloat3 AiMin(const AIFloat3, const AIFloat3)", asFUNCTION(float3::min), asCALL_CDECL); ASSERT(r >= 0);
+	r = engine->RegisterGlobalFunction("AIFloat3 AiMax(const AIFloat3, const AIFloat3)", asFUNCTION(float3::max), asCALL_CDECL); ASSERT(r >= 0);
+	r = engine->RegisterGlobalFunction("AIFloat3 AiFabs(const AIFloat3)", asFUNCTION(float3::fabs), asCALL_CDECL); ASSERT(r >= 0);
+	r = engine->RegisterGlobalFunction("AIFloat3 AiSign(const AIFloat3)", asFUNCTION(float3::sign), asCALL_CDECL); ASSERT(r >= 0);
 
 	// RegisterUtils
-	asbind20::global(engine)
-		.function("void AiLog(const string& in)", &CInitScript::Log, asbind20::auxiliary(this));
+//	asbind20::global(engine)
+//		.function("void AiLog(const string& in)", &CInitScript::Log, asbind20::auxiliary(this));
+	r = engine->RegisterGlobalFunction("void AiLog(const string& in)", asMETHOD(CInitScript, Log), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);
 	r = engine->RegisterGlobalFunction("void AiAddPoint(const AIFloat3& in, const string& in)", asMETHOD(CInitScript, AddPoint), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);
 	r = engine->RegisterGlobalFunction("void AiDelPoint(const AIFloat3& in)", asMETHOD(CInitScript, DelPoint), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);
 	r = engine->RegisterGlobalFunction("void AiPause(bool, const string& in)", asMETHOD(CInitScript, Pause), asCALL_THISCALL_ASGLOBAL, this); ASSERT(r >= 0);

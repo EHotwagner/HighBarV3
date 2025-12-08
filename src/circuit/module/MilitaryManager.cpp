@@ -1619,8 +1619,8 @@ CEnemyInfo* CMilitaryManager::FindBCombatTarget(CCircuitUnit* unit, const AIFloa
 
 float CMilitaryManager::GetRangeUnitCountCompensatorScale()
 {
-	if (threatRangeScaling.frame + TEAM_SLOWUPDATE_RATE < circuit->GetLastFrame()) {
-		threatRangeScaling.frame = circuit->GetLastFrame();
+	if (threatRangeScaling.frame < circuit->GetLastFrame()) {
+		threatRangeScaling.frame = circuit->GetLastFrame() + TEAM_SLOWUPDATE_RATE - 1;
 		const int enemyTeamSize = circuit->GetEnemyTeamSize();
 		const int totalEnemies = circuit->GetEnemyInfos().size();
 		const int enemyCountMinToStartScaling = threatRangeScaling.enemyCountPerEnemyTeamToStartScaling * enemyTeamSize;

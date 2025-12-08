@@ -253,7 +253,7 @@ private:
 		int enemyCountPerEnemyTeamToEndScaling = 1;
 		float endScaleValue = 1.f;
 		float scale = 1.f;  // cache per frame
-		int frame = -TEAM_SLOWUPDATE_RATE - 1;
+		int frame = -1;
 	} threatRangeScaling;
 
 	unsigned int preventCount = 0;
