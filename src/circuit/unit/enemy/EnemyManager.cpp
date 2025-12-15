@@ -563,7 +563,7 @@ void CEnemyManager::KMeansIteration()
 		indices[i] = i;
 		// if a newmean is unchanged, set it to the new means pos instead of (0, 0, 0)
 		if (newMeans[i].pos == ZeroVector) {
-			newMeans[i] = newMeansPosition;
+			newMeans[i] = SEnemyGroup(newMeansPosition);
 		} else {
 			// get the proper elevation for the y-coord
 //			newMeans[i].pos.y = circuit->GetMap()->GetElevationAt(newMeans[i].pos.x, newMeans[i].pos.z) + K_MEANS_ELEVATION;

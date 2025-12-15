@@ -410,7 +410,8 @@ CCircuitDef::CCircuitDef(CCircuitAI* circuit, UnitDef* def, std::unordered_set<I
 		int weaponCat = mount->GetOnlyTargetCategory();
 		targetCategory |= weaponCat;
 
-		aoe = std::max(aoe, wd->GetAreaOfEffect());
+		const float wdAoe = wd->GetAreaOfEffect();
+		aoe = std::max(aoe, wdAoe);
 
 		std::string wt(wd->GetType());  // @see https://springrts.com/wiki/Gamedev:WeaponDefs
 		const float projectileSpeed = wd->GetProjectileSpeed();
@@ -523,7 +524,10 @@ CCircuitDef::CCircuitDef(CCircuitAI* circuit, UnitDef* def, std::unordered_set<I
 			} else {
 				delete mount;
 			}
-		} else if (range < bestWpRange) {
+		} else if ((range < bestWpRange) && ((range > 0.f) || (wdAoe > 64.0f))) {
+			// NOTE: Weapon with least range considered representative of a unit.
+			// TODO: Consider 2 representatives: minRange and maxRange.
+			// (Would prefer to avoid arbitrary array of weapons)
 			bestWpDef = circuit->GetWeaponDef(wd->GetWeaponDefId());
 			delete bestWpMnt;
 			bestWpMnt = mount;

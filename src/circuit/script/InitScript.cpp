@@ -307,7 +307,7 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 //		.method("float distance(const AIFloat3& in) const", &float3::distance)
 //		.method("float distance2D(const AIFloat3& in) const", asbind20::overload_cast<const float3&>(&float3::distance2D, asbind20::const_))
 //		.method("float SqDistance(const AIFloat3& in) const", &float3::SqDistance)
-//		.method("float SqDistance2D(const AIFloat3& in) const", &float3::SqDistance2D)
+//		.method("float SqDistance2D(const AIFloat3& in) const", asbind20::overload_cast<const float3&>(&float3::SqDistance2D, asbind20::const_))
 //		.method("float Length() const", &float3::Length)
 //		.method("float Length2D() const", &float3::Length2D)
 //		.method("float SqLength() const", &float3::SqLength)
@@ -376,7 +376,7 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("AIFloat3", "float distance(const AIFloat3& in) const", asMETHOD(float3, distance), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "float distance2D(const AIFloat3& in) const", asMETHODPR(float3, distance2D, (const float3&) const, float), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "float SqDistance(const AIFloat3& in) const", asMETHOD(float3, SqDistance), asCALL_THISCALL); ASSERT(r >= 0);
-	r = engine->RegisterObjectMethod("AIFloat3", "float SqDistance2D(const AIFloat3& in) const", asMETHOD(float3, SqDistance2D), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "float SqDistance2D(const AIFloat3& in) const", asMETHODPR(float3, SqDistance2D, (const float3&) const, float), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "float Length() const", asMETHOD(float3, Length), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "float Length2D() const", asMETHOD(float3, Length2D), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "float SqLength() const", asMETHOD(float3, SqLength), asCALL_THISCALL); ASSERT(r >= 0);

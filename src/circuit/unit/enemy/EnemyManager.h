@@ -31,7 +31,9 @@ public:
 	using EnemyUnits = std::unordered_map<ICoreUnit::Id, CEnemyUnit*>;
 	using EnemyFakes = std::set<CEnemyFake*>;
 	struct SEnemyGroup {
-		SEnemyGroup(const springai::AIFloat3& p) : pos(p), cost(0.f), influence(0.f), vagueMetric(1.f) {
+		explicit SEnemyGroup(const springai::AIFloat3& p)
+			: pos(p), cost(0.f), influence(0.f), vagueMetric(1.f)
+		{
 			roleCosts.fill(0.f);
 		}
 		std::vector<ICoreUnit::Id> units;

@@ -126,7 +126,7 @@ void CSuperTask::Update()
 			if ((cost >= group.cost) || (position.SqDistance2D(group.pos) >= maxSqRange)) {
 				continue;
 			}
-			if (isTargetValid(group.pos)) {
+			if (isTargetValid(group)) {
 				cost = group.cost;
 				groupIdx = i;
 			}
@@ -144,13 +144,14 @@ void CSuperTask::Update()
 			if (cost >= group.cost * angleMod) {
 				continue;
 			}
-			if (isTargetValid(group.pos)) {
+			if (isTargetValid(group)) {
 				cost = group.cost;
 				groupIdx = i;
 			}
 		}
 	}
 	const float maxCost = cdef->IsAttrStock() ? cdef->GetWeaponDef()->GetCostM() : cdef->GetCostM() * 0.01f;
+
 	if ((groupIdx < 0) || (cost < maxCost)) {
 		TRY_UNIT(circuit, unit,
 			unit->CmdStop();
