@@ -194,6 +194,8 @@ CCircuitDef::CCircuitDef(CCircuitAI* circuit, UnitDef* def, std::unordered_set<I
 
 	const int ft = def->GetFireState();
 	fireState = (ft < 0) ? FireType::OPEN : ft;
+	const int mt = def->GetMoveState();
+	moveState = (mt < 0) ? MoveType::MANEUVRE : mt;
 
 	health       = def->GetHealth();
 	speed        = def->GetSpeed();  // elmos per second

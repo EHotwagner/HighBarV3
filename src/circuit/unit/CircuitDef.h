@@ -103,6 +103,9 @@ public:
 	enum FireType: int {HOLD = 0, RETURN = 1, OPEN = 2};
 	using FireT = std::underlying_type<FireType>::type;
 
+	enum MoveType: int {HOLD_POS = 0, MANEUVRE = 1, ROAM = 2};
+	using MoveT = std::underlying_type<MoveType>::type;
+
 	static RoleM GetMask(RoleT type) { return CMaskHandler::GetMask(type); }
 
 	using RoleName = const CMaskHandler::MaskName;
@@ -247,6 +250,7 @@ public:
 	float GetShieldRadius() const { return shieldRadius; }
 	float GetMaxShield() const { return maxShield; }
 	FireT GetFireState() const { return fireState; }
+	MoveT GetMoveState() const { return moveState; }
 	int GetReloadTime() const { return reloadTime; }
 	int GetCategory() const { return category; }
 	int GetTargetCategory() const { return targetCategory; }
@@ -262,6 +266,7 @@ public:
 	void ModWaterThreat(float mod) { waterThrMod *= mod; waterThrDmg *= mod; }
 	void SetThreatRange(ThreatType type, int range) { threatRange[static_cast<ThreatT>(type)] = range; }
 	void SetFireState(FireT ft) { fireState = ft; }
+	void SetMoveState(MoveT mt) { moveState = mt; }
 	void SetReloadTime(int time) { reloadTime = time; }
 
 	terrain::SImmobileType::Id GetImmobileId() const { return immobileTypeId; }
@@ -415,6 +420,7 @@ private:
 	float shieldRadius;
 	float maxShield;
 	FireT fireState;
+	MoveT moveState;
 	int reloadTime;  // frames in ticks
 	int category;
 	int targetCategory;

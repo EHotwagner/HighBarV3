@@ -459,6 +459,19 @@ void CCircuitUnit::TrySetFireState(CCircuitDef::FireT state)
 	)
 }
 
+void CCircuitUnit::CmdSetMoveState(CCircuitDef::MoveT state)
+{
+	unit->SetMoveState(state);
+}
+
+void CCircuitUnit::TrySetMoveState(CCircuitDef::MoveT state)
+{
+	assert(manager != nullptr);
+	TRY_UNIT(manager->GetCircuit(), this,
+		CmdSetMoveState(state);
+	)
+}
+
 void CCircuitUnit::Attack(CEnemyInfo* enemy, bool isGround, int timeout)
 {
 	target = enemy;

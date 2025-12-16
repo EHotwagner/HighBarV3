@@ -50,7 +50,7 @@ private:
 public:
 	static inline int GetTerrainWidth() { return springai::AIFloat3::maxxpos; }
 	static inline int GetTerrainHeight() { return springai::AIFloat3::maxzpos; }
-	static inline int GetTerrainDiagonal() {
+	static inline float GetTerrainDiagonal() {
 		return sqrtf(SQUARE(springai::AIFloat3::maxxpos) + SQUARE(springai::AIFloat3::maxzpos));
 	}
 	static inline springai::AIFloat3 GetTerrainCenter() {

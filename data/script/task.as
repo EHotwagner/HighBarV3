@@ -270,6 +270,16 @@ SServSTask Reclaim(Task::Priority priority,
 	ti.timeout = timeout;
 	return ti;
 }
+SServSTask Patrol(Task::Priority priority,
+		const AIFloat3& in position, int timeout)
+{
+	SServSTask ti;
+	ti.type = Task::BuildType::PATROL;
+	ti.priority = priority;
+	ti.position = position;
+	ti.timeout = timeout;
+	return ti;
+}
 SServSTask Wait(bool stop, int timeout)
 {
 	SServSTask ti;

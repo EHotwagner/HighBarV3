@@ -71,6 +71,16 @@ namespace TaskS {
 		ti.timeout = timeout;
 		return ti;
 	}
+	static inline SServSTask Patrol(IBuilderTask::Priority priority,
+			const springai::AIFloat3& position, int timeout)
+	{
+		SServSTask ti;
+		ti.type = IBuilderTask::BuildType::PATROL;
+		ti.priority = priority;
+		ti.position = position;
+		ti.timeout = timeout;
+		return ti;
+	}
 	static inline SServSTask Wait(bool stop, int timeout)
 	{
 		SServSTask ti;

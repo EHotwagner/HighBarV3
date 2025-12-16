@@ -139,6 +139,16 @@ void IUnitTask::Dead()
 	pathQueries.clear();  // free queries
 }
 
+void IUnitTask::Abort()
+{
+	manager->AbortTask(this);
+}
+
+void IUnitTask::Done()
+{
+	manager->DoneTask(this);
+}
+
 bool IUnitTask::IsQueryReady(CCircuitUnit* unit) const
 {
 	const auto it = pathQueries.find(unit);

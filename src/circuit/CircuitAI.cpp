@@ -1133,7 +1133,7 @@ int CCircuitAI::UnitMoveFailed(CCircuitUnit* unit)
 	if (unit->IsMoveFailed(lastFrame)) {
 		TRY_UNIT(this, unit,
 			unit->CmdStop();
-			unit->GetUnit()->SetMoveState(2);
+			unit->CmdSetMoveState(CCircuitDef::MoveType::ROAM);
 		)
 //		Garbage(unit, "stuck");
 		GetBuilderManager()->Enqueue(TaskB::Reclaim(IBuilderTask::Priority::NORMAL, unit));

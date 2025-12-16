@@ -284,7 +284,7 @@ bool ISquadTask::IsMustRegroup()
 			{
 				TRY_UNIT(circuit, unit,
 					unit->CmdStop();
-					unit->GetUnit()->SetMoveState(2);
+					unit->CmdSetMoveState(CCircuitDef::MoveType::ROAM);
 				)
 				circuit->Garbage(unit, "stuck");
 //				circuit->GetBuilderManager()->EnqueueTask(TaskB::Reclaim(IBuilderTask::Priority::HIGH, unit));
@@ -318,7 +318,7 @@ bool ISquadTask::IsMustRegroup()
 		if (utils::is_equal_pos(prevGroupPos, groupPos)) {
 			TRY_UNIT(circuit, leader,
 				leader->CmdStop();
-				leader->GetUnit()->SetMoveState(2);
+				leader->CmdSetMoveState(CCircuitDef::MoveType::ROAM);
 			)
 			circuit->Garbage(leader, "stuck");
 //			circuit->GetBuilderManager()->EnqueueTask(TaskB::Reclaim(IBuilderTask::Priority::HIGH, leader));

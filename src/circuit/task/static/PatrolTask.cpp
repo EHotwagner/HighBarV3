@@ -5,7 +5,7 @@
  *      Author: rlcevg
  */
 
-#include "task/builder/PatrolTask.h"
+#include "task/static/PatrolTask.h"
 #include "unit/CircuitUnit.h"
 #include "unit/action/DGunAction.h"
 //#include "unit/action/CaptureAction.h"
@@ -15,28 +15,34 @@ namespace circuit {
 
 using namespace springai;
 
-CBPatrolTask::CBPatrolTask(ITaskModule* mgr, Priority priority,
+CSPatrolTask::CSPatrolTask(ITaskModule* mgr, Priority priority,
 						   const AIFloat3& position,
 						   int timeout)
 		: IPatrolTask(mgr, priority, position, timeout)
 {
 }
 
-CBPatrolTask::~CBPatrolTask()
+CSPatrolTask::~CSPatrolTask()
 {
 }
 
-void CBPatrolTask::AssignTo(CCircuitUnit* unit)
+void CSPatrolTask::AssignTo(CCircuitUnit* unit)
 {
 	IPatrolTask::AssignTo(unit);
 
 	if (unit->HasDGun()) {
-		const float range = std::max(unit->GetDGunRange(), unit->GetCircuitDef()->GetLosRadius());
-		unit->PushDGunAct(new CDGunAction(unit, range));
+		unit->PushDGunAct(new CDGunAction(unit, unit->GetDGunRange()));
 	}
 //	if (unit->GetCircuitDef()->IsAbleToCapture()) {
-//		unit->PushBack(new CCaptureAction(unit, 500.f));
+//		unit->PushBack(new CCaptureAction(unit, unit->GetCircuitDef()->GetBuildDistance()));
 //	}
+}
+
+void CSPatrolTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
+{
+	if (unit->GetHealthPercent() < unit->GetCircuitDef()->GetSelfDHP()) {
+		unit->CmdSelfD(true);
+	}
 }
 
 } /* namespace circuit */

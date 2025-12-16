@@ -350,7 +350,7 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opSub(const AIFloat3& in) const", asMETHODPR(float3, operator-, (const float3&) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opSub(float) const", asMETHODPR(float3, operator-, (const float) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "void opSubAssign(const AIFloat3& in)", asMETHOD(float3, operator-=), asCALL_THISCALL); ASSERT(r >= 0);
-	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opNeg()", asMETHODPR(float3, operator-, () const, float3), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opNeg() const", asMETHODPR(float3, operator-, () const, float3), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opMul(const AIFloat3& in) const", asMETHODPR(float3, operator*, (const float3&) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opMul(float) const", asMETHODPR(float3, operator*, (const float) const, float3), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("AIFloat3", "AIFloat3 opMul_r(float) const", asFUNCTIONPR(operator*, (float, const float3&), float3), asCALL_CDECL_OBJLAST); ASSERT(r >= 0);
@@ -478,6 +478,8 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectProperty("IUnitTask", "CCircuitUnit@ const target", asOFFSET(IBuilderTask, target)); ASSERT(r >= 0);
 	gUnitArrayType = engine->GetTypeInfoByDecl("array<CCircuitUnit@>");
 	r = engine->RegisterObjectMethod("IUnitTask", "array<CCircuitUnit@>@ GetUnits() const", asFUNCTION(IUnitTask_GetUnits), asCALL_CDECL_OBJFIRST); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("IUnitTask", "void Abort()", asMETHOD(IUnitTask, Abort), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("IUnitTask", "void Done()", asMETHOD(IUnitTask, Done), asCALL_THISCALL); ASSERT(r >= 0);
 
 	r = engine->RegisterObjectProperty("CCircuitAI", "const int frame", asOFFSET(CCircuitAI, lastFrame)); ASSERT(r >= 0);
 	r = engine->RegisterObjectProperty("CCircuitAI", "const int skirmishAIId", asOFFSET(CCircuitAI, skirmishAIId)); ASSERT(r >= 0);
@@ -571,6 +573,7 @@ CInitScript::CInitScript(CScriptManager* scr, CCircuitAI* ai)
 	r = engine->RegisterObjectMethod("CCircuitUnit", "void TglAttribute(Type)", asMETHOD(CCircuitUnit, TglAttribute), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitUnit", "bool IsAttrAny(Mask) const", asMETHOD(CCircuitUnit, IsAttrAny), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitUnit", "void SetFireState(int)", asMETHOD(CCircuitUnit, TrySetFireState), asCALL_THISCALL); ASSERT(r >= 0);
+	r = engine->RegisterObjectMethod("CCircuitUnit", "void SetMoveState(int)", asMETHOD(CCircuitUnit, TrySetMoveState), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CCircuitUnit", "void SelfDestruct(bool)", asMETHOD(CCircuitUnit, CmdSelfD), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectProperty("CCircuitUnit", "IUnitTask@ const task", asOFFSET(CCircuitUnit, task)); ASSERT(r >= 0);
 	// RulesParams accessor on Unit
@@ -686,6 +689,8 @@ void CInitScript::RegisterMgr()
 	r = engine->RegisterGlobalProperty("CTerrainManager aiTerrainMgr", terrainMgr); ASSERT(r >= 0);
 	r = engine->RegisterGlobalFunction("int AiTerrainWidth()", asFUNCTION(CTerrainManager::GetTerrainWidth), asCALL_CDECL); ASSERT(r >= 0);
 	r = engine->RegisterGlobalFunction("int AiTerrainHeight()", asFUNCTION(CTerrainManager::GetTerrainHeight), asCALL_CDECL); ASSERT(r >= 0);
+	r = engine->RegisterGlobalFunction("float AiTerrainDiagonal()", asFUNCTION(CTerrainManager::GetTerrainDiagonal), asCALL_CDECL); ASSERT(r >= 0);
+	r = engine->RegisterGlobalFunction("AIFloat3 AITerrainCenter()", asFUNCTION(CTerrainManager::GetTerrainCenter), asCALL_CDECL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CTerrainManager", "bool IsWaterAVoid() const", asMETHOD(CTerrainManager, IsWaterAVoid), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CTerrainManager", "float GetLandPercent() const", asMETHOD(CTerrainManager, GetLandPercent), asCALL_THISCALL); ASSERT(r >= 0);
 	r = engine->RegisterObjectMethod("CTerrainManager", "float SetAllyZoneRange(float)", asMETHOD(CTerrainManager, SetAllyZoneRange), asCALL_THISCALL); ASSERT(r >= 0);

@@ -91,6 +91,12 @@
 		// 2 - fire at will
 //		"fire_state": 2,
 
+		// Move state (maneuvre by default)
+		// 0 - hold pos
+		// 1 - maneuvre
+		// 2 - roam
+//		"move_state": 1,
+
 		// Per unit On state for static and mobile enemies while attacking. Not used when unspecified
 		// true = on
 		// false = off

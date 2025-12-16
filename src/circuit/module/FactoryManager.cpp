@@ -19,6 +19,7 @@
 #include "task/static/WaitTask.h"
 #include "task/static/RepairTask.h"
 #include "task/static/ReclaimTask.h"
+#include "task/static/PatrolTask.h"
 #include "unit/FactoryData.h"
 #include "CircuitAI.h"
 #include "util/GameAttribute.h"
@@ -408,6 +409,11 @@ void CFactoryManager::ReadConfig()
 			cdef->SetFireState(fire.asInt());
 		}
 
+		const Json::Value& move = behaviour["move_state"];
+		if (!move.isNull()) {
+			cdef->SetMoveState(move.asInt());
+		}
+
 		const Json::Value& slowOnOff = behaviour["slow_target"];
 		if (!slowOnOff.isNull()) {
 			cdef->AddAttribute(ATTR_TYPE(ONOFF));
@@ -721,8 +727,10 @@ void CFactoryManager::Init()
 int CFactoryManager::UnitCreated(CCircuitUnit* unit, CCircuitUnit* builder)
 {
 	CCircuitDef* cdef = unit->GetCircuitDef();
+	// FIXME: Why is it here and not in top level, before module call?
 	TRY_UNIT(circuit, unit,
 		unit->CmdSetFireState(cdef->GetFireState());
+		unit->CmdSetMoveState(cdef->GetMoveState());
 	)
 
 	auto search = createdHandler.find(cdef->GetId());
@@ -827,6 +835,9 @@ IUnitTask* CFactoryManager::Enqueue(const TaskS::SServSTask& ti)
 		} break;
 		case IBuilderTask::BuildType::RECLAIM: {
 			task = new CSReclaimTask(this, ti.priority, ti.position, {0.f, 0.f}, ti.timeout, ti.radius);
+		} break;
+		case IBuilderTask::BuildType::PATROL: {
+			task = new CSPatrolTask(this, ti.priority, ti.position, ti.timeout);
 		} break;
 		default:
 		case IBuilderTask::BuildType::WAIT: {

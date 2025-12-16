@@ -78,6 +78,10 @@ public:
 	virtual void Dead();
 	bool IsDead() const { return isDead; }
 
+	// AS API
+	void Abort();
+	void Done();
+
 protected:
 	bool IsQueryReady(CCircuitUnit* unit) const;
 

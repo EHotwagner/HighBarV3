@@ -1,18 +1,18 @@
 /*
  * PatrolTask.h
  *
- *  Created on: Jan 31, 2015
+ *  Created on: Dec 15, 2025
  *      Author: rlcevg
  */
 
 #ifndef SRC_CIRCUIT_TASK_BUILDER_PATROLTASK_H_
 #define SRC_CIRCUIT_TASK_BUILDER_PATROLTASK_H_
 
-#include "task/builder/BuilderTask.h"
+#include "task/common/PatrolTask.h"
 
 namespace circuit {
 
-class CBPatrolTask: public IBuilderTask {
+class CBPatrolTask: public IPatrolTask {
 public:
 	CBPatrolTask(ITaskModule* mgr, Priority priority,
 				 const springai::AIFloat3& position,
@@ -20,17 +20,8 @@ public:
 	virtual ~CBPatrolTask();
 
 	virtual void AssignTo(CCircuitUnit* unit) override;
-	virtual void RemoveAssignee(CCircuitUnit* unit) override;  // FIXME: Remove when proper task assignment implemented
-
-	virtual void Start(CCircuitUnit* unit) override;
-	virtual void Update() override;
-protected:
-	virtual void Finish() override;
-	virtual void Cancel() override;
-
-	virtual bool Execute(CCircuitUnit* unit) override;
 };
 
-} // namespace circuit
+} /* namespace circuit */
 
-#endif // SRC_CIRCUIT_TASK_BUILDER_PATROLTASK_H_
+#endif /* SRC_CIRCUIT_TASK_BUILDER_PATROLTASK_H_ */
