@@ -1,0 +1,198 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// HighBarV3 — gRPC Gateway RPC surface.
+//
+// This file is the **planning sketch** produced by Phase 1 of
+// /speckit.plan for feature 001-grpc-gateway. It is the reference
+// shape for the final `proto/highbar/service.proto` that the build
+// system will consume. Field numbers and enum values declared here
+// are the normative starting point; once this file is moved to
+// `proto/highbar/`, breaking changes require a MAJOR version bump
+// per Constitution III.
+//
+// This sketch deliberately references message types that live in
+// sibling proto files (state.proto, commands.proto, callbacks.proto,
+// common.proto) by import path, even though some of those imports
+// are not yet created. They are created during /speckit.implement
+// from the ported V2 proto files plus the new state.proto in this
+// directory.
+
+syntax = "proto3";
+
+package highbar.v1;
+
+import "highbar/state.proto";
+import "highbar/commands.proto";
+import "highbar/callbacks.proto";
+import "highbar/common.proto";
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+// The single service HighBarV3 exposes to clients. All RPCs share this
+// surface so that observability counters and operational controls live
+// on the same auth-and-transport plane as state and commands.
+//
+// Role model:
+//   - `Hello`, `StreamState`, `GetRuntimeCounters`: observer-legal
+//     (no token required for StreamState; see FR-013).
+//   - `SubmitCommands`, `InvokeCallback`, `Save`, `Load`: AI-role
+//     only; require the per-session token in metadata
+//     `x-highbar-ai-token` (FR-014).
+service HighBarProxy {
+  // Version-handshake + session establishment. MUST be the first call
+  // on a new channel. Strict-equality schema-version check (FR-022a).
+  rpc Hello(HelloRequest) returns (HelloResponse);
+
+  // Server-streaming state feed. First message is a StateUpdate
+  // whose payload is a StateSnapshot; subsequent messages are
+  // StateDeltas or KeepAlives. Observers may call without a token;
+  // the AI role calls this alongside its command stream.
+  rpc StreamState(StreamStateRequest) returns (stream highbar.v1.StateUpdate);
+
+  // Client-streaming command submission. AI role only. Bounded queue
+  // — overflow returns RESOURCE_EXHAUSTED synchronously (FR-012a).
+  rpc SubmitCommands(stream highbar.v1.CommandBatch) returns (CommandAck);
+
+  // Unary synchronous engine-callback invocation. AI role only.
+  // Used by the plugin to forward engine callbacks (e.g., unit-def
+  // lookups) that the external AI needs to answer synchronously.
+  rpc InvokeCallback(highbar.v1.CallbackRequest) returns (highbar.v1.CallbackResponse);
+
+  // Unary synchronous save-game request. AI role only. Engine needs
+  // the response before it continues (architecture doc §Critical
+  // Pitfalls #6).
+  rpc Save(SaveRequest) returns (SaveResponse);
+
+  // Unary synchronous load-game request. AI role only. Symmetric to
+  // Save.
+  rpc Load(LoadRequest) returns (LoadResponse);
+
+  // Observability counters (FR-024, clarification Q1). Available to
+  // any authenticated client — same token as the AI role. Returns a
+  // coherent snapshot of RuntimeCounters; implementations take
+  // atomic reads, no global lock.
+  rpc GetRuntimeCounters(CountersRequest) returns (CountersResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Hello / handshake
+// ---------------------------------------------------------------------------
+
+message HelloRequest {
+  // Semver string of the schema the client was compiled against.
+  // Strict-equality comparison against the plugin's baked-in schema
+  // version (FR-022a). Example: "1.0.0".
+  string schema_version = 1;
+
+  // Optional client identifier for logs (e.g., "hb-fsharp-0.4.1",
+  // "hb-python-0.1.0"). Never used for auth or routing.
+  string client_id = 2;
+
+  // Desired role. If AI, the request MUST carry the AI token in
+  // metadata; handshake fails PERMISSION_DENIED otherwise.
+  Role role = 3;
+}
+
+message HelloResponse {
+  // Plugin's own schema version. Always populated, even on mismatch,
+  // so the client's error path can surface both versions to the user.
+  string schema_version = 1;
+
+  // Session identifier the server assigned to this channel. Carried
+  // in logs for correlation.
+  string session_id = 2;
+
+  // One-shot static map payload — sent in HelloResponse to avoid
+  // re-sending on every StateSnapshot (data-model §1).
+  highbar.v1.StaticMap static_map = 3;
+
+  // Current engine frame at handshake completion. Useful for clients
+  // estimating wall-clock offsets.
+  uint32 current_frame = 4;
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_OBSERVER    = 1;
+  ROLE_AI          = 2;
+}
+
+// ---------------------------------------------------------------------------
+// StreamState
+// ---------------------------------------------------------------------------
+
+message StreamStateRequest {
+  // Optional resume point. If set and still in the server's ring
+  // buffer, the server replays messages starting at seq+1. If set
+  // but out of range, the server sends a fresh StateSnapshot and
+  // continues with the next monotonic seq (FR-007, FR-008).
+  // Unset (0) means "send me a fresh snapshot now."
+  uint64 resume_from_seq = 1;
+}
+
+// ---------------------------------------------------------------------------
+// SubmitCommands
+// ---------------------------------------------------------------------------
+
+message CommandAck {
+  // Monotonic acknowledgement per CommandBatch consumed. Zero on
+  // total rejection (caller should consult RPC status for the
+  // specific reason — INVALID_ARGUMENT, RESOURCE_EXHAUSTED, etc.).
+  uint64 last_accepted_batch_seq = 1;
+
+  // Cumulative counters for this session; clients can diff between
+  // batches to detect late rejections.
+  uint64 batches_accepted        = 2;
+  uint64 batches_rejected_invalid = 3;
+  uint64 batches_rejected_full    = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Save / Load
+// ---------------------------------------------------------------------------
+//
+// These carry opaque blobs on purpose. The plugin forwards engine-
+// provided save data to the AI client and returns the client's
+// reply back to the engine. The AI client decides the encoding of
+// its own persisted state; the plugin never parses the blob.
+
+message SaveRequest {
+  bytes engine_state = 1;  // opaque; engine-provided
+}
+
+message SaveResponse {
+  bytes client_state = 1;  // opaque; client-provided
+}
+
+message LoadRequest {
+  bytes engine_state = 1;  // opaque; engine-provided
+  bytes client_state = 2;  // opaque; from a prior Save
+}
+
+message LoadResponse {
+  // Empty; non-empty on future extension. Engine needs synchronous
+  // completion acknowledgement, not a payload.
+}
+
+// ---------------------------------------------------------------------------
+// Runtime counters
+// ---------------------------------------------------------------------------
+
+message CountersRequest {
+  // Empty. Future extensions may select a counter subset.
+}
+
+message CountersResponse {
+  uint32 subscriber_count                    = 1;
+  repeated uint32 per_subscriber_queue_depth = 2;
+  uint64 cumulative_dropped_subscribers      = 3;
+  uint64 frame_flush_time_us_p99             = 4;
+  uint32 command_queue_depth                 = 5;
+  uint64 command_submissions_rejected_resource_exhausted = 6;
+  uint64 command_submissions_rejected_invalid_argument   = 7;
+
+  // Plugin uptime since bind, in engine frames.
+  uint32 frames_since_bind = 8;
+}

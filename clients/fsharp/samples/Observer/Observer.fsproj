@@ -1,0 +1,21 @@
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>HighBar.Samples.Observer</RootNamespace>
+    <AssemblyName>hb-observer</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\HighBar.Client.fsproj" />
+  </ItemGroup>
+
+</Project>

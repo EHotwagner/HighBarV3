@@ -1,0 +1,178 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// Ported verbatim from HighBarV2 (/proto/highbar/events.proto).
+// Only change vs V2: `package highbar;` → `package highbar.v1;` to
+// align with plan.md §Technical Context (versioned proto package).
+//
+// These message types are referenced from state.proto's DeltaEvent
+// oneof; the V2 `*Event` suffix is preserved so consumers that built
+// against V2's schema continue to parse identical bytes on the wire.
+
+syntax = "proto3";
+
+package highbar.v1;
+
+import "highbar/common.proto";
+
+// Container for all engine event types (V2's 27-variant catalog).
+// HighBarV3 consumes the individual event messages directly from
+// state.proto's DeltaEvent oneof; EngineEvent is retained for
+// backward compatibility with V2 consumers and as the canonical
+// list of engine events.
+message EngineEvent {
+  oneof event {
+    InitEvent init = 1;
+    ReleaseEvent release = 2;
+    UpdateEvent update = 3;
+    MessageEvent message = 4;
+    UnitCreatedEvent unit_created = 5;
+    UnitFinishedEvent unit_finished = 6;
+    UnitIdleEvent unit_idle = 7;
+    UnitMoveFailedEvent unit_move_failed = 8;
+    UnitDamagedEvent unit_damaged = 9;
+    UnitDestroyedEvent unit_destroyed = 10;
+    UnitGivenEvent unit_given = 11;
+    UnitCapturedEvent unit_captured = 12;
+    EnemyEnterLOSEvent enemy_enter_los = 13;
+    EnemyLeaveLOSEvent enemy_leave_los = 14;
+    EnemyEnterRadarEvent enemy_enter_radar = 15;
+    EnemyLeaveRadarEvent enemy_leave_radar = 16;
+    EnemyDamagedEvent enemy_damaged = 17;
+    EnemyDestroyedEvent enemy_destroyed = 18;
+    WeaponFiredEvent weapon_fired = 19;
+    PlayerCommandEvent player_command = 20;
+    SeismicPingEvent seismic_ping = 21;
+    CommandFinishedEvent command_finished = 22;
+    LoadEvent load = 23;
+    SaveEvent save = 24;
+    EnemyCreatedEvent enemy_created = 25;
+    EnemyFinishedEvent enemy_finished = 26;
+    LuaMessageEvent lua_message = 27;
+  }
+}
+
+message InitEvent {
+  int32 team_id = 1;
+}
+
+message ReleaseEvent {}
+
+message UpdateEvent {
+  int32 frame = 1;
+}
+
+message MessageEvent {
+  int32 player = 1;
+  string message = 2;
+}
+
+message UnitCreatedEvent {
+  int32 unit_id = 1;
+  int32 builder_id = 2;
+}
+
+message UnitFinishedEvent {
+  int32 unit_id = 1;
+}
+
+message UnitIdleEvent {
+  int32 unit_id = 1;
+}
+
+message UnitMoveFailedEvent {
+  int32 unit_id = 1;
+}
+
+message UnitDamagedEvent {
+  int32 unit_id = 1;
+  optional int32 attacker_id = 2;
+  float damage = 3;
+  Vector3 direction = 4;
+  int32 weapon_def_id = 5;
+  bool is_paralyzer = 6;
+}
+
+message UnitDestroyedEvent {
+  int32 unit_id = 1;
+  optional int32 attacker_id = 2;
+}
+
+message UnitGivenEvent {
+  int32 unit_id = 1;
+  int32 old_team_id = 2;
+  int32 new_team_id = 3;
+}
+
+message UnitCapturedEvent {
+  int32 unit_id = 1;
+  int32 old_team_id = 2;
+  int32 new_team_id = 3;
+}
+
+message EnemyEnterLOSEvent {
+  int32 enemy_id = 1;
+}
+
+message EnemyLeaveLOSEvent {
+  int32 enemy_id = 1;
+}
+
+message EnemyEnterRadarEvent {
+  int32 enemy_id = 1;
+}
+
+message EnemyLeaveRadarEvent {
+  int32 enemy_id = 1;
+}
+
+message EnemyDamagedEvent {
+  int32 enemy_id = 1;
+  optional int32 attacker_id = 2;
+  float damage = 3;
+  Vector3 direction = 4;
+  int32 weapon_def_id = 5;
+}
+
+message EnemyDestroyedEvent {
+  int32 enemy_id = 1;
+  optional int32 attacker_id = 2;
+}
+
+message WeaponFiredEvent {
+  int32 unit_id = 1;
+  int32 weapon_def_id = 2;
+}
+
+message PlayerCommandEvent {
+  repeated int32 units = 1;
+  int32 command_topic_id = 2;
+  int32 command_id = 3;
+}
+
+message SeismicPingEvent {
+  Vector3 position = 1;
+  float strength = 2;
+}
+
+message CommandFinishedEvent {
+  int32 unit_id = 1;
+  int32 command_id = 2;
+  int32 command_topic_id = 3;
+}
+
+message LoadEvent {}
+
+message SaveEvent {}
+
+message EnemyCreatedEvent {
+  int32 enemy_id = 1;
+}
+
+message EnemyFinishedEvent {
+  int32 enemy_id = 1;
+}
+
+message LuaMessageEvent {
+  string data = 1;
+  int32 in_message_id = 2;
+}

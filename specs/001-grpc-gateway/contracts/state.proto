@@ -1,0 +1,156 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// HighBarV3 — State wire format.
+//
+// Planning sketch produced by Phase 1 of /speckit.plan for feature
+// 001-grpc-gateway. See data-model.md for the authoritative entity
+// definitions; this file encodes them at the wire level. Final home
+// is `proto/highbar/state.proto`.
+
+syntax = "proto3";
+
+package highbar.v1;
+
+import "highbar/common.proto";
+import "highbar/events.proto";
+
+// ---------------------------------------------------------------------------
+// StateUpdate — the envelope
+// ---------------------------------------------------------------------------
+
+message StateUpdate {
+  // Strictly monotonic per session. Continues across snapshot resets
+  // (FR-006, FR-008).
+  uint64 seq = 1;
+
+  // Engine frame the payload describes.
+  uint32 frame = 2;
+
+  oneof payload {
+    StateSnapshot snapshot = 3;
+    StateDelta    delta    = 4;
+    KeepAlive     keepalive = 5;
+  }
+}
+
+message KeepAlive {
+  // Empty. Emitted when no deltas have flushed for a configured quiet
+  // window, so clients can distinguish "idle game" from "dead stream."
+}
+
+// ---------------------------------------------------------------------------
+// StateSnapshot — materialized GameState
+// ---------------------------------------------------------------------------
+
+message StateSnapshot {
+  uint32 frame_number                 = 1;
+  repeated OwnUnit    own_units       = 2;
+  repeated EnemyUnit  visible_enemies = 3;
+  repeated RadarBlip  radar_enemies   = 4;
+  repeated MapFeature map_features    = 5;
+  TeamEconomy         economy         = 6;
+
+  // OPTIONAL. Server normally delivers StaticMap once in HelloResponse
+  // and omits it from snapshots thereafter. Populated here only for
+  // observers that bypass Hello (legal — observers don't require a
+  // handshake for the state feed) or when the plugin chose to include
+  // it (large-map config).
+  StaticMap static_map = 7;
+}
+
+message OwnUnit {
+  uint32 unit_id            = 1;
+  uint32 def_id             = 2;
+  Vec3   position           = 3;
+  float  health             = 4;
+  float  max_health         = 5;
+  bool   under_construction = 6;
+  float  build_progress     = 7;
+}
+
+message EnemyUnit {
+  uint32 unit_id     = 1;
+  uint32 def_id      = 2;
+  Vec3   position    = 3;
+  float  health      = 4;
+  float  max_health  = 5;
+  LosQuality los_quality = 6;
+}
+
+message RadarBlip {
+  uint32 blip_id           = 1;
+  Vec3   position          = 2;  // degraded — radar jitter applied
+  uint32 suspected_def_id  = 3;  // 0 = unknown
+}
+
+message MapFeature {
+  uint32 feature_id           = 1;
+  uint32 def_id               = 2;
+  Vec3   position             = 3;
+  float  reclaim_value_metal  = 4;
+  float  reclaim_value_energy = 5;
+}
+
+message TeamEconomy {
+  float metal          = 1;
+  float metal_income   = 2;
+  float metal_storage  = 3;
+  float energy         = 4;
+  float energy_income  = 5;
+  float energy_storage = 6;
+}
+
+message StaticMap {
+  uint32 width_cells          = 1;
+  uint32 height_cells         = 2;
+  repeated Vec3 metal_spots   = 3;
+  repeated Vec3 start_positions = 4;
+  // Heightmap intentionally lives here (not on every snapshot) —
+  // late-game snapshots exceed 4MB without this carve-out.
+  bytes heightmap             = 5;
+}
+
+enum LosQuality {
+  LOS_UNSPECIFIED = 0;
+  LOS_VISUAL      = 1;
+  LOS_RADAR       = 2;
+}
+
+// ---------------------------------------------------------------------------
+// StateDelta — incremental events
+// ---------------------------------------------------------------------------
+
+message StateDelta {
+  // One DeltaEvent arm per engine event. events.proto (ported from
+  // HighBarV2) defines the 28 event variants; a DeltaEvent is a
+  // oneof over the variant types. This keeps the engine-event
+  // catalog in a single file that V2 clients already consume.
+  repeated DeltaEvent events = 1;
+}
+
+// DeltaEvent is the sole point of coupling between this file and
+// events.proto. Every engine event referenced in data-model.md §3
+// lives as one arm of this oneof.
+message DeltaEvent {
+  oneof kind {
+    highbar.v1.UnitCreated      unit_created      = 1;
+    highbar.v1.UnitFinished     unit_finished     = 2;
+    highbar.v1.UnitDamaged      unit_damaged      = 3;
+    highbar.v1.UnitDestroyed    unit_destroyed    = 4;
+    highbar.v1.UnitIdle         unit_idle         = 5;
+    highbar.v1.UnitMoveFailed   unit_move_failed  = 6;
+    highbar.v1.UnitGiven        unit_given        = 7;
+    highbar.v1.UnitCaptured     unit_captured     = 8;
+    highbar.v1.EnemyEnterLOS    enemy_enter_los   = 9;
+    highbar.v1.EnemyLeaveLOS    enemy_leave_los   = 10;
+    highbar.v1.EnemyEnterRadar  enemy_enter_radar = 11;
+    highbar.v1.EnemyLeaveRadar  enemy_leave_radar = 12;
+    highbar.v1.EnemyDamaged     enemy_damaged     = 13;
+    highbar.v1.EnemyDestroyed   enemy_destroyed   = 14;
+    highbar.v1.FeatureCreated   feature_created   = 15;
+    highbar.v1.FeatureDestroyed feature_destroyed = 16;
+    highbar.v1.EconomyTick      economy_tick      = 17;
+    // …remaining V2 engine events reserved 18..28; exact list is
+    // locked when events.proto is ported in /speckit.implement.
+  }
+}

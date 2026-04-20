@@ -1,0 +1,20 @@
+version: v2
+clean: true
+plugins:
+  # C++ (plugin side) → consumed by the highbar_proto static lib in CMakeLists.txt
+  - remote: buf.build/protocolbuffers/cpp
+    out: ../build/gen
+  - remote: buf.build/grpc/cpp
+    out: ../build/gen
+
+  # C# (F# client) → consumed by clients/fsharp/HighBar.Client.fsproj
+  - remote: buf.build/protocolbuffers/csharp
+    out: ../build/gen/csharp
+  - remote: buf.build/grpc/csharp
+    out: ../build/gen/csharp
+
+  # Python → consumed by clients/python/
+  - remote: buf.build/protocolbuffers/python
+    out: ../build/gen/python
+  - remote: buf.build/grpc/python
+    out: ../build/gen/python

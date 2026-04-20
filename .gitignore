@@ -25,3 +25,16 @@ Makefile
 cmake_install.cmake
 
 .settings/
+
+# HighBarV3: vcpkg, buf codegen, cmake build trees
+build/
+vcpkg_installed/
+CMakeCache.txt
+CMakeUserPresets.json
+compile_commands.json
+
+# .NET build output (F# + companion C# proto project)
+**/bin/
+**/obj/
+*.user
+

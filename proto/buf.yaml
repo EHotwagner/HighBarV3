@@ -1,0 +1,46 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # The proto package is versioned `highbar.v1` per plan.md §Technical
+    # Context. Plan §Project Structure places files in `proto/highbar/`
+    # (not `proto/highbar/v1/`). These two decisions are load-bearing —
+    # the versioned package is required for the strict-equality handshake
+    # (FR-022a, research §6); the flat layout keeps the merge-delta
+    # against upstream BARb small.
+    - PACKAGE_DIRECTORY_MATCH
+
+    # PACKAGE_VERSION_SUFFIX would require the package form
+    # `highbar.v1` to be in a directory ending `/v1/`. Same rationale
+    # as above — not applicable under our plan-prescribed layout.
+    - PACKAGE_VERSION_SUFFIX
+
+    # HighBarV2's CallbackId enum uses `CALLBACK_*` value prefixes
+    # (not buf-standard `CALLBACK_ID_*`) and a `CALLBACK_UNKNOWN` zero
+    # value (not `_UNSPECIFIED`). We ported it verbatim so V2 clients
+    # deserialize the wire unchanged; renaming the generated C#
+    # constants would break every V2 F# consumer. Enum value names
+    # never appear on the wire, so the relaxation is cosmetic.
+    - ENUM_VALUE_PREFIX
+    - ENUM_ZERO_VALUE_SUFFIX
+
+    # Service surface naming is fixed by the contract planning sketch
+    # (specs/001-grpc-gateway/contracts/service.proto): service name
+    # is `HighBarProxy` (no `Service` suffix), RPC requests/responses
+    # reuse domain-named messages (`StateUpdate`, `CommandBatch`,
+    # `CallbackRequest`, `CountersRequest`) rather than the
+    # `<RpcName>Request/Response` convention buf's STANDARD rules
+    # prefer. The plan chooses this to keep messages meaningful
+    # across RPCs (e.g., a client can log a `CommandBatch` outside an
+    # RPC context) and to match the HighBarV2 ergonomics that F# and
+    # Python client ports are expected to preserve.
+    - SERVICE_SUFFIX
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE
+breaking:
+  use:
+    - FILE

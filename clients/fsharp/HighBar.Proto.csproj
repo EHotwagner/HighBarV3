@@ -1,0 +1,53 @@
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!--
+  HighBarV3 — generated C# proto stubs for the F# client (T043 companion).
+
+  Grpc.Tools refuses to run protoc from an .fsproj by default, so the
+  proto catalog lives in this .csproj; HighBar.Client.fsproj takes a
+  ProjectReference on it and consumes the generated Highbar.V1 types.
+  Single source of truth is still ../../proto/highbar/*.proto.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Highbar.V1</RootNamespace>
+    <AssemblyName>HighBar.Proto</AssemblyName>
+    <Description>HighBarV3 generated protobuf + gRPC client stubs.</Description>
+    <PackageLicenseExpression>GPL-2.0-only</PackageLicenseExpression>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.27.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.66.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.66.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="../../proto/highbar/common.proto"
+              ProtoRoot="../../proto"
+              GrpcServices="Client" />
+    <Protobuf Include="../../proto/highbar/events.proto"
+              ProtoRoot="../../proto"
+              GrpcServices="Client" />
+    <Protobuf Include="../../proto/highbar/commands.proto"
+              ProtoRoot="../../proto"
+              GrpcServices="Client" />
+    <Protobuf Include="../../proto/highbar/callbacks.proto"
+              ProtoRoot="../../proto"
+              GrpcServices="Client" />
+    <Protobuf Include="../../proto/highbar/state.proto"
+              ProtoRoot="../../proto"
+              GrpcServices="Client" />
+    <Protobuf Include="../../proto/highbar/service.proto"
+              ProtoRoot="../../proto"
+              GrpcServices="Client" />
+  </ItemGroup>
+
+</Project>

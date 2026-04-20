@@ -1,0 +1,204 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// HighBarV3 — State wire format (T012).
+//
+// Moved from specs/001-grpc-gateway/contracts/state.proto. See
+// data-model.md for the authoritative entity definitions; this file
+// encodes them at the wire level. Minor divergences from the planning
+// sketch, each labeled inline below, reconcile the sketch with the
+// ported V2 proto surface (verbatim V2 `*Event` suffix on event
+// types, V2's `Vector3` kept as-is).
+
+syntax = "proto3";
+
+package highbar.v1;
+
+import "highbar/common.proto";
+import "highbar/events.proto";
+
+// ---------------------------------------------------------------------------
+// StateUpdate — the envelope
+// ---------------------------------------------------------------------------
+
+message StateUpdate {
+  // Strictly monotonic per session. Continues across snapshot resets
+  // (FR-006, FR-008).
+  uint64 seq = 1;
+
+  // Engine frame the payload describes.
+  uint32 frame = 2;
+
+  oneof payload {
+    StateSnapshot snapshot = 3;
+    StateDelta    delta    = 4;
+    KeepAlive     keepalive = 5;
+  }
+}
+
+message KeepAlive {
+  // Empty. Emitted when no deltas have flushed for a configured quiet
+  // window, so clients can distinguish "idle game" from "dead stream."
+}
+
+// ---------------------------------------------------------------------------
+// StateSnapshot — materialized GameState
+// ---------------------------------------------------------------------------
+
+message StateSnapshot {
+  uint32 frame_number                 = 1;
+  repeated OwnUnit    own_units       = 2;
+  repeated EnemyUnit  visible_enemies = 3;
+  repeated RadarBlip  radar_enemies   = 4;
+  repeated MapFeature map_features    = 5;
+  TeamEconomy         economy         = 6;
+
+  // OPTIONAL. Server normally delivers StaticMap once in HelloResponse
+  // and omits it from snapshots thereafter. Populated here only for
+  // observers that bypass Hello (legal — observers don't require a
+  // handshake for the state feed) or when the plugin chose to include
+  // it (large-map config).
+  StaticMap static_map = 7;
+}
+
+message OwnUnit {
+  uint32 unit_id            = 1;
+  uint32 def_id             = 2;
+  Vector3 position          = 3;
+  float  health             = 4;
+  float  max_health         = 5;
+  bool   under_construction = 6;
+  float  build_progress     = 7;
+}
+
+message EnemyUnit {
+  uint32 unit_id     = 1;
+  uint32 def_id      = 2;
+  Vector3 position   = 3;
+  float  health      = 4;
+  float  max_health  = 5;
+  LosQuality los_quality = 6;
+}
+
+message RadarBlip {
+  uint32 blip_id           = 1;
+  Vector3 position         = 2;  // degraded — radar jitter applied
+  uint32 suspected_def_id  = 3;  // 0 = unknown
+}
+
+message MapFeature {
+  uint32 feature_id           = 1;
+  uint32 def_id               = 2;
+  Vector3 position            = 3;
+  float  reclaim_value_metal  = 4;
+  float  reclaim_value_energy = 5;
+}
+
+message TeamEconomy {
+  float metal          = 1;
+  float metal_income   = 2;
+  float metal_storage  = 3;
+  float energy         = 4;
+  float energy_income  = 5;
+  float energy_storage = 6;
+}
+
+message StaticMap {
+  uint32 width_cells          = 1;
+  uint32 height_cells         = 2;
+  repeated Vector3 metal_spots = 3;
+  repeated Vector3 start_positions = 4;
+  // Heightmap intentionally lives here (not on every snapshot) —
+  // late-game snapshots exceed 4MB without this carve-out.
+  bytes heightmap             = 5;
+}
+
+enum LosQuality {
+  LOS_UNSPECIFIED = 0;
+  LOS_VISUAL      = 1;
+  LOS_RADAR       = 2;
+}
+
+// ---------------------------------------------------------------------------
+// StateDelta — incremental events
+// ---------------------------------------------------------------------------
+
+message StateDelta {
+  // One DeltaEvent per engine event routed through
+  // CGrpcGatewayModule's IModule handlers during this frame (see
+  // data-model §3 production flow).
+  repeated DeltaEvent events = 1;
+}
+
+// DeltaEvent oneof arms mirror the engine-event catalog. V2 event
+// types (imported from events.proto) are reused verbatim — they keep
+// their V2 `*Event` suffix so V2 bytes round-trip unchanged. V3-new
+// events (Feature*, EconomyTick) are defined in this file since they
+// are V3-observable state transitions that V2 did not model.
+//
+// Arms 1..14 map directly to V2's engine events (UnitCreated..EnemyDestroyed).
+// Arms 15..17 are V3-new (Feature*, EconomyTick).
+// Arms 18..25 are the remaining V2 engine events (Message, WeaponFired,
+// PlayerCommand, SeismicPing, CommandFinished, EnemyCreated,
+// EnemyFinished, LuaMessage).
+// Arms 26..28 are reserved for future engine events without breaking
+// the oneof contract.
+message DeltaEvent {
+  oneof kind {
+    UnitCreatedEvent     unit_created      = 1;
+    UnitFinishedEvent    unit_finished     = 2;
+    UnitDamagedEvent     unit_damaged      = 3;
+    UnitDestroyedEvent   unit_destroyed    = 4;
+    UnitIdleEvent        unit_idle         = 5;
+    UnitMoveFailedEvent  unit_move_failed  = 6;
+    UnitGivenEvent       unit_given        = 7;
+    UnitCapturedEvent    unit_captured     = 8;
+    EnemyEnterLOSEvent   enemy_enter_los   = 9;
+    EnemyLeaveLOSEvent   enemy_leave_los   = 10;
+    EnemyEnterRadarEvent enemy_enter_radar = 11;
+    EnemyLeaveRadarEvent enemy_leave_radar = 12;
+    EnemyDamagedEvent    enemy_damaged     = 13;
+    EnemyDestroyedEvent  enemy_destroyed   = 14;
+    FeatureCreatedEvent  feature_created   = 15;
+    FeatureDestroyedEvent feature_destroyed = 16;
+    EconomyTickEvent     economy_tick      = 17;
+    MessageEvent         message           = 18;
+    WeaponFiredEvent     weapon_fired      = 19;
+    PlayerCommandEvent   player_command    = 20;
+    SeismicPingEvent     seismic_ping      = 21;
+    CommandFinishedEvent command_finished  = 22;
+    EnemyCreatedEvent    enemy_created     = 23;
+    EnemyFinishedEvent   enemy_finished    = 24;
+    LuaMessageEvent      lua_message       = 25;
+  }
+  reserved 26 to 28;
+}
+
+// ---------------------------------------------------------------------------
+// V3-new delta events (not present in V2 events.proto)
+// ---------------------------------------------------------------------------
+//
+// V2 had no feature/reclaim-progress model and no per-frame economy
+// signal on the wire. V3 exposes both as first-class delta events
+// because observers (strategy visualizers, ML replay) need them to
+// reconstruct state faithfully.
+
+message FeatureCreatedEvent {
+  uint32 feature_id = 1;
+  uint32 def_id     = 2;
+  Vector3 position  = 3;
+}
+
+message FeatureDestroyedEvent {
+  uint32 feature_id = 1;
+}
+
+message EconomyTickEvent {
+  float metal          = 1;
+  float metal_income   = 2;
+  float metal_usage    = 3;
+  float metal_storage  = 4;
+  float energy         = 5;
+  float energy_income  = 6;
+  float energy_usage   = 7;
+  float energy_storage = 8;
+}

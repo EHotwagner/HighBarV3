@@ -16,6 +16,7 @@
 #include "module/FactoryManager.h"
 #include "module/EconomyManager.h"
 #include "module/MilitaryManager.h"
+#include "module/GrpcGatewayModule.h"  // V3: gRPC gateway
 #include "resource/MetalManager.h"
 #include "terrain/TerrainManager.h"
 #include "terrain/path/PathFinder.h"
@@ -643,10 +644,23 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	militaryManager->InitHandlers();
 
 	// TODO: Remove EconomyManager from module (move abilities to BuilderManager).
-	modules.push_back(militaryManager);
-	modules.push_back(builderManager);
-	modules.push_back(factoryManager);  // NOTE: Contains special last-module unit handlers.
-	modules.push_back(economyManager);  // NOTE: Uses unit's manager != nullptr, thus must be last.
+	// HighBarV3 US3 (T080): when enable_builtin=false, skip registering
+	// the four built-in decision modules in `modules`. Construction still
+	// happened above because the gateway's SnapshotBuilder / OnEconomyTick
+	// read through economyManager / mapManager / enemyManager. Skipping
+	// registration is what stops Update()/event callbacks from firing and
+	// issuing orders — satisfies SC-007 / FR-016 / FR-017.
+	if (isBuiltinEnabled) {
+		modules.push_back(militaryManager);
+		modules.push_back(builderManager);
+		modules.push_back(factoryManager);  // NOTE: Contains special last-module unit handlers.
+		modules.push_back(economyManager);  // NOTE: Uses unit's manager != nullptr, thus must be last.
+	}
+	// V3: gRPC gateway. Constructor binds the service; a throw here
+	// propagates and fails the AI slot closed (FR-003a). Destruction
+	// happens via modules.clear() in Release(). Gateway runs in both
+	// Phase-1 (enable_builtin=true) and Phase-2 (enable_builtin=false).
+	modules.push_back(std::make_shared<CGrpcGatewayModule>(this));
 
 	terrainManager->Init();
 	economyManager->InitEconomyScores();
@@ -1687,6 +1701,12 @@ std::string CCircuitAI::InitOptions()
 	value = options->GetValueByKey("ally_base");
 	if (value != nullptr) {
 		isAllyBaseAvoid = StringToBool(value);
+	}
+
+	// HighBarV3 (US3, T079): Phase-2 mode gate.
+	value = options->GetValueByKey("enable_builtin");
+	if (value != nullptr) {
+		isBuiltinEnabled = StringToBool(value);
 	}
 
 	if (!gameAttribute->IsInitialized()) {

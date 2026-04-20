@@ -1,0 +1,8 @@
+{
+  "transport": "uds",
+  "uds_path": "$XDG_RUNTIME_DIR/highbar-${gameid}.sock",
+  "tcp_bind": "127.0.0.1:50511",
+  "ai_token_path": "$writeDir/highbar.token",
+  "max_recv_mb": 32,
+  "ring_size": 2048
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "highbar-v3",
+  "version-string": "0.1.0",
+  "description": "HighBarV3 gRPC gateway plugin — native deps for the CircuitAI fork",
+  "license": "GPL-2.0-only",
+  "homepage": "https://github.com/rlcevg/CircuitAI",
+  "dependencies": [
+    "grpc",
+    "protobuf",
+    "abseil"
+  ],
+  "builtin-baseline": "256acc64012b23a13041d8705805e1f23b43a024"
+}

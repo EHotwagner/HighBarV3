@@ -68,6 +68,50 @@ if    (BUILD_Cpp_AIWRAPPER)
 			set(additionalCompileFlags "${additionalCompileFlags} -DTRACY_NO_BROADCAST -DTRACY_NO_FRAME_IMAGE -DTRACY_NO_SYSTEM_TRACING")  # -DTRACY_NO_SAMPLING
 		endif ()
 	endif ()
+
+	# === V3: gRPC gateway additions (isolated for upstream-merge clarity, Constitution I) ===
+	# Symbol-hiding on the plugin .so: the engine ships its own protobuf; unhidden
+	# symbols resolve across library boundaries and crash rarely and dramatically.
+	# See docs/architecture.md §Critical Pitfalls #3 and research.md §10.
+	if (NOT WIN32 AND NOT APPLE)
+		set(additionalCompileFlags "${additionalCompileFlags} -fvisibility=hidden -fvisibility-inlines-hidden")
+		set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-Bsymbolic")
+		set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-Bsymbolic")
+	endif ()
+
+	# gRPC + Protobuf resolved via vcpkg manifest mode (see vcpkg.json).
+	# Consumer should pass -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake.
+	find_package(Protobuf CONFIG QUIET)
+	find_package(gRPC     CONFIG QUIET)
+	if (Protobuf_FOUND AND gRPC_FOUND)
+		set(HIGHBAR_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
+		file(MAKE_DIRECTORY "${HIGHBAR_PROTO_GEN_DIR}/highbar")
+		file(GLOB HIGHBAR_PROTO_GEN_SRCS CONFIGURE_DEPENDS
+			"${HIGHBAR_PROTO_GEN_DIR}/highbar/*.pb.cc"
+			"${HIGHBAR_PROTO_GEN_DIR}/highbar/*.grpc.pb.cc"
+		)
+		# Placeholder: empty lib is legal; real sources land with T015 (buf generate).
+		add_library(highbar_proto STATIC ${HIGHBAR_PROTO_GEN_SRCS})
+		set_target_properties(highbar_proto PROPERTIES
+			LINKER_LANGUAGE CXX
+			POSITION_INDEPENDENT_CODE ON
+		)
+		if (HIGHBAR_PROTO_GEN_SRCS)
+			target_include_directories(highbar_proto PUBLIC "${HIGHBAR_PROTO_GEN_DIR}")
+			target_link_libraries(highbar_proto PUBLIC
+				gRPC::grpc++
+				protobuf::libprotobuf
+			)
+		endif ()
+		list(APPEND additionalLibraries highbar_proto)
+	else ()
+		message(WARNING
+			"HighBarV3: gRPC/Protobuf not found via vcpkg — the gateway module will "
+			"build without its wire dependencies. Pass "
+			"-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake to enable.")
+	endif ()
+	# === end V3 additions ===
+
 	configure_native_skirmish_ai(mySourceDirRel additionalSources additionalCompileFlags additionalLibraries)
 else  (BUILD_Cpp_AIWRAPPER)
 	message ("warning: (New) C++ Circuit AI will not be built! (missing Cpp Wrapper)")

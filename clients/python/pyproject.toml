@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# HighBarV3 — Python client (T084).
+#
+# Builds a grpcio-based client that reads the same proto surface as
+# the F# client (proto/highbar/*.proto). Code generation is driven by
+# `buf generate` into build/gen/python/; this package depends on that
+# output via editable install at dev time. At package-build time,
+# `buf generate` runs in CI (T104) before `pip wheel`.
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "highbar-client"
+version = "0.1.0"
+description = "HighBarV3 gRPC client for Python."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-2.0-only" }
+authors = [
+  { name = "HighBarV3 contributors" },
+]
+dependencies = [
+  "grpcio>=1.60",
+  "grpcio-tools>=1.60",
+  "protobuf>=4.25,<6",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.4",
+  "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+hb-observer = "highbar_client.samples.observer:main"
+hb-ai       = "highbar_client.samples.ai_client:main"
+
+[tool.setuptools]
+package-dir = { "" = "." }
+
+[tool.setuptools.packages.find]
+include = ["highbar_client*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

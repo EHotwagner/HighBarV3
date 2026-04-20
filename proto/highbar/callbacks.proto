@@ -1,0 +1,192 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// Ported verbatim from HighBarV2 (/proto/highbar/callbacks.proto).
+// Only change vs V2: `package highbar;` → `package highbar.v1;` to
+// align with plan.md §Technical Context (versioned proto package).
+//
+// In V3, CallbackRequest/Response become the payload of the
+// `InvokeCallback` unary RPC in service.proto. V2's separate
+// request/response loop over the framed channel is replaced by the
+// gRPC unary semantics.
+
+syntax = "proto3";
+
+package highbar.v1;
+
+import "highbar/common.proto";
+
+// Request to invoke an engine callback function
+message CallbackRequest {
+  uint32 request_id = 1;
+  uint32 callback_id = 2;
+  repeated CallbackParam params = 3;
+}
+
+// Response from engine callback invocation
+message CallbackResponse {
+  uint32 request_id = 1;
+  bool success = 2;
+  CallbackResult result = 3;
+  string error_message = 4;
+}
+
+// Typed parameter for callback invocation
+message CallbackParam {
+  oneof value {
+    int32 int_value = 1;
+    float float_value = 2;
+    string string_value = 3;
+    Vector3 vector_value = 4;
+  }
+}
+
+// Typed result from callback invocation
+message CallbackResult {
+  oneof value {
+    int32 int_value = 1;
+    float float_value = 2;
+    string string_value = 3;
+    Vector3 vector_value = 4;
+    bytes bytes_value = 5;
+    FloatArray float_array_value = 6;
+    IntArray int_array_value = 7;
+    GameStateSnapshot snapshot_value = 8;
+  }
+}
+
+// Per-tick gamestate snapshot — one-call aggregate for friendlies, enemies, economy
+message FriendlyUnit {
+  int32 unit_id = 1;
+  Vector3 position = 2;
+  float health = 3;
+  int32 unit_def_id = 4;
+  int32 team = 5;
+}
+
+message LosEnemyUnit {
+  int32 unit_id = 1;
+  Vector3 position = 2;
+  float health = 3;
+  int32 unit_def_id = 4;
+  int32 team = 5;
+}
+
+message RadarOnlyEnemyUnit {
+  int32 unit_id = 1;
+  Vector3 position = 2;
+  int32 unit_def_id = 3;
+  int32 team = 4;
+}
+
+message EconomyRecord {
+  float metal_current = 1;
+  float metal_income = 2;
+  float metal_usage = 3;
+  float metal_storage = 4;
+  float energy_current = 5;
+  float energy_income = 6;
+  float energy_usage = 7;
+  float energy_storage = 8;
+}
+
+message GameStateSnapshot {
+  int32 frame = 1;
+  repeated FriendlyUnit friendlies = 2;
+  repeated LosEnemyUnit los_enemies = 3;
+  repeated RadarOnlyEnemyUnit radar_only_enemies = 4;
+  EconomyRecord economy = 5;
+}
+
+// Array types for map data and bulk queries
+message FloatArray {
+  repeated float values = 1;
+}
+
+message IntArray {
+  repeated int32 values = 1;
+}
+
+// Callback ID enum for common engine callbacks
+enum CallbackId {
+  CALLBACK_UNKNOWN = 0;
+
+  // Engine
+  CALLBACK_ENGINE_HANDLE_COMMAND = 1;
+  CALLBACK_ENGINE_VERSION_MAJOR = 2;
+  CALLBACK_ENGINE_VERSION_MINOR = 3;
+  CALLBACK_ENGINE_VERSION_PATCH = 4;
+  CALLBACK_ENGINE_VERSION_STRING = 5;
+
+  // Game
+  CALLBACK_GAME_GET_MY_TEAM = 10;
+  CALLBACK_GAME_GET_MY_ALLY_TEAM = 11;
+  CALLBACK_GAME_GET_TEAM_COUNT = 12;
+  CALLBACK_GAME_GET_ALLY_TEAM_COUNT = 13;
+  CALLBACK_GAME_GET_PLAYER_COUNT = 14;
+  CALLBACK_GAME_GET_STATE = 15;
+
+  // Unit
+  CALLBACK_UNIT_GET_POS = 20;
+  CALLBACK_UNIT_GET_HEALTH = 21;
+  CALLBACK_UNIT_GET_MAX_HEALTH = 22;
+  CALLBACK_UNIT_GET_DEF = 23;
+  CALLBACK_UNIT_GET_SPEED = 24;
+  CALLBACK_UNIT_GET_POWER = 25;
+  CALLBACK_UNIT_GET_TEAM = 26;
+  CALLBACK_UNIT_GET_ALLY_TEAM = 27;
+  CALLBACK_UNIT_GET_MAX_SPEED = 28;
+  CALLBACK_UNIT_GET_EXPERIENCE = 29;
+  CALLBACK_UNIT_GET_GROUP = 30;
+  CALLBACK_UNIT_GET_CURRENT_COMMANDS = 31;
+
+  // UnitDef
+  CALLBACK_UNITDEF_GET_NAME = 40;
+  CALLBACK_UNITDEF_GET_HUMAN_NAME = 41;
+  CALLBACK_UNITDEF_GET_BUILD_OPTIONS = 42;
+  CALLBACK_UNITDEF_GET_MAX_WEAPON_RANGE = 43;
+  CALLBACK_UNITDEF_GET_COST = 44;
+  CALLBACK_UNITDEF_GET_BUILD_TIME = 45;
+  CALLBACK_UNITDEF_GET_BUILD_SPEED = 46;
+
+  // Map
+  CALLBACK_MAP_GET_WIDTH = 50;
+  CALLBACK_MAP_GET_HEIGHT = 51;
+  CALLBACK_MAP_GET_HEIGHT_MAP = 52;
+  CALLBACK_MAP_GET_SLOPE_MAP = 53;
+  CALLBACK_MAP_GET_LOS_MAP = 54;
+  CALLBACK_MAP_GET_RADAR_MAP = 55;
+  CALLBACK_MAP_GET_RESOURCE_MAP = 56;
+  CALLBACK_MAP_GET_START_POS = 57;
+  CALLBACK_MAP_GET_METAL_SPOTS = 58;
+  CALLBACK_MAP_GET_CORNERS_HEIGHT_MAP = 59;
+
+  // Resource / Economy
+  CALLBACK_RESOURCE_GET_NAME = 60;
+  CALLBACK_ECONOMY_GET_CURRENT = 61;
+  CALLBACK_ECONOMY_GET_INCOME = 62;
+  CALLBACK_ECONOMY_GET_USAGE = 63;
+  CALLBACK_ECONOMY_GET_STORAGE = 64;
+
+  // Team
+  CALLBACK_TEAM_GET_ALLY_TEAM = 70;
+  CALLBACK_TEAM_IS_ALLY = 71;
+
+  // Mod
+  CALLBACK_MOD_GET_SHORT_NAME = 80;
+  CALLBACK_MOD_GET_VERSION = 81;
+
+  // UnitDefs (bulk query)
+  CALLBACK_GET_UNIT_DEFS = 47;
+
+  // Cheats
+  CALLBACK_CHEATS_IS_ENABLED = 90;
+  CALLBACK_CHEATS_SET_ENABLED = 91;
+  CALLBACK_CHEATS_SET_EVENTS_ENABLED = 92;
+
+  // DataDirs
+  CALLBACK_DATADIRS_GET_CONFIG_DIR = 100;
+  CALLBACK_DATADIRS_GET_WRITABLE_DIR = 101;
+
+  // Info (used for config loading)
+  CALLBACK_INFO_GET_VALUE_BY_KEY = 110;
+}

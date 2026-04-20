@@ -1,0 +1,38 @@
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!--
+  HighBarV3 — F# client library (T043).
+
+  Targets .NET 8. Proto codegen lives in the companion
+  HighBar.Proto.csproj (Grpc.Tools refuses to run from .fsproj);
+  this project takes a ProjectReference on it and consumes the
+  generated Highbar.V1 namespace.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>HighBar.Client</RootNamespace>
+    <AssemblyName>HighBar.Client</AssemblyName>
+    <Description>HighBarV3 gRPC client for F#/.NET.</Description>
+    <PackageLicenseExpression>GPL-2.0-only</PackageLicenseExpression>
+    <!-- Grpc.Tools.targets sanity-checks that $(Protobuf_ProjectSupported) is
+         'true' and hard-errors on .fsproj. We ship no <Protobuf> items here
+         (they live in HighBar.Proto.csproj); setting the property explicitly
+         makes the sanity check a no-op without enabling any codegen. -->
+    <Protobuf_ProjectSupported>true</Protobuf_ProjectSupported>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src/Channel.fs" />
+    <Compile Include="src/Session.fs" />
+    <Compile Include="src/StateStream.fs" />
+    <Compile Include="src/Commands.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="HighBar.Proto.csproj" />
+  </ItemGroup>
+
+</Project>

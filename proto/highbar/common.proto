@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// Ported verbatim from HighBarV2 (/proto/highbar/common.proto).
+// Only change vs V2: `package highbar;` → `package highbar.v1;` to
+// align with plan.md §Technical Context (versioned proto package).
+
+syntax = "proto3";
+
+package highbar.v1;
+
+// Shared 3D position vector
+message Vector3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+// Reference to a specific unit by engine ID
+message UnitRef {
+  int32 unit_id = 1;
+}
+
+// Command options bitfield
+// Bits: SHIFT_KEY=1, CTRL_KEY=2, ALT_KEY=4, META_KEY=8,
+//       INTERNAL_ORDER=16, RIGHT_MOUSE_KEY=32
+message CommandOptions {
+  uint32 bitfield = 1;
+}

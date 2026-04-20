@@ -1,0 +1,615 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// Ported verbatim from HighBarV2 (/proto/highbar/commands.proto).
+// Only change vs V2: `package highbar;` → `package highbar.v1;` to
+// align with plan.md §Technical Context (versioned proto package).
+
+syntax = "proto3";
+
+package highbar.v1;
+
+import "highbar/common.proto";
+
+// Container for all AI command types (97 variants).
+message AICommand {
+  oneof command {
+    // Drawing commands (1-3)
+    DrawAddPointCommand draw_add_point = 1;
+    DrawAddLineCommand draw_add_line = 2;
+    DrawRemovePointCommand draw_remove_point = 3;
+
+    // Chat/Resources (4-9)
+    SendTextMessageCommand send_text_message = 4;
+    SetLastPosMessageCommand set_last_pos_message = 5;
+    SendResourcesCommand send_resources = 6;
+    SetMyIncomeShareDirectCommand set_my_income_share_direct = 7;
+    SetShareLevelCommand set_share_level = 8;
+    PauseTeamCommand pause_team = 9;
+
+    // Groups (12-15)
+    GroupAddUnitCommand group_add_unit = 12;
+    GroupRemoveUnitCommand group_remove_unit = 13;
+
+    // Pathfinding (16-19)
+    InitPathCommand init_path = 16;
+    GetApproxLengthCommand get_approx_length = 17;
+    GetNextWaypointCommand get_next_waypoint = 18;
+    FreePathCommand free_path = 19;
+
+    // Cheats (20, 79)
+    GiveMeCommand give_me = 20;
+    GiveMeNewUnitCommand give_me_new_unit = 79;
+
+    // Lua (21, 96)
+    CallLuaRulesCommand call_lua_rules = 21;
+    CallLuaUICommand call_lua_ui = 96;
+
+    // Drawer Figures (22-34)
+    CreateSplineFigureCommand create_spline_figure = 22;
+    CreateLineFigureCommand create_line_figure = 23;
+    SetFigurePositionCommand set_figure_position = 24;
+    SetFigureColorCommand set_figure_color = 25;
+    RemoveFigureCommand remove_figure = 26;
+    DrawUnitCommand draw_unit = 27;
+
+    // Unit Commands (35-78)
+    BuildUnitCommand build_unit = 35;
+    StopCommand stop = 36;
+    WaitCommand wait = 37;
+    TimedWaitCommand timed_wait = 38;
+    SquadWaitCommand squad_wait = 39;
+    DeathWaitCommand death_wait = 40;
+    GatherWaitCommand gather_wait = 41;
+    MoveUnitCommand move_unit = 42;
+    PatrolCommand patrol = 43;
+    FightCommand fight = 44;
+    AttackCommand attack = 45;
+    AttackAreaCommand attack_area = 46;
+    GuardCommand guard = 47;
+    RepairCommand repair = 48;
+    ReclaimUnitCommand reclaim_unit = 49;
+    ReclaimAreaCommand reclaim_area = 50;
+    ReclaimInAreaCommand reclaim_in_area = 51;
+    ReclaimFeatureCommand reclaim_feature = 52;
+    RestoreAreaCommand restore_area = 53;
+    ResurrectCommand resurrect = 54;
+    ResurrectInAreaCommand resurrect_in_area = 55;
+    CaptureCommand capture = 56;
+    CaptureAreaCommand capture_area = 57;
+    SetBaseCommand set_base = 58;
+    SelfDestructCommand self_destruct = 59;
+    LoadUnitsCommand load_units = 60;
+    LoadUnitsAreaCommand load_units_area = 61;
+    LoadOntoCommand load_onto = 62;
+    UnloadUnitCommand unload_unit = 63;
+    UnloadUnitsAreaCommand unload_units_area = 64;
+    SetWantedMaxSpeedCommand set_wanted_max_speed = 65;
+    StockpileCommand stockpile = 66;
+    DGunCommand dgun = 67;
+    CustomCommand custom = 68;
+    SetOnOffCommand set_on_off = 69;
+    SetRepeatCommand set_repeat = 70;
+    SetMoveStateCommand set_move_state = 71;
+    SetFireStateCommand set_fire_state = 72;
+    SetTrajectoryCommand set_trajectory = 73;
+    SetAutoRepairLevelCommand set_auto_repair_level = 74;
+    SetIdleModeCommand set_idle_mode = 75;
+  }
+}
+
+// -- Drawing Commands --
+
+message DrawAddPointCommand {
+  Vector3 position = 1;
+  string label = 2;
+}
+
+message DrawAddLineCommand {
+  Vector3 from_position = 1;
+  Vector3 to_position = 2;
+}
+
+message DrawRemovePointCommand {
+  Vector3 position = 1;
+}
+
+// -- Chat/Resources --
+
+message SendTextMessageCommand {
+  string text = 1;
+  int32 zone = 2;
+}
+
+message SetLastPosMessageCommand {
+  Vector3 position = 1;
+}
+
+message SendResourcesCommand {
+  int32 resource_id = 1;
+  float amount = 2;
+  int32 receiving_team_id = 3;
+}
+
+message SetMyIncomeShareDirectCommand {
+  int32 resource_id = 1;
+  float share = 2;
+}
+
+message SetShareLevelCommand {
+  int32 resource_id = 1;
+  float share_level = 2;
+}
+
+message PauseTeamCommand {
+  bool enable = 1;
+}
+
+// -- Groups --
+
+message GroupAddUnitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+}
+
+message GroupRemoveUnitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+}
+
+// -- Pathfinding --
+
+message InitPathCommand {
+  Vector3 start_position = 1;
+  Vector3 end_position = 2;
+  int32 path_type = 3;
+  float goal_radius = 4;
+}
+
+message GetApproxLengthCommand {
+  Vector3 start_position = 1;
+  Vector3 end_position = 2;
+  int32 path_type = 3;
+  float goal_radius = 4;
+}
+
+message GetNextWaypointCommand {
+  int32 path_id = 1;
+}
+
+message FreePathCommand {
+  int32 path_id = 1;
+}
+
+// -- Cheats --
+
+message GiveMeCommand {
+  int32 resource_id = 1;
+  float amount = 2;
+}
+
+message GiveMeNewUnitCommand {
+  int32 unit_def_id = 1;
+  Vector3 position = 2;
+}
+
+// -- Lua --
+
+message CallLuaRulesCommand {
+  string data = 1;
+}
+
+message CallLuaUICommand {
+  string data = 1;
+}
+
+// -- Drawer Figures --
+
+message CreateSplineFigureCommand {
+  Vector3 position1 = 1;
+  Vector3 position2 = 2;
+  Vector3 position3 = 3;
+  Vector3 position4 = 4;
+  float width = 5;
+  bool arrow = 6;
+  int32 lifespan = 7;
+  int32 figure_group_id = 8;
+}
+
+message CreateLineFigureCommand {
+  Vector3 from_position = 1;
+  Vector3 to_position = 2;
+  float width = 3;
+  bool arrow = 4;
+  int32 lifespan = 5;
+  int32 figure_group_id = 6;
+}
+
+message SetFigurePositionCommand {
+  int32 figure_id = 1;
+  Vector3 position = 2;
+}
+
+message SetFigureColorCommand {
+  int32 figure_id = 1;
+  float r = 2;
+  float g = 3;
+  float b = 4;
+  float a = 5;
+}
+
+message RemoveFigureCommand {
+  int32 figure_id = 1;
+}
+
+message DrawUnitCommand {
+  int32 unit_def_id = 1;
+  Vector3 position = 2;
+  float rotation = 3;
+  int32 lifespan = 4;
+  int32 team_id = 5;
+  bool transparent = 6;
+  bool draw_border = 7;
+  int32 facing = 8;
+}
+
+// -- Unit Commands (all share common base pattern) --
+
+message BuildUnitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 to_build_unit_def_id = 5;
+  Vector3 build_position = 6;
+  int32 facing = 7;
+}
+
+message StopCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+}
+
+message WaitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+}
+
+message TimedWaitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 wait_time = 5;
+}
+
+message SquadWaitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 num_units = 5;
+}
+
+message DeathWaitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 death_unit_id = 5;
+}
+
+message GatherWaitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+}
+
+message MoveUnitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 to_position = 5;
+}
+
+message PatrolCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 to_position = 5;
+}
+
+message FightCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 to_position = 5;
+}
+
+message AttackCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 target_unit_id = 5;
+}
+
+message AttackAreaCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 attack_position = 5;
+  float radius = 6;
+}
+
+message GuardCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 guard_unit_id = 5;
+}
+
+message RepairCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 repair_unit_id = 5;
+}
+
+message ReclaimUnitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 reclaim_unit_id = 5;
+}
+
+message ReclaimAreaCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 position = 5;
+  float radius = 6;
+}
+
+message ReclaimInAreaCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 position = 5;
+  float radius = 6;
+}
+
+message ReclaimFeatureCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 feature_id = 5;
+}
+
+message RestoreAreaCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 position = 5;
+  float radius = 6;
+}
+
+message ResurrectCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 feature_id = 5;
+}
+
+message ResurrectInAreaCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 position = 5;
+  float radius = 6;
+}
+
+message CaptureCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 target_unit_id = 5;
+}
+
+message CaptureAreaCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 position = 5;
+  float radius = 6;
+}
+
+message SetBaseCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 base_position = 5;
+}
+
+message SelfDestructCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+}
+
+message LoadUnitsCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  repeated int32 to_load_unit_ids = 5;
+}
+
+message LoadUnitsAreaCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 position = 5;
+  float radius = 6;
+}
+
+message LoadOntoCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 transport_unit_id = 5;
+}
+
+message UnloadUnitCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 to_position = 5;
+  int32 to_unload_unit_id = 6;
+}
+
+message UnloadUnitsAreaCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  Vector3 to_position = 5;
+  float radius = 6;
+}
+
+message SetWantedMaxSpeedCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  float wanted_max_speed = 5;
+}
+
+message StockpileCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+}
+
+message DGunCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 target_unit_id = 5;
+}
+
+message CustomCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 command_id = 5;
+  repeated float params = 6;
+}
+
+message SetOnOffCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  bool on = 5;
+}
+
+message SetRepeatCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  bool repeat = 5;
+}
+
+message SetMoveStateCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 move_state = 5;
+}
+
+message SetFireStateCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 fire_state = 5;
+}
+
+message SetTrajectoryCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 trajectory = 5;
+}
+
+message SetAutoRepairLevelCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 auto_repair_level = 5;
+}
+
+message SetIdleModeCommand {
+  int32 unit_id = 1;
+  int32 group_id = 2;
+  uint32 options = 3;
+  int32 timeout = 4;
+  int32 idle_mode = 5;
+}
+
+// -- CommandBatch wrapper --
+// V3 addition on top of the V2 AICommand catalog: SubmitCommands is a
+// client-streaming RPC (see service.proto), and each streamed message
+// is a CommandBatch carrying 1..N AICommands for a single target_unit.
+// V2's one-command-per-message shape was inappropriate for the
+// bounded-queue design in data-model §4.
+message CommandBatch {
+  // Server-side acknowledgement uses this to build CommandAck.
+  uint64 batch_seq = 1;
+
+  // Target unit for every command in this batch. Commands on different
+  // units must be sent in separate batches.
+  uint32 target_unit_id = 2;
+
+  // 1..N commands to apply in order. Validation is all-or-nothing:
+  // any INVALID_ARGUMENT in the batch rejects the whole batch with no
+  // partial side effects (data-model §4 validation).
+  repeated AICommand commands = 3;
+
+  // Optional options override applied to every command in the batch
+  // unless that command carries its own `options`. Useful for
+  // "queued" (SHIFT_KEY) vs "immediate" batches.
+  optional CommandOptions batch_options = 4;
+}
