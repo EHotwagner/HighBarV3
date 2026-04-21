@@ -17,6 +17,7 @@
     <AssemblyName>HighBar.Client</AssemblyName>
     <Description>HighBarV3 gRPC client for F#/.NET.</Description>
     <PackageLicenseExpression>GPL-2.0-only</PackageLicenseExpression>
+    <Version>0.1.1</Version>
     <!-- Grpc.Tools.targets sanity-checks that $(Protobuf_ProjectSupported) is
          'true' and hard-errors on .fsproj. We ship no <Protobuf> items here
          (they live in HighBar.Proto.csproj); setting the property explicitly
