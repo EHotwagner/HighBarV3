@@ -93,18 +93,3 @@ module Session =
                 Role = role
             }
         }
-
-    /// AI-role handshake convenience (T063). Reads the token file with
-    /// exponential backoff up to `maxTokenWaitMs` (default 5s — handles
-    /// the plugin-startup race per data-model §7 and spec Edge Case),
-    /// then opens Hello with the token in metadata.
-    let helloAi (channel: GrpcChannel)
-                (clientId: string)
-                (tokenPath: string)
-                (maxTokenWaitMs: int)
-                : Async<Handshake * string> =
-        async {
-            let! token = readTokenWithBackoff tokenPath maxTokenWaitMs
-            let! handshake = hello channel Ai clientId (Some token)
-            return (handshake, token)
-        }

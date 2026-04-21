@@ -6,6 +6,7 @@
 #include "grpc/AuthInterceptor.h"
 #include "grpc/AuthToken.h"
 #include "grpc/CommandQueue.h"
+#include "grpc/CommandValidator.h"
 #include "grpc/Counters.h"
 #include "grpc/DeltaBus.h"
 #include "grpc/Log.h"
@@ -14,16 +15,11 @@
 #include "grpc/SnapshotBuilder.h"
 
 #include "CircuitAI.h"
-#include "terrain/TerrainManager.h"
-#include "unit/CircuitDef.h"
-#include "unit/CircuitUnit.h"
-#include "unit/CoreUnit.h"
 
 #include <grpcpp/server_builder.h>
 #include <grpcpp/security/server_credentials.h>
 
 #include <arpa/inet.h>
-
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -52,6 +48,51 @@ std::string HexEncode(const unsigned char* b, std::size_t n) {
 		s[i * 2 + 1] = kHex[b[i] & 0x0f];
 	}
 	return s;
+}
+
+}  // namespace
+
+namespace {
+
+// T073 — TCP loopback validator. Accepts `host:port` where host is
+// either a `127.0.0.0/8` IPv4 literal or `::1` / `[::1]` IPv6 literal.
+// Also accepts the two common hostnames `localhost` / `127.0.0.1` /
+// `ip6-localhost` as shorthands since operators hand-edit grpc.json.
+// Any non-loopback address fails with a descriptive message so the
+// startup log names the offending config (data-model §6 validation).
+bool IsLoopbackTcpBind(const std::string& host_port, std::string* reason) {
+	const auto colon = host_port.rfind(':');
+	if (colon == std::string::npos) {
+		*reason = "tcp_bind missing ':port' — expected host:port";
+		return false;
+	}
+	// Strip optional IPv6 brackets: `[::1]:50511` → host=`::1`.
+	std::string host = host_port.substr(0, colon);
+	if (host.size() >= 2 && host.front() == '[' && host.back() == ']') {
+		host = host.substr(1, host.size() - 2);
+	}
+
+	if (host == "localhost" || host == "ip6-localhost") return true;
+
+	in_addr v4{};
+	if (::inet_pton(AF_INET, host.c_str(), &v4) == 1) {
+		// 127.0.0.0/8 — top byte of network-order address == 127.
+		const auto top = static_cast<std::uint8_t>(ntohl(v4.s_addr) >> 24);
+		if (top == 127) return true;
+		*reason = "tcp_bind host must be loopback (127.0.0.0/8); got " + host;
+		return false;
+	}
+
+	in6_addr v6{};
+	if (::inet_pton(AF_INET6, host.c_str(), &v6) == 1) {
+		if (IN6_IS_ADDR_LOOPBACK(&v6)) return true;
+		*reason = "tcp_bind host must be loopback (::1); got " + host;
+		return false;
+	}
+
+	*reason = "tcp_bind host is neither a valid IPv4/IPv6 literal nor "
+	          "'localhost': " + host;
+	return false;
 }
 
 }  // namespace
@@ -132,9 +173,13 @@ public:
 						this);
 					return;
 				}
-				// The AI slot will be released in US2 when the session
-				// disconnects. For Phase 2 skeleton we release
-				// immediately so tests can observe the transient claim.
+				// T059: the Hello-time claim is transient — we check
+				// the slot is free, then release. The durable claim
+				// lives on SubmitCommands (the stream's lifetime is
+				// the AI session's lifetime per data-model §5). Hello
+				// on its own doesn't pin the AI role because a client
+				// may Hello, fail to build its command stream, and
+				// die — we don't want that to strand the slot.
 				svc_->ReleaseAiSlot();
 			}
 
@@ -334,22 +379,6 @@ private:
 	enum class Stage { kCreated, kStreaming, kFinishing };
 
 	// Pump thread: owns the send sequence end-to-end.
-	//
-	// Initial-payload + live-loop seq arithmetic (T094, FR-006/7/8):
-	//   - The SubscriberSlot was bound to the DeltaBus in kCreated so we
-	//     don't miss any entries published between subscribe and the
-	//     initial payload. But those entries' seqs may overlap with what
-	//     the initial payload already carries — the snapshot represents
-	//     the world at HeadSeq, and the slot may already hold deltas with
-	//     seq ≤ HeadSeq published during the shared-lock window. We track
-	//     `last_sent_seq_` and skip any subsequent slot entry whose seq
-	//     does not strictly exceed it (client-side FR-006 invariant-check
-	//     would otherwise raise).
-	//   - Fresh-snapshot (resume-miss) path: snapshot's seq = HeadSeq, so
-	//     subsequent deltas (seq = HeadSeq+1, HeadSeq+2, …) satisfy strict
-	//     monotonicity for this client. On an empty ring HeadSeq=0 — we
-	//     emit seq=0 for the initial snapshot; the first delta will be
-	//     seq=1 and satisfy monotonicity regardless.
 	void PumpLoop() {
 		try {
 			// --- 1. Initial payload: ring-replay vs fresh snapshot.
@@ -362,7 +391,7 @@ private:
 				::highbar::v1::StateUpdate first;
 				{
 					std::shared_lock<std::shared_mutex> lock(*svc_->state_mutex_);
-					first.set_seq(svc_->ring_->HeadSeq());
+					first.set_seq(svc_->ring_->HeadSeq() + 1);
 					first.set_frame(svc_->frames_since_bind_.load());
 					*first.mutable_snapshot() = svc_->snapshot_->Build();
 				}
@@ -370,7 +399,6 @@ private:
 					FinishWithStatus(CancelledOrFault());
 					return;
 				}
-				last_sent_seq_ = first.seq();
 			} else {
 				// Ring replay — every entry is already a serialized
 				// StateUpdate. Parse + Write one at a time so the
@@ -387,13 +415,10 @@ private:
 						FinishWithStatus(CancelledOrFault());
 						return;
 					}
-					last_sent_seq_ = u.seq();
 				}
 			}
 
-			// --- 2. Live loop: pump the SubscriberSlot, filtering seqs
-			//        ≤ last_sent_seq_ that were captured during the
-			//        initial-payload window.
+			// --- 2. Live loop: pump the SubscriberSlot.
 			while (!stop_.load(std::memory_order_acquire)) {
 				std::shared_ptr<const std::string> payload;
 				const bool got = slot_->BlockingPop(&payload);
@@ -416,15 +441,10 @@ private:
 						"live payload deserialize failed"));
 					return;
 				}
-				if (u.seq() <= last_sent_seq_) {
-					// Already covered by the initial payload.
-					continue;
-				}
 				if (!WriteAndWait(u)) {
 					FinishWithStatus(CancelledOrFault());
 					return;
 				}
-				last_sent_seq_ = u.seq();
 			}
 			FinishWithStatus(::grpc::Status::OK);
 		} catch (const std::exception& e) {
@@ -482,7 +502,6 @@ private:
 	Stage stage_ = Stage::kCreated;
 	bool observer_slot_reserved_ = false;
 	std::uint64_t resume_from_seq_ = 0;
-	std::uint64_t last_sent_seq_ = 0;   // T094 high-water filter
 	std::shared_ptr<SubscriberSlot> slot_;
 
 	// Pump thread + CQ-worker handshake.
@@ -494,20 +513,16 @@ private:
 	bool op_ok_ = false;
 };
 
-// --- SubmitCommands (client-streaming, T058) -------------------------------
+// --- SubmitCommands (client-streaming, implemented — T058/T059) ------------
 //
-// State machine:
-//   kCreated   → on ok, claim AI slot, kick off first Read; on slot-taken
-//                or missing handles, FinishWithError.
-//   kReading   → each Read completion either pushes a validated batch into
-//                CommandQueue (bump counters, continue reading) or finishes
-//                the RPC (INVALID_ARGUMENT, RESOURCE_EXHAUSTED, UNAVAILABLE).
-//                Client stream EOF (ok=false on Read) → FinishOk with ack.
-//   kFinishing → the Finish/FinishWithError completion reclaims the CallData.
-//
-// AI slot is released in the destructor so any exit path (normal Finish,
-// error, server-initiated shutdown via ~HighBarService) frees the slot
-// (FR-012).
+// State machine: after RequestSubmitCommands completes, we (a) claim
+// the singleton AI slot (FR-011), (b) loop reading batches, validating
+// each via CommandValidator, and pushing accepted batches' commands
+// onto CommandQueue, (c) finish with a CommandAck carrying cumulative
+// counters. Queue overflow returns RESOURCE_EXHAUSTED synchronously
+// without re-entering the read loop (FR-012a). The AI slot is released
+// on any terminal path — whether the client disconnected, sent EOF,
+// or we rejected the handshake — so a later AI client can reclaim.
 
 class HighBarService::SubmitCommandsCallData final : public CallDataBase {
 public:
@@ -525,50 +540,12 @@ public:
 
 	void Proceed(bool ok) override {
 		switch (stage_) {
-		case Stage::kCreated: {
-			new SubmitCommandsCallData(svc_, cq_);
-			if (!ok) { delete this; return; }
-
-			if (svc_->command_queue_ == nullptr) {
-				FinishError(::grpc::Status(
-					::grpc::StatusCode::UNAVAILABLE,
-					"gateway US2 handles not wired"));
-				return;
-			}
-
-			// FR-011: single AI-slot. Release happens in dtor.
-			if (!svc_->TryClaimAiSlot()) {
-				FinishError(::grpc::Status(
-					::grpc::StatusCode::ALREADY_EXISTS,
-					"AI slot already claimed"));
-				return;
-			}
-			ai_slot_claimed_ = true;
-
-			stage_ = Stage::kReading;
-			reader_.Read(&batch_, this);
+		case Stage::kCreated:
+			HandleCreated(ok);
 			return;
-		}
-
-		case Stage::kReading: {
-			if (!ok) {
-				// Client half-closed the stream. Respond with final ack.
-				FinishOk();
-				return;
-			}
-
-			const auto validate_and_queue_status = ProcessBatch();
-			if (!validate_and_queue_status.ok()) {
-				FinishError(validate_and_queue_status);
-				return;
-			}
-
-			// Continue reading next batch.
-			batch_.Clear();
-			reader_.Read(&batch_, this);
+		case Stage::kReading:
+			HandleReadDone(ok);
 			return;
-		}
-
 		case Stage::kFinishing:
 		default:
 			delete this;
@@ -579,202 +556,184 @@ public:
 private:
 	enum class Stage { kCreated, kReading, kFinishing };
 
-	// Validate every AICommand in the batch, then push one QueuedCommand
-	// per AICommand into CommandQueue. All-or-nothing per batch.
-	::grpc::Status ProcessBatch() {
-		for (const auto& cmd : batch_.commands()) {
-			const auto err = svc_->ValidateCommand(batch_.target_unit_id(), cmd);
-			if (err != ValidationError::kOk) {
-				if (svc_->counters_ != nullptr) {
-					svc_->counters_->command_submissions_rejected_invalid_argument
-						.fetch_add(1);
-				}
-				return ::grpc::Status(
-					::grpc::StatusCode::INVALID_ARGUMENT,
-					ValidationErrorString(err));
-			}
+	void HandleCreated(bool ok) {
+		new SubmitCommandsCallData(svc_, cq_);
+		if (!ok) { delete this; return; }
+
+		// Reject if US2 handles aren't wired (unit tests / misordered
+		// init). UNAVAILABLE instead of INTERNAL so the client can
+		// reasonably retry once the gateway finishes coming up.
+		if (svc_->command_queue_ == nullptr || svc_->validator_ == nullptr) {
+			Finish(::grpc::Status(::grpc::StatusCode::UNAVAILABLE,
+			                      "command path not wired"));
+			return;
 		}
 
-		for (const auto& cmd : batch_.commands()) {
+		// Single-AI invariant (FR-011).
+		if (!svc_->TryClaimAiSlot()) {
+			Finish(::grpc::Status(::grpc::StatusCode::ALREADY_EXISTS,
+			                      "AI slot already claimed"));
+			return;
+		}
+		ai_slot_claimed_ = true;
+		session_id_ = HighBarService::NewSessionId();
+		LogConnect(svc_->ai_, session_id_, ctx_.peer(), "ai-stream");
+
+		// Kick off the first read.
+		stage_ = Stage::kReading;
+		reader_.Read(&incoming_, this);
+	}
+
+	void HandleReadDone(bool ok) {
+		if (!ok) {
+			// Stream EOF — client finished cleanly. ACK with running
+			// counters. Finish() transitions to kFinishing; ~this
+			// releases the AI slot.
+			::highbar::v1::CommandAck ack;
+			ack.set_last_accepted_batch_seq(last_accepted_batch_seq_);
+			ack.set_batches_accepted(batches_accepted_);
+			ack.set_batches_rejected_invalid(batches_rejected_invalid_);
+			ack.set_batches_rejected_full(batches_rejected_full_);
+
+			stage_ = Stage::kFinishing;
+			reader_.Finish(ack, ::grpc::Status::OK, this);
+			return;
+		}
+
+		// Validate + enqueue.
+		const auto result = svc_->validator_->ValidateBatch(incoming_);
+		if (!result.ok) {
+			++batches_rejected_invalid_;
+			if (svc_->counters_ != nullptr) {
+				svc_->counters_->
+					command_submissions_rejected_invalid_argument
+					.fetch_add(1, std::memory_order_relaxed);
+			}
+			Finish(::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT,
+			                      result.error));
+			return;
+		}
+
+		// Push every command from the batch onto the MPSC queue. On
+		// overflow we close with RESOURCE_EXHAUSTED *without* dropping
+		// or reordering already-queued commands (FR-012a): the queue
+		// is append-only, so stopping mid-batch leaves earlier entries
+		// intact.
+		for (const auto& cmd : incoming_.commands()) {
 			QueuedCommand q;
 			q.session_id = session_id_;
-			q.target_unit_id = batch_.target_unit_id();
 			q.command = cmd;
-			const auto status = svc_->command_queue_->Push(std::move(q));
-			if (status == CommandQueue::Status::kResourceExhausted) {
+			if (!svc_->command_queue_->TryPush(std::move(q))) {
+				++batches_rejected_full_;
 				if (svc_->counters_ != nullptr) {
-					svc_->counters_->command_submissions_rejected_resource_exhausted
-						.fetch_add(1);
+					svc_->counters_->
+						command_submissions_rejected_resource_exhausted
+						.fetch_add(1, std::memory_order_relaxed);
 				}
-				return ::grpc::Status(
-					::grpc::StatusCode::RESOURCE_EXHAUSTED,
-					"CommandQueue full");
+				Finish(::grpc::Status(::grpc::StatusCode::RESOURCE_EXHAUSTED,
+				                      "command queue full"));
+				return;
 			}
 		}
 
-		last_accepted_batch_seq_ = batch_.batch_seq();
 		++batches_accepted_;
+		last_accepted_batch_seq_ = incoming_.batch_seq();
 
-		if (svc_->counters_ != nullptr) {
-			svc_->counters_->command_queue_depth.store(
-				static_cast<std::uint32_t>(svc_->command_queue_->Depth()),
-				std::memory_order_relaxed);
-		}
-		return ::grpc::Status::OK;
+		// Next read — proto requires the same storage to be reused.
+		incoming_.Clear();
+		reader_.Read(&incoming_, this);
 	}
 
-	static const char* ValidationErrorString(ValidationError e) {
-		switch (e) {
-		case ValidationError::kOk:                       return "ok";
-		case ValidationError::kTargetUnitNotFound:       return "target_unit_id not owned or not live";
-		case ValidationError::kBuildDefNotConstructible: return "build.def_id not constructible by target";
-		case ValidationError::kPositionOutOfMap:         return "position outside map extents";
-		}
-		return "invalid";
-	}
-
-	void FinishOk() {
+	void Finish(const ::grpc::Status& status) {
 		stage_ = Stage::kFinishing;
-		ack_.set_last_accepted_batch_seq(last_accepted_batch_seq_);
-		ack_.set_batches_accepted(batches_accepted_);
-		ack_.set_batches_rejected_invalid(batches_rejected_invalid_);
-		ack_.set_batches_rejected_full(batches_rejected_full_);
-		reader_.Finish(ack_, ::grpc::Status::OK, this);
-	}
-
-	void FinishError(const ::grpc::Status& status) {
-		stage_ = Stage::kFinishing;
-		if (status.error_code() == ::grpc::StatusCode::INVALID_ARGUMENT) {
-			++batches_rejected_invalid_;
-		} else if (status.error_code() == ::grpc::StatusCode::RESOURCE_EXHAUSTED) {
-			++batches_rejected_full_;
+		if (status.ok()) {
+			// Caller wanted a normal close but didn't supply an ack —
+			// synthesize an empty one. (Unused; every OK path builds
+			// its own ack above.)
+			::highbar::v1::CommandAck ack;
+			reader_.Finish(ack, status, this);
+		} else {
+			reader_.FinishWithError(status, this);
 		}
-		reader_.FinishWithError(status, this);
 	}
 
 	HighBarService* svc_;
 	::grpc::ServerCompletionQueue* cq_;
 	::grpc::ServerContext ctx_;
-	::highbar::v1::CommandBatch batch_;
-	::highbar::v1::CommandAck ack_;
 	::grpc::ServerAsyncReader<::highbar::v1::CommandAck,
 	                           ::highbar::v1::CommandBatch> reader_;
+	::highbar::v1::CommandBatch incoming_;
 	Stage stage_ = Stage::kCreated;
 
 	bool ai_slot_claimed_ = false;
-	std::string session_id_ = HighBarService::NewSessionId();
-
+	std::string session_id_;
 	std::uint64_t last_accepted_batch_seq_ = 0;
 	std::uint64_t batches_accepted_ = 0;
 	std::uint64_t batches_rejected_invalid_ = 0;
 	std::uint64_t batches_rejected_full_ = 0;
 };
 
-// --- InvokeCallback (T060) / Save / Load (T061) ----------------------------
+// --- InvokeCallback / Save / Load (unary, implemented — T060/T061) --------
 //
-// All three are unary, AI-role-only (enforced by AuthInterceptor — the
-// handler never runs without a valid token). The plugin forwards these
-// calls *from* the engine to the external AI: the engine-side initiator
-// pushes a CallbackRequest into a synchronous channel, blocks until the
-// AI client returns a CallbackResponse on InvokeCallback, then un-blocks.
+// All three share a trivial no-op default: the auth interceptor has
+// already enforced AI-role (observers rejected with PERMISSION_DENIED
+// before reaching here), so the handler just returns an empty/default
+// response synchronously. The engine-side "forward this callback" path
+// — wired from upstream CircuitAI callback points into these RPCs —
+// lands as a separate upstream-shared edit (Constitution I); for US2
+// we ship the server-side scaffolding so AI clients can exercise the
+// RPCs round-trip without touching the engine callback graph.
 //
-// At Phase 4 US2 the engine side of that channel is not yet wired —
-// engine events requiring synchronous AI answers are out of scope for
-// the first pass; Save/Load similarly. So the handlers here validate
-// the shape, return OK on empty payloads, and propagate blobs through
-// when a future engine-side initiator enqueues a waiting request.
-//
-// For now, InvokeCallback returns OK with an empty CallbackResponse so
-// AI clients probing the endpoint see it as available; Save/Load do the
-// same. Engine-side forwarding is a follow-up — the RPC surface is
-// wire-complete.
+// All three share an identical skeleton; template-ish macro keeps the
+// boilerplate bounded.
 
-class HighBarService::InvokeCallbackCallData final : public CallDataBase {
-public:
-	InvokeCallbackCallData(HighBarService* svc,
-	                       ::grpc::ServerCompletionQueue* cq)
-		: svc_(svc), cq_(cq), responder_(&ctx_) {
-		svc_->RequestInvokeCallback(&ctx_, &request_, &responder_, cq_, cq_, this);
-	}
-	void Proceed(bool ok) override {
-		if (stage_ == Stage::kCreated) {
-			new InvokeCallbackCallData(svc_, cq_);
-			if (!ok) { delete this; return; }
-			stage_ = Stage::kFinishing;
-			// Empty response: no engine-side initiator is waiting yet.
-			// When the engine-side channel lands, this branches on
-			// whether a request is queued and splices request into it.
-			responder_.Finish(response_, ::grpc::Status::OK, this);
-			return;
-		}
-		delete this;
-	}
-private:
-	enum class Stage { kCreated, kFinishing };
-	HighBarService* svc_;
-	::grpc::ServerCompletionQueue* cq_;
-	::grpc::ServerContext ctx_;
-	::highbar::v1::CallbackRequest request_;
-	::highbar::v1::CallbackResponse response_;
-	::grpc::ServerAsyncResponseWriter<::highbar::v1::CallbackResponse> responder_;
-	Stage stage_ = Stage::kCreated;
-};
+#define HIGHBAR_NOOP_UNARY_CALLDATA(NAME, REQ_T, RESP_T, REQUEST_FN)               \
+class HighBarService::NAME##CallData final : public CallDataBase {                 \
+public:                                                                            \
+	NAME##CallData(HighBarService* svc, ::grpc::ServerCompletionQueue* cq)         \
+		: svc_(svc), cq_(cq), responder_(&ctx_) {                                  \
+		svc_->REQUEST_FN(&ctx_, &request_, &responder_, cq_, cq_, this);           \
+	}                                                                              \
+	void Proceed(bool ok) override {                                               \
+		if (stage_ == Stage::kCreated) {                                           \
+			new NAME##CallData(svc_, cq_);                                         \
+			if (!ok) { delete this; return; }                                      \
+			stage_ = Stage::kFinishing;                                            \
+			responder_.Finish(response_, ::grpc::Status::OK, this);                \
+			return;                                                                \
+		}                                                                          \
+		delete this;                                                               \
+	}                                                                              \
+private:                                                                           \
+	enum class Stage { kCreated, kFinishing };                                     \
+	HighBarService* svc_;                                                          \
+	::grpc::ServerCompletionQueue* cq_;                                            \
+	::grpc::ServerContext ctx_;                                                    \
+	REQ_T request_;                                                                \
+	RESP_T response_;                                                              \
+	::grpc::ServerAsyncResponseWriter<RESP_T> responder_;                          \
+	Stage stage_ = Stage::kCreated;                                                \
+}
 
-class HighBarService::SaveCallData final : public CallDataBase {
-public:
-	SaveCallData(HighBarService* svc, ::grpc::ServerCompletionQueue* cq)
-		: svc_(svc), cq_(cq), responder_(&ctx_) {
-		svc_->RequestSave(&ctx_, &request_, &responder_, cq_, cq_, this);
-	}
-	void Proceed(bool ok) override {
-		if (stage_ == Stage::kCreated) {
-			new SaveCallData(svc_, cq_);
-			if (!ok) { delete this; return; }
-			stage_ = Stage::kFinishing;
-			// Echo empty client_state. Engine-side Save/Load initiator
-			// is a follow-up; contract surface is wire-complete.
-			responder_.Finish(response_, ::grpc::Status::OK, this);
-			return;
-		}
-		delete this;
-	}
-private:
-	enum class Stage { kCreated, kFinishing };
-	HighBarService* svc_;
-	::grpc::ServerCompletionQueue* cq_;
-	::grpc::ServerContext ctx_;
-	::highbar::v1::SaveRequest request_;
-	::highbar::v1::SaveResponse response_;
-	::grpc::ServerAsyncResponseWriter<::highbar::v1::SaveResponse> responder_;
-	Stage stage_ = Stage::kCreated;
-};
+HIGHBAR_NOOP_UNARY_CALLDATA(
+	InvokeCallback,
+	::highbar::v1::CallbackRequest,
+	::highbar::v1::CallbackResponse,
+	RequestInvokeCallback);
 
-class HighBarService::LoadCallData final : public CallDataBase {
-public:
-	LoadCallData(HighBarService* svc, ::grpc::ServerCompletionQueue* cq)
-		: svc_(svc), cq_(cq), responder_(&ctx_) {
-		svc_->RequestLoad(&ctx_, &request_, &responder_, cq_, cq_, this);
-	}
-	void Proceed(bool ok) override {
-		if (stage_ == Stage::kCreated) {
-			new LoadCallData(svc_, cq_);
-			if (!ok) { delete this; return; }
-			stage_ = Stage::kFinishing;
-			responder_.Finish(response_, ::grpc::Status::OK, this);
-			return;
-		}
-		delete this;
-	}
-private:
-	enum class Stage { kCreated, kFinishing };
-	HighBarService* svc_;
-	::grpc::ServerCompletionQueue* cq_;
-	::grpc::ServerContext ctx_;
-	::highbar::v1::LoadRequest request_;
-	::highbar::v1::LoadResponse response_;
-	::grpc::ServerAsyncResponseWriter<::highbar::v1::LoadResponse> responder_;
-	Stage stage_ = Stage::kCreated;
-};
+HIGHBAR_NOOP_UNARY_CALLDATA(
+	Save,
+	::highbar::v1::SaveRequest,
+	::highbar::v1::SaveResponse,
+	RequestSave);
+
+HIGHBAR_NOOP_UNARY_CALLDATA(
+	Load,
+	::highbar::v1::LoadRequest,
+	::highbar::v1::LoadResponse,
+	RequestLoad);
+
+#undef HIGHBAR_NOOP_UNARY_CALLDATA
 
 // ============================================================================
 // HighBarService public surface
@@ -791,50 +750,6 @@ HighBarService::~HighBarService() {
 	}
 }
 
-namespace {
-
-// Parse "host:port" into host / port; return false on malformed input.
-// IPv6 literals are bracket-quoted per RFC 3986: "[::1]:50511".
-bool SplitHostPort(const std::string& bind, std::string* host, std::string* port) {
-	if (bind.empty()) return false;
-	if (bind.front() == '[') {
-		const auto close = bind.find(']');
-		if (close == std::string::npos || close + 1 >= bind.size()
-		    || bind[close + 1] != ':') {
-			return false;
-		}
-		*host = bind.substr(1, close - 1);
-		*port = bind.substr(close + 2);
-	} else {
-		const auto colon = bind.rfind(':');
-		if (colon == std::string::npos) return false;
-		*host = bind.substr(0, colon);
-		*port = bind.substr(colon + 1);
-	}
-	return !host->empty() && !port->empty();
-}
-
-// Loopback means 127.0.0.0/8 for IPv4 or ::1 exactly for IPv6. Data-
-// model §6 validation rule; non-loopback is rejected with a clear
-// error because the spec assumes same-host deployment.
-bool IsLoopback(const std::string& host) {
-	in_addr v4{};
-	if (inet_pton(AF_INET, host.c_str(), &v4) == 1) {
-		const auto bytes = ntohl(v4.s_addr);
-		return (bytes & 0xff000000u) == 0x7f000000u;  // 127.0.0.0/8
-	}
-	in6_addr v6{};
-	if (inet_pton(AF_INET6, host.c_str(), &v6) == 1) {
-		return IN6_IS_ADDR_LOOPBACK(&v6);
-	}
-	// Not a numeric address. Allow "localhost" as a convenience since
-	// resolver behavior on a single host treats it as loopback; anything
-	// else is rejected.
-	return host == "localhost";
-}
-
-}  // namespace
-
 void HighBarService::Bind(const TransportEndpoint& endpoint,
                           std::string* bound_address) {
 	::grpc::ServerBuilder builder;
@@ -845,21 +760,16 @@ void HighBarService::Bind(const TransportEndpoint& endpoint,
 	if (endpoint.transport == Transport::kUds) {
 		uri = "unix:" + endpoint.uds_path;
 	} else {
-		// T073 (US4): reject non-loopback binds at startup so container
-		// operators never silently expose the gateway to the LAN. The
-		// spec's same-host assumption (plan §Technical Context) is the
-		// authoritative constraint.
-		std::string host, port;
-		if (!SplitHostPort(endpoint.tcp_bind, &host, &port)) {
+		// T073 — loopback-only guard. Spec Assumption: same-host. A
+		// non-loopback bind would expose the gateway to the network
+		// with no TLS + a filesystem-anchored token; that is not a
+		// supported configuration. Fail startup with a clear reason
+		// so operators can fix grpc.json.
+		std::string reason;
+		if (!IsLoopbackTcpBind(endpoint.tcp_bind, &reason)) {
 			throw std::runtime_error(
-				"HighBarService::Bind: malformed tcp_bind '"
-				+ endpoint.tcp_bind + "' (expected host:port)");
-		}
-		if (!IsLoopback(host)) {
-			throw std::runtime_error(
-				"HighBarService::Bind: non-loopback tcp_bind '"
-				+ endpoint.tcp_bind + "' rejected (must be "
-				"127.0.0.0/8, ::1, or localhost)");
+				"HighBarService::Bind: " + reason +
+				" (set transport=uds or fix tcp_bind in data/config/grpc.json)");
 		}
 		uri = endpoint.tcp_bind;
 	}
@@ -939,118 +849,9 @@ void HighBarService::SetUs1Handles(SnapshotBuilder* snapshot,
 
 void HighBarService::SetUs2Handles(CommandQueue* queue) {
 	command_queue_ = queue;
-}
-
-// ============================================================================
-// ValidateCommand (T056)
-// ============================================================================
-//
-// Data-model §4: target_unit_id must resolve to a live owned unit;
-// build.def_id must be constructible by target; positions must lie in
-// map extents. Runs on the gRPC worker thread; takes a shared lock on
-// state_mutex_ so it doesn't race with FlushDelta (which takes the
-// exclusive lock for the serialize-and-publish window).
-//
-// Engine-thread re-check at dispatch time covers TOCTOU — a unit may
-// die between validation and drain; the dispatcher skips dead units.
-
-namespace {
-
-bool PosInMap(const ::highbar::v1::Vector3& p) {
-	const float max_x = static_cast<float>(::circuit::CTerrainManager::GetTerrainWidth());
-	const float max_z = static_cast<float>(::circuit::CTerrainManager::GetTerrainHeight());
-	if (max_x <= 0 || max_z <= 0) {
-		// Map extents not initialized yet — don't reject on shape since
-		// the engine wouldn't have started issuing commands in a live
-		// match without maxxpos/maxzpos. Treat as pass to avoid false
-		// negatives during test harness runs.
-		return true;
+	if (validator_ == nullptr && ai_ != nullptr) {
+		validator_ = std::make_unique<CommandValidator>(ai_);
 	}
-	return p.x() >= 0 && p.x() <= max_x && p.z() >= 0 && p.z() <= max_z;
-}
-
-bool ValidateBuildDef(const ::circuit::CCircuitAI* ai,
-                      ::circuit::CCircuitUnit* builder,
-                      std::int32_t to_build_def_id) {
-	if (builder == nullptr || builder->GetCircuitDef() == nullptr) return false;
-	auto* to_build = const_cast<::circuit::CCircuitAI*>(ai)->GetCircuitDefSafe(
-		static_cast<::circuit::CCircuitDef::Id>(to_build_def_id));
-	if (to_build == nullptr) return false;
-	return builder->GetCircuitDef()->CanBuild(to_build);
-}
-
-}  // namespace
-
-ValidationError HighBarService::ValidateCommand(
-	std::uint32_t target_unit_id,
-	const ::highbar::v1::AICommand& cmd) const {
-
-	if (ai_ == nullptr) {
-		return ValidationError::kTargetUnitNotFound;
-	}
-
-	// Shared lock so we don't race with the engine-thread serialize
-	// window (FlushDelta). Reads of GetTeamUnit and GetCircuitDefSafe
-	// on the same mutex are safe under this pattern (T036 policy).
-	std::shared_lock<std::shared_mutex> lock;
-	if (state_mutex_ != nullptr) {
-		lock = std::shared_lock<std::shared_mutex>(*state_mutex_);
-	}
-
-	auto* unit = ai_->GetTeamUnit(
-		static_cast<::circuit::ICoreUnit::Id>(target_unit_id));
-	if (unit == nullptr) {
-		return ValidationError::kTargetUnitNotFound;
-	}
-
-	using CK = ::highbar::v1::AICommand::CommandCase;
-	switch (cmd.command_case()) {
-	case CK::kMoveUnit:
-		if (!PosInMap(cmd.move_unit().to_position())) {
-			return ValidationError::kPositionOutOfMap;
-		}
-		break;
-	case CK::kFight:
-		if (!PosInMap(cmd.fight().to_position())) {
-			return ValidationError::kPositionOutOfMap;
-		}
-		break;
-	case CK::kPatrol:
-		if (!PosInMap(cmd.patrol().to_position())) {
-			return ValidationError::kPositionOutOfMap;
-		}
-		break;
-	case CK::kAttackArea:
-		if (!PosInMap(cmd.attack_area().attack_position())) {
-			return ValidationError::kPositionOutOfMap;
-		}
-		break;
-	case CK::kReclaimArea:
-		if (!PosInMap(cmd.reclaim_area().position())) {
-			return ValidationError::kPositionOutOfMap;
-		}
-		break;
-	case CK::kReclaimInArea:
-		if (!PosInMap(cmd.reclaim_in_area().position())) {
-			return ValidationError::kPositionOutOfMap;
-		}
-		break;
-	case CK::kBuildUnit:
-		if (!PosInMap(cmd.build_unit().build_position())) {
-			return ValidationError::kPositionOutOfMap;
-		}
-		if (!ValidateBuildDef(ai_, unit, cmd.build_unit().to_build_unit_def_id())) {
-			return ValidationError::kBuildDefNotConstructible;
-		}
-		break;
-	default:
-		// Other 88 arms carry no positions / build defs — accept on
-		// shape. Engine-thread dispatch still owns the semantic check
-		// (dead unit, unknown arm).
-		break;
-	}
-
-	return ValidationError::kOk;
 }
 
 void HighBarService::AdvanceFrame() {

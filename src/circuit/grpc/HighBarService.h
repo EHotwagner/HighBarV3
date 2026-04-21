@@ -28,27 +28,15 @@ namespace circuit {
 class CCircuitAI;
 }  // namespace circuit
 
-namespace highbar::v1 {
-class AICommand;
-class CommandBatch;
-}  // namespace highbar::v1
-
 namespace circuit::grpc {
 
 class AuthToken;
-class CommandQueue;
 class Counters;
 class SnapshotBuilder;
 class DeltaBus;
 class RingBuffer;
-
-// Outcome of server-side AICommand validation (T056).
-enum class ValidationError {
-	kOk,
-	kTargetUnitNotFound,
-	kBuildDefNotConstructible,
-	kPositionOutOfMap,
-};
+class CommandQueue;
+class CommandValidator;
 
 class HighBarService final : public ::highbar::v1::HighBarProxy::AsyncService {
 public:
@@ -83,16 +71,9 @@ public:
 	                   RingBuffer* ring,
 	                   std::shared_mutex* state_mutex);
 
-	// Wire the US2 handle (CommandQueue, T055). Producers are gRPC
-	// workers inside SubmitCommandsCallData; the consumer is the engine
-	// thread via CGrpcGatewayModule::OnFrameTick.
+	// Wire the US2 command-path handle (T058). `queue` outlives this
+	// service. Until set, SubmitCommands returns UNAVAILABLE.
 	void SetUs2Handles(CommandQueue* queue);
-
-	// Server-side validation for a single AICommand (T056). Called from
-	// SubmitCommandsCallData's Read loop — the gRPC worker thread.
-	// Takes a shared_lock on state_mutex_ internally.
-	ValidationError ValidateCommand(std::uint32_t target_unit_id,
-	                                const ::highbar::v1::AICommand& cmd) const;
 
 	// Framesince-bind counter is bumped by CGrpcGatewayModule's
 	// frame-update hook (T026). The service reads it for
@@ -143,8 +124,11 @@ private:
 	RingBuffer* ring_ = nullptr;
 	std::shared_mutex* state_mutex_ = nullptr;
 
-	// US2 handles (set via SetUs2Handles; null until wired post-Bind).
+	// US2 handles (T058). command_queue_ is the MPSC drop-off for
+	// SubmitCommands; validator_ owns per-service state for argument
+	// checking.
 	CommandQueue* command_queue_ = nullptr;
+	std::unique_ptr<CommandValidator> validator_;
 
 	std::unique_ptr<::grpc::ServerCompletionQueue> cq_;
 	std::unique_ptr<::grpc::Server> server_;

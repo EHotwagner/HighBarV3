@@ -3,32 +3,48 @@
 // HighBarV3 — CommandQueue impl (T055).
 
 #include "grpc/CommandQueue.h"
+#include "grpc/Counters.h"
 
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 namespace circuit::grpc {
 
-CommandQueue::CommandQueue(std::size_t capacity)
-	: capacity_(capacity == 0 ? 1 : capacity) {}
+CommandQueue::CommandQueue(Counters* counters, std::size_t capacity)
+	: counters_(counters), capacity_(capacity) {}
 
-CommandQueue::Status CommandQueue::Push(QueuedCommand cmd) {
+bool CommandQueue::TryPush(QueuedCommand cmd) {
 	std::lock_guard<std::mutex> lock(mutex_);
 	if (queue_.size() >= capacity_) {
-		return Status::kResourceExhausted;
+		return false;
 	}
-	queue_.emplace_back(std::move(cmd));
-	return Status::kAccepted;
+	queue_.push(std::move(cmd));
+	if (counters_ != nullptr) {
+		counters_->command_queue_depth.store(
+			static_cast<std::uint32_t>(queue_.size()),
+			std::memory_order_relaxed);
+	}
+	return true;
 }
 
-std::vector<QueuedCommand> CommandQueue::DrainAll() {
-	std::vector<QueuedCommand> out;
+std::size_t CommandQueue::Drain(std::vector<QueuedCommand>* out,
+                                std::size_t max) {
+	if (out == nullptr) return 0;
 	std::lock_guard<std::mutex> lock(mutex_);
-	out.reserve(queue_.size());
-	while (!queue_.empty()) {
-		out.emplace_back(std::move(queue_.front()));
-		queue_.pop_front();
+	const std::size_t budget = (max == 0) ? queue_.size()
+	                                      : std::min(max, queue_.size());
+	out->reserve(out->size() + budget);
+	for (std::size_t i = 0; i < budget; ++i) {
+		out->push_back(std::move(queue_.front()));
+		queue_.pop();
 	}
-	return out;
+	if (counters_ != nullptr) {
+		counters_->command_queue_depth.store(
+			static_cast<std::uint32_t>(queue_.size()),
+			std::memory_order_relaxed);
+	}
+	return budget;
 }
 
 std::size_t CommandQueue::Depth() const {

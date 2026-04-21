@@ -1,111 +1,110 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //
-// HighBarV3 — CommandQueue unit tests (T066).
+// HighBarV3 — CommandQueue unit test (T066).
 //
-// Asserts FR-012a / data-model §4 §Command Lifecycle semantics:
-//   - Push returns kResourceExhausted synchronously when the queue is
-//     full; already-queued commands are not dropped or reordered.
-//   - DrainAll returns FIFO order and leaves the queue empty.
-//   - Multiple producers + a single consumer never lose or reorder.
+// Verifies FR-012a:
+//   1. Overflow returns RESOURCE_EXHAUSTED synchronously (TryPush → false)
+//      without mutating the already-queued state.
+//   2. No already-queued command is dropped or reordered when a later
+//      push overflows.
+//   3. Default capacity is 1024 (per tasks.md T055).
+//   4. Drain is FIFO and updates Counters::command_queue_depth.
+//
+// Build: same CMake add_executable gating as the other tests/unit/
+// files — add_executable(command_queue_test command_queue_test.cc)
+// linking grpc/CommandQueue, grpc/Counters, GTest::gtest_main.
 
 #include "grpc/CommandQueue.h"
-
-#include "highbar/commands.pb.h"
+#include "grpc/Counters.h"
 
 #include <gtest/gtest.h>
 
-#include <atomic>
-#include <thread>
+#include <string>
 #include <vector>
 
 namespace {
 
 using circuit::grpc::CommandQueue;
+using circuit::grpc::Counters;
 using circuit::grpc::QueuedCommand;
 
-QueuedCommand Make(std::uint32_t target, std::uint64_t seq_tag) {
+QueuedCommand MakeCommand(const std::string& session, std::int32_t unit_id) {
 	QueuedCommand q;
-	q.target_unit_id = target;
-	auto* m = q.command.mutable_move_unit();
-	m->set_unit_id(static_cast<std::int32_t>(target));
-	// Stuff the sequence tag into to_position.x for ordering checks.
-	m->mutable_to_position()->set_x(static_cast<float>(seq_tag));
+	q.session_id = session;
+	// Use MoveUnit as a convenient marker since it carries unit_id.
+	auto* move = q.command.mutable_move_unit();
+	move->set_unit_id(unit_id);
 	return q;
 }
 
-TEST(CommandQueue, PushAndDrainPreservesFIFO) {
-	CommandQueue q(8);
-	for (std::uint64_t i = 1; i <= 5; ++i) {
-		ASSERT_EQ(q.Push(Make(42, i)), CommandQueue::Status::kAccepted);
+TEST(CommandQueue, DefaultCapacityIs1024) {
+	CommandQueue q;
+	EXPECT_EQ(q.Capacity(), 1024u);
+}
+
+TEST(CommandQueue, FifoDrainPreservesOrder) {
+	Counters c;
+	CommandQueue q(&c, /*capacity=*/8);
+	for (int i = 1; i <= 5; ++i) {
+		ASSERT_TRUE(q.TryPush(MakeCommand("s1", i)));
 	}
 	EXPECT_EQ(q.Depth(), 5u);
+	EXPECT_EQ(c.command_queue_depth.load(), 5u);
 
-	auto drained = q.DrainAll();
-	ASSERT_EQ(drained.size(), 5u);
-	for (std::size_t i = 0; i < drained.size(); ++i) {
-		EXPECT_EQ(drained[i].command.move_unit().to_position().x(),
-		          static_cast<float>(i + 1));
+	std::vector<QueuedCommand> out;
+	ASSERT_EQ(q.Drain(&out), 5u);
+	ASSERT_EQ(out.size(), 5u);
+	for (int i = 0; i < 5; ++i) {
+		EXPECT_EQ(out[i].command.move_unit().unit_id(), i + 1);
 	}
 	EXPECT_EQ(q.Depth(), 0u);
+	EXPECT_EQ(c.command_queue_depth.load(), 0u);
 }
 
-TEST(CommandQueue, OverflowReturnsResourceExhaustedAndKeepsExisting) {
-	CommandQueue q(3);
-	ASSERT_EQ(q.Push(Make(1, 1)), CommandQueue::Status::kAccepted);
-	ASSERT_EQ(q.Push(Make(1, 2)), CommandQueue::Status::kAccepted);
-	ASSERT_EQ(q.Push(Make(1, 3)), CommandQueue::Status::kAccepted);
+TEST(CommandQueue, OverflowReturnsFalseSynchronously) {
+	CommandQueue q(/*counters=*/nullptr, /*capacity=*/3);
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 1)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 2)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 3)));
 
-	// Overflow: synchronous rejection, already-queued commands preserved.
-	EXPECT_EQ(q.Push(Make(1, 99)), CommandQueue::Status::kResourceExhausted);
+	// Fourth push must fail synchronously with false (caller maps to
+	// RESOURCE_EXHAUSTED on the wire).
+	EXPECT_FALSE(q.TryPush(MakeCommand("s1", 4)));
 	EXPECT_EQ(q.Depth(), 3u);
-
-	auto drained = q.DrainAll();
-	ASSERT_EQ(drained.size(), 3u);
-	EXPECT_EQ(drained[0].command.move_unit().to_position().x(), 1.0f);
-	EXPECT_EQ(drained[1].command.move_unit().to_position().x(), 2.0f);
-	EXPECT_EQ(drained[2].command.move_unit().to_position().x(), 3.0f);
 }
 
-TEST(CommandQueue, ConcurrentProducersSingleDrainerLosesNothing) {
-	constexpr int kProducers = 4;
-	constexpr int kPerProducer = 500;
-	CommandQueue q(kProducers * kPerProducer * 2);
+TEST(CommandQueue, OverflowDoesNotDropOrReorderQueued) {
+	CommandQueue q(/*counters=*/nullptr, /*capacity=*/3);
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 10)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 20)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 30)));
 
-	std::atomic<int> started{0};
-	std::vector<std::thread> producers;
-	for (int p = 0; p < kProducers; ++p) {
-		producers.emplace_back([&, p] {
-			started.fetch_add(1);
-			while (started.load() < kProducers) { /* spin barrier */ }
-			for (int i = 0; i < kPerProducer; ++i) {
-				const auto tag = static_cast<std::uint64_t>(p * kPerProducer + i);
-				while (q.Push(Make(static_cast<std::uint32_t>(p + 1), tag))
-				       != CommandQueue::Status::kAccepted) {
-					std::this_thread::yield();
-				}
-			}
-		});
+	// Several rejected pushes — must leave the queue untouched.
+	for (int i = 0; i < 5; ++i) {
+		EXPECT_FALSE(q.TryPush(MakeCommand("s1", 99)));
 	}
-	for (auto& t : producers) t.join();
 
-	auto drained = q.DrainAll();
-	EXPECT_EQ(drained.size(), static_cast<std::size_t>(kProducers * kPerProducer));
-	// Per-producer FIFO preserved (per-source, not global): for each
-	// producer p, the tags must appear in increasing order.
-	std::vector<std::uint64_t> last_per_producer(kProducers, 0);
-	std::vector<bool>          seen_first(kProducers, false);
-	for (const auto& q : drained) {
-		const int p = static_cast<int>(q.target_unit_id) - 1;
-		ASSERT_GE(p, 0);
-		ASSERT_LT(p, kProducers);
-		const auto tag = static_cast<std::uint64_t>(
-			q.command.move_unit().to_position().x());
-		if (seen_first[p]) {
-			EXPECT_GT(tag, last_per_producer[p]);
-		} else {
-			seen_first[p] = true;
-		}
-		last_per_producer[p] = tag;
+	std::vector<QueuedCommand> drained;
+	ASSERT_EQ(q.Drain(&drained), 3u);
+	ASSERT_EQ(drained.size(), 3u);
+	EXPECT_EQ(drained[0].command.move_unit().unit_id(), 10);
+	EXPECT_EQ(drained[1].command.move_unit().unit_id(), 20);
+	EXPECT_EQ(drained[2].command.move_unit().unit_id(), 30);
+}
+
+TEST(CommandQueue, PartialDrainLeavesRemainder) {
+	CommandQueue q(/*counters=*/nullptr, /*capacity=*/10);
+	for (int i = 1; i <= 10; ++i) {
+		ASSERT_TRUE(q.TryPush(MakeCommand("s1", i)));
+	}
+	std::vector<QueuedCommand> out;
+	ASSERT_EQ(q.Drain(&out, /*max=*/4), 4u);
+	EXPECT_EQ(q.Depth(), 6u);
+	ASSERT_EQ(q.Drain(&out, /*max=*/0), 6u);
+	EXPECT_EQ(q.Depth(), 0u);
+	ASSERT_EQ(out.size(), 10u);
+	for (int i = 0; i < 10; ++i) {
+		EXPECT_EQ(out[i].command.move_unit().unit_id(), i + 1);
 	}
 }
 

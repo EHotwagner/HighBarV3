@@ -2,17 +2,15 @@
 //
 // HighBarV3 — SnapshotBuilder validation rules (T049).
 //
-// The manager-walk unit test is blocked on a mock CCircuitAI — the
-// real class is tightly coupled to the Spring engine callback, so
-// spinning up a pure-unit stand-in is a multi-hour refactor that
-// should land with the integration harness (T051's dlopen-driven
-// mock engine). Phase 3 unit coverage here is the schema-contract
-// checks we CAN run against a built StateSnapshot:
+// The manager-walk path requires a live CCircuitAI, which is tightly
+// coupled to the Spring engine callback. Rather than mocking it, the
+// builder's runtime behavior is exercised end-to-end by
+// tests/headless/us1-observer.sh against spring-headless. Phase 3
+// unit coverage here is the schema-contract checks we CAN run
+// against a built StateSnapshot:
 //   * own_units.health <= own_units.max_health (data-model §1)
 //   * build_progress == 0 when under_construction == false
 //   * radar_enemies carry degraded positions (sentinel check)
-// The builder wrap itself (SnapshotBuilder::Build against a mock)
-// lands in tests/integration/observer_flow_test.cc (T051).
 
 #include "highbar/state.pb.h"
 
@@ -29,8 +27,9 @@ TEST(SnapshotBuilder_ContractChecks, OwnUnitHealthIsBounded) {
 	// Manually corrupted: the builder must NEVER emit this shape.
 	u.set_health(200.0f);
 	EXPECT_GT(u.health(), u.max_health())
-		<< "sentinel: if the builder ever produces this, the test in "
-		   "tests/integration/observer_flow_test.cc will catch it.";
+		<< "sentinel: if the builder ever produces this, the assertion "
+		   "in tests/headless/us1-observer.sh's observer output-grep "
+		   "will catch it.";
 }
 
 TEST(SnapshotBuilder_ContractChecks, BuildProgressZeroWhenNotConstructing) {

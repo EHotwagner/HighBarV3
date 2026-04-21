@@ -35,10 +35,10 @@ namespace circuit::grpc {
 class HighBarService;
 class Counters;
 class AuthToken;
-class CommandQueue;
 class SnapshotBuilder;
 class DeltaBus;
 class RingBuffer;
+class CommandQueue;
 }  // namespace circuit::grpc
 
 namespace circuit {
@@ -86,6 +86,7 @@ public:
 	::circuit::grpc::SnapshotBuilder* GetSnapshotBuilder() { return snapshot_.get(); }
 	::circuit::grpc::DeltaBus*        GetDeltaBus()        { return delta_bus_.get(); }
 	::circuit::grpc::RingBuffer*      GetRingBuffer()      { return ring_.get(); }
+	::circuit::grpc::CommandQueue*    GetCommandQueue()    { return command_queue_.get(); }
 	std::shared_mutex&                StateMutex()         { return state_mutex_; }
 	std::uint64_t                     HeadSeq() const;
 
@@ -124,8 +125,8 @@ private:
 	void FlushDelta();
 	// T039 helper: emit a KeepAlive StateUpdate on the bus + ring.
 	void EmitKeepAlive();
-	// T057: drain the CommandQueue and dispatch each AICommand to the
-	// matching CCircuitUnit::Cmd* method. Engine-thread only.
+	// T057 helper: drain CommandQueue, dispatch each via
+	// CCircuitUnit::Cmd*. Engine-thread only.
 	void DrainCommandQueue();
 };
 

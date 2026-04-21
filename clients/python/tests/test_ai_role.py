@@ -1,58 +1,130 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Pytest suite for the AI role (T092).
+"""Python AI-role pytest suite (T092).
 
-Covers token-file auth, MoveTo submission, and the ALREADY_EXISTS
-invariant when an F# AI client already holds the slot. Live-gateway
-tests skip when the plugin isn't running; the offline tests assert
-behavior that can be validated without the plugin (e.g., token reader
-backoff on a missing file).
+Pure-unit tests for the commands helpers; live-gateway tests for the
+full SubmitCommands round trip (skipped without HIGHBAR_UDS_PATH +
+HIGHBAR_TOKEN_PATH env vars).
 """
 
 from __future__ import annotations
 
 import os
-import time
 
+import grpc
 import pytest
 
-pytest.importorskip("highbar.v1", reason="buf-generated stubs not on PYTHONPATH")
-
-from highbar_client import session as hb_session  # noqa: E402
+from highbar_client import channel, commands
 
 
-def test_read_token_times_out_cleanly(tmp_path):
-    missing = tmp_path / "not-here"
-    t0 = time.monotonic()
-    with pytest.raises(FileNotFoundError):
-        hb_session.read_token_with_backoff(str(missing), max_wait_ms=200)
-    # Backoff must actually sleep — don't accept a sub-50ms fast-path
-    # that would mean the retry loop degenerated.
-    assert time.monotonic() - t0 >= 0.1
+# ---------------------------------------------------------------------------
+# Pure-unit tests — command builders.
+# ---------------------------------------------------------------------------
 
 
-def test_read_token_returns_stripped_contents(tmp_path):
-    path = tmp_path / "highbar.token"
-    path.write_text("deadbeef\n")
-    assert hb_session.read_token_with_backoff(str(path), max_wait_ms=50) == "deadbeef"
+def test_move_to_builds_correct_proto():
+    b = commands.batch(
+        target_unit=42,
+        batch_seq=1,
+        orders=[commands.move_to(100.0, 0.0, 200.0)],
+    )
+    assert b.target_unit_id == 42
+    assert b.batch_seq == 1
+    assert len(b.commands) == 1
+    cmd = b.commands[0]
+    assert cmd.WhichOneof("command") == "move_unit"
+    assert cmd.move_unit.unit_id == 42
+    assert cmd.move_unit.to_position.x == 100.0
+    assert cmd.move_unit.to_position.z == 200.0
 
 
-def test_move_to_submission_requires_live_gateway():
-    """Skip anchor for the in-match MoveTo round-trip.
+def test_options_bitfield_shift():
+    b = commands.batch(
+        target_unit=1, batch_seq=1,
+        orders=[commands.move_to(0.0, 0.0, 0.0)],
+        opts=commands.OptionBits.SHIFT,
+    )
+    assert b.commands[0].move_unit.options == 1
 
-    The full test is: hello_ai → submit([batch(MoveTo)]) → assert ack.
-    accepted == 1. It needs a live gateway with a live-owned unit
-    matching the configured target_unit_id; the us2-ai-coexist.sh
-    headless script covers that end-to-end. Here we just document
-    the gap so the task ledger reads as landed.
+
+def test_batch_multiple_orders_preserves_order():
+    b = commands.batch(
+        target_unit=5, batch_seq=2,
+        orders=[
+            commands.move_to(1.0, 0.0, 2.0),
+            commands.stop(),
+            commands.wait(),
+        ],
+    )
+    assert [c.WhichOneof("command") for c in b.commands] == [
+        "move_unit", "stop", "wait"
+    ]
+
+
+def test_unknown_order_rejected_at_build():
+    bogus = commands.Order("not_a_real_arm", {})
+    with pytest.raises(ValueError):
+        commands.batch(target_unit=1, batch_seq=1, orders=[bogus])
+
+
+# ---------------------------------------------------------------------------
+# Live-gateway tests.
+# ---------------------------------------------------------------------------
+
+
+def _live_env() -> tuple[str, str] | None:
+    uds = os.environ.get("HIGHBAR_UDS_PATH")
+    tok = os.environ.get("HIGHBAR_TOKEN_PATH")
+    if uds and os.path.exists(uds) and tok and os.path.exists(tok):
+        return uds, tok
+    return None
+
+
+@pytest.mark.skipif(
+    _live_env() is None,
+    reason="HIGHBAR_UDS_PATH + HIGHBAR_TOKEN_PATH not set",
+)
+def test_submit_move_to_accepted():
+    from highbar_client import session
+
+    env = _live_env()
+    assert env is not None
+    uds, tok_path = env
+    with open(tok_path) as f:
+        token = f.read().strip()
+
+    ch = channel.for_endpoint(channel.Endpoint.uds(uds))
+    session.hello(
+        ch, role=session.ClientRole.AI, client_id="hb-test/0.1.0", token=token
+    )
+
+    target = int(os.environ.get("HIGHBAR_TARGET_UNIT", "1"))
+    b = commands.batch(
+        target_unit=target, batch_seq=1,
+        orders=[commands.move_to(1024.0, 0.0, 1024.0)],
+    )
+    ack = commands.submit_one(ch, token, b, timeout=5.0)
+    assert ack.batches_accepted >= 1
+
+
+@pytest.mark.skipif(
+    _live_env() is None,
+    reason="HIGHBAR_UDS_PATH + HIGHBAR_TOKEN_PATH not set",
+)
+def test_observer_role_submit_rejected():
+    """Observer-role caller (no token) on SubmitCommands → PERMISSION_DENIED.
+
+    Verifies the contracts/README.md §SubmitCommands role gate.
     """
-    pytest.skip("live MoveTo round-trip covered by tests/headless/us2-ai-coexist.sh")
+    env = _live_env()
+    assert env is not None
+    uds, _ = env
 
-
-def test_second_ai_client_gets_already_exists():
-    """Skip anchor for the FR-011 slot-exclusion test.
-
-    Requires two simultaneous SubmitCommands streams; the F# side
-    (us2-ai-coexist.sh) already validates this. Cross-client parity
-    is T093.
-    """
-    pytest.skip("FR-011 covered by us2-ai-coexist.sh + cross_client_parity_test.sh")
+    ch = channel.for_endpoint(channel.Endpoint.uds(uds))
+    # Use an empty batch; without the token the interceptor should
+    # reject before the handler ever runs.
+    b = commands.batch(
+        target_unit=1, batch_seq=1, orders=[commands.stop()]
+    )
+    with pytest.raises(grpc.RpcError) as ei:
+        commands.submit_one(ch, token="", batch_=b, timeout=5.0)
+    assert ei.value.code() == grpc.StatusCode.PERMISSION_DENIED

@@ -6,6 +6,7 @@
 #include "module/GrpcGatewayModule.h"
 
 #include "grpc/AuthToken.h"
+#include "grpc/CommandDispatch.h"
 #include "grpc/CommandQueue.h"
 #include "grpc/Config.h"
 #include "grpc/Counters.h"
@@ -76,12 +77,12 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 		delta_bus_ = std::make_unique<grpc::DeltaBus>(counters_.get());
 		ring_ = std::make_unique<grpc::RingBuffer>(endpoint.ring_size);
 
-		// US2: command path (T055/T057).
-		command_queue_ = std::make_unique<grpc::CommandQueue>();
+		// US2 pieces (T055 + T057 command path).
+		command_queue_ = std::make_unique<grpc::CommandQueue>(counters_.get());
 
 		service_ = std::make_unique<grpc::HighBarService>(
 			ai, counters_.get(), token_.get());
-		// HighBarService needs the US1/US2 handles. Public setters wire
+		// HighBarService needs the US1 handles. Public setters wire
 		// them post-construction so the ctor stays non-failing for
 		// environments where the gateway runs without a full US1
 		// implementation (see HighBarService::SetUs1Handles).
@@ -287,8 +288,8 @@ void CGrpcGatewayModule::OnEconomyTick() {
 void CGrpcGatewayModule::OnFrameTick() {
 	if (service_) service_->AdvanceFrame();
 
-	// T057: drain command queue first — each queued AICommand dispatches
-	// through CCircuitUnit::Cmd*. Engine-thread only.
+	// T057: drain external-AI commands at the top of the frame so
+	// they land in the engine this tick. Engine-thread only.
 	DrainCommandQueue();
 
 	// Emit an EconomyTick every 30 frames (1s at 30Hz). Keeps the
@@ -361,165 +362,55 @@ std::uint64_t CGrpcGatewayModule::HeadSeq() const {
 }
 
 // ============================================================================
-// Command dispatch (T057)
+// Command drain (T057)
 // ============================================================================
 //
-// DrainAll() runs on the engine thread. For each queued command we
-//   (1) re-resolve target_unit_id under ownership (TOCTOU guard — the
-//       gRPC-worker validate could observe a unit that dies before the
-//       frame ticks), and
-//   (2) translate the AICommand oneof arm to the matching CCircuitUnit::Cmd*
-//       call. Non-unit arms (drawing, chat, pathfinding, lua, groups) are
-//       silently skipped — those carry no engine-thread unit-scope side
-//       effect to dispatch.
-//
-// Engine-thread only. No locks needed: teamUnits / CircuitDef lookups
-// are pure engine state, and the queue itself is MPSC-safe via its own
-// mutex.
-
-namespace {
-
-using ::springai::AIFloat3;
-
-inline AIFloat3 ToAIFloat3(const ::highbar::v1::Vector3& v) {
-	return AIFloat3(v.x(), v.y(), v.z());
-}
-
-inline short OptBits(const ::highbar::v1::CommandOptions& opts) {
-	return static_cast<short>(opts.bitfield());
-}
-
-void DispatchOne(CCircuitAI* ai, const grpc::QueuedCommand& q) {
-	auto* unit = ai->GetTeamUnit(
-		static_cast<ICoreUnit::Id>(q.target_unit_id));
-	if (unit == nullptr) {
-		return;  // TOCTOU: unit died between validate and drain.
-	}
-
-	using CK = ::highbar::v1::AICommand::CommandCase;
-	const auto& cmd = q.command;
-	switch (cmd.command_case()) {
-	case CK::kMoveUnit: {
-		const auto& m = cmd.move_unit();
-		unit->CmdMoveTo(ToAIFloat3(m.to_position()),
-		                /*options=*/0, m.timeout());
-		break;
-	}
-	case CK::kStop: {
-		const auto& s = cmd.stop();
-		unit->CmdStop(/*options=*/0, s.timeout());
-		break;
-	}
-	case CK::kPatrol: {
-		const auto& p = cmd.patrol();
-		unit->CmdPatrolTo(ToAIFloat3(p.to_position()),
-		                  /*options=*/0, p.timeout());
-		break;
-	}
-	case CK::kFight: {
-		const auto& f = cmd.fight();
-		unit->CmdFightTo(ToAIFloat3(f.to_position()),
-		                 /*options=*/0, f.timeout());
-		break;
-	}
-	case CK::kAttackArea: {
-		const auto& a = cmd.attack_area();
-		unit->CmdAttackGround(ToAIFloat3(a.attack_position()),
-		                      /*options=*/0, a.timeout());
-		break;
-	}
-	case CK::kBuildUnit: {
-		const auto& b = cmd.build_unit();
-		auto* def = ai->GetCircuitDefSafe(
-			static_cast<CCircuitDef::Id>(b.to_build_unit_def_id()));
-		if (def != nullptr) {
-			unit->CmdBuild(def, ToAIFloat3(b.build_position()),
-			               b.facing(), /*options=*/0, b.timeout());
-		}
-		break;
-	}
-	case CK::kRepair: {
-		const auto& r = cmd.repair();
-		auto* tgt = ai->GetFriendlyUnit(
-			static_cast<ICoreUnit::Id>(r.repair_unit_id()));
-		if (tgt != nullptr) {
-			unit->CmdRepair(tgt, /*options=*/0, r.timeout());
-		}
-		break;
-	}
-	case CK::kReclaimUnit: {
-		const auto& r = cmd.reclaim_unit();
-		auto* tgt = ai->GetFriendlyUnit(
-			static_cast<ICoreUnit::Id>(r.reclaim_unit_id()));
-		if (tgt != nullptr) {
-			unit->CmdReclaimUnit(tgt, /*options=*/0, r.timeout());
-		}
-		break;
-	}
-	case CK::kReclaimArea: {
-		const auto& r = cmd.reclaim_area();
-		unit->CmdReclaimInArea(ToAIFloat3(r.position()), r.radius(),
-		                        /*options=*/0, r.timeout());
-		break;
-	}
-	case CK::kReclaimInArea: {
-		const auto& r = cmd.reclaim_in_area();
-		unit->CmdReclaimInArea(ToAIFloat3(r.position()), r.radius(),
-		                        /*options=*/0, r.timeout());
-		break;
-	}
-	case CK::kResurrectInArea: {
-		const auto& r = cmd.resurrect_in_area();
-		unit->CmdResurrectInArea(ToAIFloat3(r.position()), r.radius(),
-		                          /*options=*/0, r.timeout());
-		break;
-	}
-	case CK::kSelfDestruct: {
-		unit->CmdSelfD(/*state=*/true);
-		break;
-	}
-	case CK::kWait: {
-		unit->CmdWait(/*state=*/true);
-		break;
-	}
-	case CK::kSetWantedMaxSpeed: {
-		unit->CmdWantedSpeed(cmd.set_wanted_max_speed().wanted_max_speed());
-		break;
-	}
-	case CK::kSetFireState: {
-		unit->CmdSetFireState(static_cast<CCircuitDef::FireT>(
-			cmd.set_fire_state().fire_state()));
-		break;
-	}
-	case CK::kSetMoveState: {
-		unit->CmdSetMoveState(static_cast<CCircuitDef::MoveT>(
-			cmd.set_move_state().move_state()));
-		break;
-	}
-	// Silently unhandled arms: Attack (needs enemy lookup), Guard,
-	// Capture, Load/Unload, Drawing, Chat, Groups, Pathfinding, Lua,
-	// Cheats, Figures. Engine-thread Cmd* wiring for these lands in a
-	// follow-up pass — the RPC surface + queue side is complete.
-	default:
-		break;
-	}
-}
-
-}  // namespace
-
+// Called from OnFrameTick at the top of every frame. Pulls queued
+// commands out of the MPSC CommandQueue and dispatches each to the
+// matching CCircuitUnit::Cmd*. Re-resolves the target unit here
+// rather than trusting the worker-thread validation result — a unit
+// can die between validate-at-submission and drain-at-frame.
 void CGrpcGatewayModule::DrainCommandQueue() {
-	if (command_queue_ == nullptr) return;
-	auto batch = command_queue_->DrainAll();
-	if (batch.empty()) return;
+	if (command_queue_ == nullptr || circuit == nullptr) return;
 
-	for (const auto& q : batch) {
-		DispatchOne(circuit, q);
-	}
+	std::vector<grpc::QueuedCommand> batch;
+	const std::size_t drained = command_queue_->Drain(&batch);
+	if (drained == 0) return;
 
-	if (counters_ != nullptr) {
-		counters_->command_queue_depth.store(
-			static_cast<std::uint32_t>(command_queue_->Depth()),
-			std::memory_order_relaxed);
+	for (auto& entry : batch) {
+		// The proto CommandBatch carried target_unit_id; the per-command
+		// proto arms redundantly re-carry unit_id. We prefer the
+		// sub-command's unit_id when the arm has one (covers the
+		// heterogeneous-batch escape hatch).
+		const auto& cmd = entry.command;
+		std::int32_t target_id = 0;
+		using C = ::highbar::v1::AICommand;
+		switch (cmd.command_case()) {
+		case C::kBuildUnit:       target_id = cmd.build_unit().unit_id(); break;
+		case C::kStop:            target_id = cmd.stop().unit_id(); break;
+		case C::kWait:            target_id = cmd.wait().unit_id(); break;
+		case C::kMoveUnit:        target_id = cmd.move_unit().unit_id(); break;
+		case C::kPatrol:          target_id = cmd.patrol().unit_id(); break;
+		case C::kFight:           target_id = cmd.fight().unit_id(); break;
+		case C::kAttack:          target_id = cmd.attack().unit_id(); break;
+		case C::kAttackArea:      target_id = cmd.attack_area().unit_id(); break;
+		case C::kGuard:           target_id = cmd.guard().unit_id(); break;
+		case C::kRepair:          target_id = cmd.repair().unit_id(); break;
+		case C::kReclaimUnit:     target_id = cmd.reclaim_unit().unit_id(); break;
+		case C::kReclaimInArea:   target_id = cmd.reclaim_in_area().unit_id(); break;
+		case C::kResurrectInArea: target_id = cmd.resurrect_in_area().unit_id(); break;
+		case C::kSelfDestruct:    target_id = cmd.self_destruct().unit_id(); break;
+		case C::kSetWantedMaxSpeed: target_id = cmd.set_wanted_max_speed().unit_id(); break;
+		case C::kSetFireState:    target_id = cmd.set_fire_state().unit_id(); break;
+		case C::kSetMoveState:    target_id = cmd.set_move_state().unit_id(); break;
+		default: break;
+		}
+		if (target_id <= 0) continue;
+
+		auto* unit = circuit->GetTeamUnit(target_id);
+		if (unit == nullptr || unit->IsDead()) continue;
+
+		grpc::DispatchCommand(circuit, unit, cmd);
 	}
 }
 

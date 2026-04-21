@@ -1,66 +1,59 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Channel construction for the HighBarV3 gateway (T085).
+"""gRPC channel construction for HighBarV3 (T085).
 
-Mirrors clients/fsharp/src/Channel.fs: UDS channels use the
-``unix:PATH`` scheme that grpcio natively supports on Linux; TCP
-channels use ``host:port`` against the plain insecure credentials
-(loopback-only, FR-013/14 delegate confidentiality to the filesystem
-and the loopback bind).
+UDS uses grpcio's `unix:<path>` target form. TCP uses `host:port`.
+Both are InsecureChannel — the same-host trust model applies per
+docs/transport.md; there is no TLS on this boundary.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
 
 import grpc
 
-
-@dataclass(frozen=True)
-class UdsEndpoint:
-    """Unix domain socket endpoint; ``path`` is an absolute filesystem path."""
-
-    path: str
+DEFAULT_MAX_RECV_MB = 32
 
 
-@dataclass(frozen=True)
-class TcpEndpoint:
-    """Loopback TCP endpoint; ``host_port`` is the ``host:port`` string."""
+@dataclass(frozen=True, slots=True)
+class Endpoint:
+    """Transport discriminator — mirrors clients/fsharp/src/Channel.fs."""
 
-    host_port: str
+    kind: str  # "uds" or "tcp"
+    target: str  # for UDS: filesystem path; for TCP: "host:port"
+
+    @classmethod
+    def uds(cls, path: str) -> "Endpoint":
+        return cls(kind="uds", target=path)
+
+    @classmethod
+    def tcp(cls, host_port: str) -> "Endpoint":
+        return cls(kind="tcp", target=host_port)
 
 
-Endpoint = Union[UdsEndpoint, TcpEndpoint]
-
-
-def for_endpoint(endpoint: Endpoint, max_recv_mb: int = 32) -> grpc.Channel:
-    """Open an insecure channel for ``endpoint``.
-
-    ``max_recv_mb`` bumps ``grpc.max_receive_message_length`` so that
-    late-game snapshots (>4 MiB) don't trip the default 4 MiB ceiling —
-    matches ``data/config/grpc.json``'s default.
-    """
-    options = [
+def _channel_options(max_recv_mb: int) -> list[tuple[str, int]]:
+    return [
         ("grpc.max_receive_message_length", max_recv_mb * 1024 * 1024),
     ]
-    if isinstance(endpoint, UdsEndpoint):
-        target = f"unix:{endpoint.path}"
-    elif isinstance(endpoint, TcpEndpoint):
-        target = endpoint.host_port
-    else:
-        raise TypeError(f"unknown endpoint type: {type(endpoint).__name__}")
-    return grpc.insecure_channel(target, options=options)
+
+
+def for_endpoint(
+    endpoint: Endpoint, max_recv_mb: int = DEFAULT_MAX_RECV_MB
+) -> grpc.Channel:
+    """Build an insecure grpc.Channel for the given endpoint."""
+    opts = _channel_options(max_recv_mb)
+    if endpoint.kind == "uds":
+        return grpc.insecure_channel(f"unix:{endpoint.target}", options=opts)
+    if endpoint.kind == "tcp":
+        return grpc.insecure_channel(endpoint.target, options=opts)
+    raise ValueError(f"unknown transport: {endpoint.kind}")
 
 
 def parse(transport: str, uds_path: str, tcp_bind: str) -> Endpoint:
-    """Resolve a ``(transport, uds_path, tcp_bind)`` triple into an Endpoint.
-
-    Shapes match ``data/config/grpc.json`` so higher layers stay
-    transport-agnostic.
-    """
+    """Config-shape parse — matches data/config/grpc.json."""
     t = transport.lower()
     if t == "uds":
-        return UdsEndpoint(path=uds_path)
+        return Endpoint.uds(uds_path)
     if t == "tcp":
-        return TcpEndpoint(host_port=tcp_bind)
-    raise ValueError(f"unknown transport {transport!r} (expected uds|tcp)")
+        return Endpoint.tcp(tcp_bind)
+    raise ValueError(f"unknown transport '{transport}' (expected uds|tcp)")

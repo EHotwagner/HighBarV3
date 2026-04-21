@@ -197,19 +197,17 @@ public:
 	bool IsAllyAware() const { return isAllyAware; }  // mark ally buildings, check taken mexes
 	bool IsCommMerge() const { return isCommMerge; }
 	bool IsAllyBaseAvoid() const { return isAllyBaseAvoid; }  // avoid building in allied bases
-	// HighBarV3 Phase-2 gate (US3, FR-016 / FR-017). When false, BARb's
-	// built-in decision modules (military / economy / etc.) are NOT
-	// constructed — the AI slot stays alive with only the gRPC gateway
-	// module registered; external clients become the sole command
-	// authority.
-	bool IsBuiltinEnabled() const { return isBuiltinEnabled; }
+	// HighBarV3 T079/T080 (US3 / FR-016, FR-017). When false, the gateway
+	// still binds but CircuitAI does not register its built-in decision
+	// modules — the external client is the sole decision authority.
+	bool IsBuiltinEnabled() const { return enableBuiltin; }
 private:
 	std::string InitOptions();
 	bool isCheating;
 	bool isAllyAware;
 	bool isCommMerge;
 	bool isAllyBaseAvoid;
-	bool isBuiltinEnabled = true;
+	bool enableBuiltin = true;  // HighBarV3 — default Phase 1 semantics
 // <<< AIOptions.lua ---- END
 
 // >>> UnitDefs ---- BEGIN

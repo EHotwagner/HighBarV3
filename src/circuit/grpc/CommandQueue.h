@@ -1,65 +1,68 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //
-// HighBarV3 — MPSC bounded queue for AICommands awaiting the engine-
-// thread drain (T055).
+// HighBarV3 — MPSC bounded command queue (T055).
 //
-// Producers: gRPC worker threads running inside SubmitCommandsCallData.
-// Consumer:  the engine thread, via CGrpcGatewayModule::OnFrameTick.
-//
-// Semantics (data-model §4, FR-012a):
-//   - Push() returns synchronously with Status::kAccepted or
-//     Status::kResourceExhausted; no blocking producers.
-//   - Overflow never drops or reorders already-queued commands.
-//   - Drain is consumer-only; removes all currently-queued commands
-//     in FIFO order.
-//   - The queue is owned by CGrpcGatewayModule; HighBarService gets a
-//     non-owning pointer via SetUs2Handles (T058).
+// Multiple gRPC worker threads push accepted AICommands here; the
+// engine thread drains the queue at the top of every frame tick
+// (T057). Overflow returns synchronously so the wire side can reply
+// RESOURCE_EXHAUSTED without ever dropping or reordering commands
+// already in the queue (FR-012a, data-model §4).
 
 #pragma once
 
 #include "highbar/commands.pb.h"
 
 #include <cstdint>
-#include <deque>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <vector>
 
 namespace circuit::grpc {
 
+class Counters;
+
+// Single entry: the command to dispatch plus the originating session
+// for logging / per-session accounting. Commands are shallow-copied
+// onto the queue so the caller's batch message can be freed once
+// Push returns.
 struct QueuedCommand {
 	std::string session_id;
-	std::uint32_t target_unit_id = 0;
 	::highbar::v1::AICommand command;
 };
 
 class CommandQueue {
 public:
-	enum class Status {
-		kAccepted,
-		kResourceExhausted,
-	};
+	// `counters` may be null for unit tests. `capacity` is the bounded
+	// depth; defaults to 1024 per tasks.md T055.
+	explicit CommandQueue(Counters* counters = nullptr,
+	                      std::size_t capacity = 1024);
 
-	// Default 1024 (tasks.md T055; research §8). Reader only grows with
-	// ctor arg so tests can dial down the cap.
-	explicit CommandQueue(std::size_t capacity = 1024);
+	// Attempt to enqueue. Returns true on success. On failure the queue
+	// is already at capacity — the caller must report RESOURCE_EXHAUSTED
+	// to the client without mutating state. Already-queued commands are
+	// never dropped or reordered.
+	bool TryPush(QueuedCommand cmd);
 
-	// Producer side. Thread-safe; never blocks on the consumer.
-	Status Push(QueuedCommand cmd);
+	// Engine-thread drain. Moves up to `max` entries into `out` and
+	// returns the number actually moved. Called from OnFrameTick at the
+	// top of every frame so throughput is bounded by engine frame rate.
+	// Pass 0 to drain everything.
+	std::size_t Drain(std::vector<QueuedCommand>* out,
+	                  std::size_t max = 0);
 
-	// Consumer side. Engine thread only. Returns all currently-queued
-	// commands in FIFO order and leaves the queue empty.
-	std::vector<QueuedCommand> DrainAll();
-
-	// Current depth. Atomic-snapshot; useful for the Counters surface.
+	// Current depth. Cheap but approximate under concurrent access —
+	// reflected into Counters::command_queue_depth atomically on every
+	// push / drain.
 	std::size_t Depth() const;
 
 	std::size_t Capacity() const { return capacity_; }
 
 private:
+	Counters* counters_;
 	const std::size_t capacity_;
 	mutable std::mutex mutex_;
-	std::deque<QueuedCommand> queue_;
+	std::queue<QueuedCommand> queue_;
 };
 
 }  // namespace circuit::grpc

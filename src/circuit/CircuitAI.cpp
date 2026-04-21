@@ -643,14 +643,14 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	militaryManager = std::make_shared<CMilitaryManager>(this);
 	militaryManager->InitHandlers();
 
-	// TODO: Remove EconomyManager from module (move abilities to BuilderManager).
-	// HighBarV3 US3 (T080): when enable_builtin=false, skip registering
-	// the four built-in decision modules in `modules`. Construction still
-	// happened above because the gateway's SnapshotBuilder / OnEconomyTick
-	// read through economyManager / mapManager / enemyManager. Skipping
-	// registration is what stops Update()/event callbacks from firing and
-	// issuing orders — satisfies SC-007 / FR-016 / FR-017.
-	if (isBuiltinEnabled) {
+	// HighBarV3 T080 (US3 / FR-016, FR-017): with enable_builtin=false
+	// the external client is the sole decision authority. The managers
+	// themselves are still constructed above because SnapshotBuilder
+	// and the gateway event handlers read from them; we just omit the
+	// built-in decision modules from the update chain so their
+	// Update() hooks never fire.
+	if (enableBuiltin) {
+		// TODO: Remove EconomyManager from module (move abilities to BuilderManager).
 		modules.push_back(militaryManager);
 		modules.push_back(builderManager);
 		modules.push_back(factoryManager);  // NOTE: Contains special last-module unit handlers.
@@ -658,8 +658,9 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	}
 	// V3: gRPC gateway. Constructor binds the service; a throw here
 	// propagates and fails the AI slot closed (FR-003a). Destruction
-	// happens via modules.clear() in Release(). Gateway runs in both
-	// Phase-1 (enable_builtin=true) and Phase-2 (enable_builtin=false).
+	// happens via modules.clear() in Release(). Always registered so
+	// Phase-2-only operation (FR-017: survive with no external client)
+	// still has a live gateway.
 	modules.push_back(std::make_shared<CGrpcGatewayModule>(this));
 
 	terrainManager->Init();
@@ -1703,10 +1704,13 @@ std::string CCircuitAI::InitOptions()
 		isAllyBaseAvoid = StringToBool(value);
 	}
 
-	// HighBarV3 (US3, T079): Phase-2 mode gate.
+	// HighBarV3 T079: gate for Phase-2 externalization (FR-016/FR-017).
+	// Default true = Phase-1 co-existence. Setting false in AIOptions.lua
+	// (or via the engine UI) leaves only the gRPC gateway in the modules
+	// vector so an external client is the sole decision authority.
 	value = options->GetValueByKey("enable_builtin");
 	if (value != nullptr) {
-		isBuiltinEnabled = StringToBool(value);
+		enableBuiltin = StringToBool(value);
 	}
 
 	if (!gameAttribute->IsInitialized()) {

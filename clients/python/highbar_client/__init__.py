@@ -1,22 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""HighBarV3 gRPC client for Python (T084-T090).
+"""HighBarV3 Python client — observer + AI roles.
 
-Depends on `buf generate` output living on PYTHONPATH as the
-`highbar.v1` package (see proto/buf.gen.yaml for the generator config).
+Generated proto stubs (`highbar/*_pb2.py`, `*_pb2_grpc.py`) are produced
+by grpc_tools.protoc at dev-install time; see README.md.
 """
 
-from .channel import Endpoint, for_endpoint, parse  # noqa: F401
-from .session import SCHEMA_VERSION, hello, hello_ai, read_token_with_backoff  # noqa: F401
-from .state_stream import SeqInvariantError, consume  # noqa: F401
+__version__ = "0.1.0"
 
-__all__ = [
-    "Endpoint",
-    "for_endpoint",
-    "parse",
-    "SCHEMA_VERSION",
-    "hello",
-    "hello_ai",
-    "read_token_with_backoff",
-    "SeqInvariantError",
-    "consume",
-]
+SCHEMA_VERSION = "1.0.0"
+"""Client-side schema version. MUST match the plugin's compile-time
+constant in src/circuit/grpc/SchemaVersion.h — the Hello handshake
+fails FAILED_PRECONDITION on any mismatch (FR-022a)."""

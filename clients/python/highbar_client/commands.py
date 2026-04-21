@@ -1,124 +1,207 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""SubmitCommands wrapper (T089).
+"""Command helpers + SubmitCommands client stream (T089).
 
-Python-ergonomic builders for the most common unit commands plus a
-``submit`` helper that opens the client-stream, writes N CommandBatch
-messages, and awaits the final CommandAck. Attacher routes the AI
-token through the ``x-highbar-ai-token`` metadata.
-
-For the 80+ AICommand arms not listed here (drawing, chat, groups,
-pathfinding, lua, figures, etc.), callers should build the protobuf
-AICommand directly and wrap it in their own CommandBatch — same
-principle as the F# client's ``Commands.Raw``.
+Mirrors the coverage in clients/fsharp/src/Commands.fs — 15 unit-order
+arms. The raw AICommand proto is still accessible for the long tail.
 """
 
 from __future__ import annotations
 
-import sys
-from typing import Iterable
+import enum
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
+from typing import Optional
 
 import grpc
 
-from highbar.v1 import commands_pb2, common_pb2, service_pb2_grpc
+from .highbar.v1 import (  # type: ignore
+    commands_pb2,
+    common_pb2,
+    service_pb2,
+    service_pb2_grpc,
+)
+from .session import TOKEN_HEADER
 
 
-def _v3(x: float, y: float, z: float) -> common_pb2.Vector3:
-    v = common_pb2.Vector3()
-    v.x, v.y, v.z = x, y, z
-    return v
+def vec3(x: float, y: float, z: float) -> common_pb2.Vector3:
+    return common_pb2.Vector3(x=x, y=y, z=z)
 
 
-def move_to(unit_id: int, x: float, y: float, z: float) -> commands_pb2.AICommand:
-    cmd = commands_pb2.AICommand()
-    cmd.move_unit.unit_id = unit_id
-    cmd.move_unit.timeout = sys.maxsize
-    cmd.move_unit.to_position.CopyFrom(_v3(x, y, z))
-    return cmd
+class OptionBits(enum.IntFlag):
+    NONE = 0
+    SHIFT = 1  # queued
+    CTRL = 2
+    ALT = 4
 
 
-def stop(unit_id: int) -> commands_pb2.AICommand:
-    cmd = commands_pb2.AICommand()
-    cmd.stop.unit_id = unit_id
-    cmd.stop.timeout = sys.maxsize
-    return cmd
+@dataclass(frozen=True, slots=True)
+class Order:
+    """Internal sum type — use the builder functions below."""
+
+    kind: str
+    payload: dict
 
 
-def patrol_to(unit_id: int, x: float, y: float, z: float) -> commands_pb2.AICommand:
-    cmd = commands_pb2.AICommand()
-    cmd.patrol.unit_id = unit_id
-    cmd.patrol.timeout = sys.maxsize
-    cmd.patrol.to_position.CopyFrom(_v3(x, y, z))
-    return cmd
+def move_to(x: float, y: float, z: float) -> Order:
+    return Order("move_to", {"pos": vec3(x, y, z)})
 
 
-def fight_to(unit_id: int, x: float, y: float, z: float) -> commands_pb2.AICommand:
-    cmd = commands_pb2.AICommand()
-    cmd.fight.unit_id = unit_id
-    cmd.fight.timeout = sys.maxsize
-    cmd.fight.to_position.CopyFrom(_v3(x, y, z))
-    return cmd
+def patrol_to(x: float, y: float, z: float) -> Order:
+    return Order("patrol_to", {"pos": vec3(x, y, z)})
 
 
-def attack_area(
-    unit_id: int, x: float, y: float, z: float, radius: float
+def fight_to(x: float, y: float, z: float) -> Order:
+    return Order("fight_to", {"pos": vec3(x, y, z)})
+
+
+def attack_area(x: float, y: float, z: float, radius: float) -> Order:
+    return Order("attack_area", {"pos": vec3(x, y, z), "radius": radius})
+
+
+def stop() -> Order:
+    return Order("stop", {})
+
+
+def wait() -> Order:
+    return Order("wait", {})
+
+
+def build(def_id: int, x: float, y: float, z: float, facing: int = 0) -> Order:
+    return Order(
+        "build",
+        {"def_id": def_id, "pos": vec3(x, y, z), "facing": facing},
+    )
+
+
+def repair(repair_unit_id: int) -> Order:
+    return Order("repair", {"repair_unit_id": repair_unit_id})
+
+
+def reclaim_unit(reclaim_unit_id: int) -> Order:
+    return Order("reclaim_unit", {"reclaim_unit_id": reclaim_unit_id})
+
+
+def reclaim_area(x: float, y: float, z: float, radius: float) -> Order:
+    return Order("reclaim_area", {"pos": vec3(x, y, z), "radius": radius})
+
+
+def resurrect_area(x: float, y: float, z: float, radius: float) -> Order:
+    return Order("resurrect_area", {"pos": vec3(x, y, z), "radius": radius})
+
+
+def self_destruct() -> Order:
+    return Order("self_destruct", {})
+
+
+def wanted_speed(speed: float) -> Order:
+    return Order("wanted_speed", {"speed": speed})
+
+
+def fire_state(state: int) -> Order:
+    return Order("fire_state", {"state": state})
+
+
+def move_state(state: int) -> Order:
+    return Order("move_state", {"state": state})
+
+
+def _to_proto(
+    order: Order, unit_id: int, opts: OptionBits
 ) -> commands_pb2.AICommand:
     cmd = commands_pb2.AICommand()
-    cmd.attack_area.unit_id = unit_id
-    cmd.attack_area.timeout = sys.maxsize
-    cmd.attack_area.attack_position.CopyFrom(_v3(x, y, z))
-    cmd.attack_area.radius = radius
-    return cmd
-
-
-def build(
-    unit_id: int,
-    to_build_def_id: int,
-    x: float,
-    y: float,
-    z: float,
-    facing: int = 0,
-) -> commands_pb2.AICommand:
-    cmd = commands_pb2.AICommand()
-    cmd.build_unit.unit_id = unit_id
-    cmd.build_unit.timeout = sys.maxsize
-    cmd.build_unit.to_build_unit_def_id = to_build_def_id
-    cmd.build_unit.build_position.CopyFrom(_v3(x, y, z))
-    cmd.build_unit.facing = facing
-    return cmd
-
-
-def repair(unit_id: int, target_unit_id: int) -> commands_pb2.AICommand:
-    cmd = commands_pb2.AICommand()
-    cmd.repair.unit_id = unit_id
-    cmd.repair.timeout = sys.maxsize
-    cmd.repair.repair_unit_id = target_unit_id
-    return cmd
-
-
-def reclaim_unit(unit_id: int, target_unit_id: int) -> commands_pb2.AICommand:
-    cmd = commands_pb2.AICommand()
-    cmd.reclaim_unit.unit_id = unit_id
-    cmd.reclaim_unit.timeout = sys.maxsize
-    cmd.reclaim_unit.reclaim_unit_id = target_unit_id
+    bits = int(opts)
+    k = order.kind
+    p = order.payload
+    if k == "move_to":
+        cmd.move_unit.unit_id = unit_id
+        cmd.move_unit.options = bits
+        cmd.move_unit.to_position.CopyFrom(p["pos"])
+    elif k == "patrol_to":
+        cmd.patrol.unit_id = unit_id
+        cmd.patrol.options = bits
+        cmd.patrol.to_position.CopyFrom(p["pos"])
+    elif k == "fight_to":
+        cmd.fight.unit_id = unit_id
+        cmd.fight.options = bits
+        cmd.fight.to_position.CopyFrom(p["pos"])
+    elif k == "attack_area":
+        cmd.attack_area.unit_id = unit_id
+        cmd.attack_area.options = bits
+        cmd.attack_area.attack_position.CopyFrom(p["pos"])
+        cmd.attack_area.radius = p["radius"]
+    elif k == "stop":
+        cmd.stop.unit_id = unit_id
+        cmd.stop.options = bits
+    elif k == "wait":
+        cmd.wait.unit_id = unit_id
+        cmd.wait.options = bits
+    elif k == "build":
+        cmd.build_unit.unit_id = unit_id
+        cmd.build_unit.options = bits
+        cmd.build_unit.to_build_unit_def_id = p["def_id"]
+        cmd.build_unit.build_position.CopyFrom(p["pos"])
+        cmd.build_unit.facing = p["facing"]
+    elif k == "repair":
+        cmd.repair.unit_id = unit_id
+        cmd.repair.options = bits
+        cmd.repair.repair_unit_id = p["repair_unit_id"]
+    elif k == "reclaim_unit":
+        cmd.reclaim_unit.unit_id = unit_id
+        cmd.reclaim_unit.options = bits
+        cmd.reclaim_unit.reclaim_unit_id = p["reclaim_unit_id"]
+    elif k == "reclaim_area":
+        cmd.reclaim_area.unit_id = unit_id
+        cmd.reclaim_area.options = bits
+        cmd.reclaim_area.position.CopyFrom(p["pos"])
+        cmd.reclaim_area.radius = p["radius"]
+    elif k == "resurrect_area":
+        cmd.resurrect_in_area.unit_id = unit_id
+        cmd.resurrect_in_area.options = bits
+        cmd.resurrect_in_area.position.CopyFrom(p["pos"])
+        cmd.resurrect_in_area.radius = p["radius"]
+    elif k == "self_destruct":
+        cmd.self_destruct.unit_id = unit_id
+        cmd.self_destruct.options = bits
+    elif k == "wanted_speed":
+        cmd.set_wanted_max_speed.unit_id = unit_id
+        cmd.set_wanted_max_speed.options = bits
+        cmd.set_wanted_max_speed.wanted_max_speed = p["speed"]
+    elif k == "fire_state":
+        cmd.set_fire_state.unit_id = unit_id
+        cmd.set_fire_state.options = bits
+        cmd.set_fire_state.fire_state = p["state"]
+    elif k == "move_state":
+        cmd.set_move_state.unit_id = unit_id
+        cmd.set_move_state.options = bits
+        cmd.set_move_state.move_state = p["state"]
+    else:
+        raise ValueError(f"unknown order kind: {k}")
     return cmd
 
 
 def batch(
-    batch_seq: int, target_unit_id: int, *commands: commands_pb2.AICommand
-) -> commands_pb2.CommandBatch:
-    b = commands_pb2.CommandBatch()
-    b.batch_seq = batch_seq
-    b.target_unit_id = target_unit_id
-    b.commands.extend(commands)
+    target_unit: int,
+    batch_seq: int,
+    orders: Iterable[Order],
+    opts: OptionBits = OptionBits.NONE,
+) -> service_pb2.CommandBatch:
+    b = service_pb2.CommandBatch(batch_seq=batch_seq, target_unit_id=target_unit)
+    for ord_ in orders:
+        b.commands.append(_to_proto(ord_, target_unit, opts))
     return b
 
 
-def submit(
-    channel: grpc.Channel,
+def submit_one(
+    channel_: grpc.Channel,
     token: str,
-    batches: Iterable[commands_pb2.CommandBatch],
-):
-    """Open SubmitCommands, stream batches, return the final CommandAck."""
-    stub = service_pb2_grpc.HighBarProxyStub(channel)
-    metadata = (("x-highbar-ai-token", token),)
-    return stub.SubmitCommands(iter(batches), metadata=metadata)
+    batch_: service_pb2.CommandBatch,
+    timeout: Optional[float] = None,
+) -> service_pb2.CommandAck:
+    """One-shot SubmitCommands: send a single batch and await the ack."""
+
+    def _batches() -> Iterator[service_pb2.CommandBatch]:
+        yield batch_
+
+    stub = service_pb2_grpc.HighBarProxyStub(channel_)
+    metadata = [(TOKEN_HEADER, token)]
+    return stub.SubmitCommands(_batches(), metadata=metadata, timeout=timeout)

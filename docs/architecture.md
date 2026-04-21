@@ -198,9 +198,29 @@ Files new or edited in the BARb fork:
   impl, async completion queues.
 - `src/circuit/grpc/DeltaBus.{h,cpp}` — **new**. SPMC, per-subscriber
   bounded ring (8192 entries), `shared_ptr<const string>` fan-out.
+- `src/circuit/grpc/SubscriberSlot.{h,cpp}` — **new**. Per-subscriber
+  ring, mutex + cv + bounded `std::deque`.
+- `src/circuit/grpc/RingBuffer.{h,cpp}` — **new**. 2048-entry
+  StateUpdate resume history keyed by seq.
 - `src/circuit/grpc/AuthInterceptor.{h,cpp}` — **new**. AI-token gate.
+- `src/circuit/grpc/AuthToken.{h,cpp}` — **new**. 256-bit token
+  generator + atomic-write file (tmp + fsync + rename, mode 0600).
+- `src/circuit/grpc/CommandQueue.{h,cpp}` — **new**. MPSC bounded
+  queue; engine-thread drain per frame.
+- `src/circuit/grpc/CommandValidator.{h,cpp}` — **new**. Worker-thread
+  argument validation (all-or-nothing batch semantics).
+- `src/circuit/grpc/CommandDispatch.{h,cpp}` — **new**. Engine-thread
+  `AICommand → CCircuitUnit::Cmd*` translator.
 - `src/circuit/grpc/SnapshotBuilder.{h,cpp}` — **new**. Flattens
   CircuitAI managers into `StateSnapshot`.
+- `src/circuit/grpc/Config.{h,cpp}` — **new**. `grpc.json` parser +
+  UDS path resolver (`$XDG_RUNTIME_DIR`/`${gameid}` expansion, 108-byte
+  sun_path fallback).
+- `src/circuit/grpc/Counters.{h,cpp}` — **new**. Atomic gauges +
+  rolling flush-latency p99 bucket (1024-sample ring).
+- `src/circuit/grpc/Log.{h,cpp}` — **new**. Façade over BARb's `LOG()`.
+- `src/circuit/grpc/SchemaVersion.h` — **new**. Compile-time constant
+  (`"1.0.0"`) for the strict-equality Hello handshake.
 - `src/circuit/CircuitAI.cpp` — **edit** `Init()` and `Release()` to
   construct/destroy the gateway module. Three lines in `Init`, one in
   `Release`.

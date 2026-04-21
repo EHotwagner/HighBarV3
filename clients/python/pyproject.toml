@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# HighBarV3 — Python client (T084).
+# HighBarV3 — Python client package (T084).
 #
-# Builds a grpcio-based client that reads the same proto surface as
-# the F# client (proto/highbar/*.proto). Code generation is driven by
-# `buf generate` into build/gen/python/; this package depends on that
-# output via editable install at dev time. At package-build time,
-# `buf generate` runs in CI (T104) before `pip wheel`.
+# Targets Python 3.11+. gRPC stubs are regenerated from proto/highbar/
+# via grpcio-tools at build time — there is no committed generated
+# code under highbar_client/highbar_v1_pb2* (those appear in the
+# build/ tree after `buf generate` or the inline grpc_tools call in
+# __init__.py's dev-install path).
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -15,34 +15,33 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "highbar-client"
 version = "0.1.0"
-description = "HighBarV3 gRPC client for Python."
+description = "HighBarV3 gRPC client for Python — observer + AI roles."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-2.0-only" }
 authors = [
-  { name = "HighBarV3 contributors" },
+    { name = "HighBarV3 contributors" }
 ]
 dependencies = [
-  "grpcio>=1.60",
-  "grpcio-tools>=1.60",
-  "protobuf>=4.25,<6",
+    "grpcio >= 1.62",
+    "protobuf >= 4.25",
 ]
 
 [project.optional-dependencies]
-test = [
-  "pytest>=7.4",
-  "pytest-asyncio>=0.23",
+dev = [
+    "grpcio-tools >= 1.62",
+    "pytest >= 8.0",
+    "pytest-asyncio >= 0.23",
 ]
 
 [project.scripts]
-hb-observer = "highbar_client.samples.observer:main"
-hb-ai       = "highbar_client.samples.ai_client:main"
-
-[tool.setuptools]
-package-dir = { "" = "." }
+hb-observer-py = "highbar_client.samples.observer:main"
+hb-ai-client-py = "highbar_client.samples.ai_client:main"
 
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["highbar_client*"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 testpaths = ["tests"]

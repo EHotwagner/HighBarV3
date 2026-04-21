@@ -1,20 +1,15 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Hello handshake + token loader (T086).
+"""Hello handshake + AI token loader (T086).
 
-Observer- and AI-role handshakes share the same Hello wire format; the
-AI role additionally reads the per-session token file with exponential
-backoff (handles the startup race per data-model §7) and attaches
-``x-highbar-ai-token`` to the RPC metadata.
-
-Schema version is a compile-time constant on the C++ side; we keep our
-own copy and check both against the server's reply (FR-022a defense in
-depth — the server already rejects a mismatch with FAILED_PRECONDITION,
-but a client-side assert catches the rare case where a test mocks the
-server wire).
+Mirrors clients/fsharp/src/Session.fs behavior so SC-004's byte-equal
+stream claim holds: both clients ship the same SchemaVersion, both
+do strict-equality verification on HelloResponse, both read the token
+file with exponential backoff up to 5s.
 """
 
 from __future__ import annotations
 
+import enum
 import os
 import time
 from dataclasses import dataclass
@@ -22,65 +17,75 @@ from typing import Optional
 
 import grpc
 
-from highbar.v1 import service_pb2, service_pb2_grpc
-from highbar.v1.service_pb2 import Role
+from . import SCHEMA_VERSION
+from .highbar.v1 import service_pb2, service_pb2_grpc, state_pb2  # type: ignore
+
+TOKEN_HEADER = "x-highbar-ai-token"
 
 
-SCHEMA_VERSION = "1.0.0"
+class ClientRole(enum.Enum):
+    OBSERVER = service_pb2.Role.ROLE_OBSERVER
+    AI = service_pb2.Role.ROLE_AI
 
 
-@dataclass
+@dataclass(slots=True)
 class Handshake:
     session_id: str
-    static_map: object  # highbar.v1.StaticMap
+    schema_version: str
+    static_map: state_pb2.StaticMap
     current_frame: int
-    role: str  # "observer" | "ai"
+    role: ClientRole
 
 
-def read_token_with_backoff(path: str, max_wait_ms: int = 5_000) -> str:
-    """Read the token file, retrying with exponential backoff.
+def read_token_with_backoff(path: str, max_delay_ms: int = 5000) -> str:
+    """Read the AI token file, retrying with exponential backoff.
 
-    The plugin writes the token file atomically after generating it and
-    before ``HighBarService::Bind`` unblocks; clients that race the
-    plugin's startup may see the file not-yet-present. Retry up to
-    ``max_wait_ms`` with a 25→1000 ms exponential delay.
+    The plugin writes the token after init but before Bind unblocks —
+    a client that starts simultaneously can race it. Matches the F#
+    client's 25ms → 1000ms cap; total wait bounded by ``max_delay_ms``.
     """
-    deadline = time.monotonic() + max_wait_ms / 1000
+    deadline = time.monotonic() + (max_delay_ms / 1000.0)
     delay_ms = 25
-    while not os.path.exists(path):
+    while not os.path.isfile(path):
         if time.monotonic() >= deadline:
-            raise FileNotFoundError(
-                f"token file not present within {max_wait_ms}ms: {path}"
+            raise TimeoutError(
+                f"token file not present within {max_delay_ms}ms: {path}"
             )
-        time.sleep(delay_ms / 1000)
+        time.sleep(delay_ms / 1000.0)
         delay_ms = min(1000, delay_ms * 2)
-    with open(path, "r", encoding="ascii") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return f.read().strip()
 
 
 def hello(
     channel: grpc.Channel,
-    role: str = "observer",
-    client_id: str = "hb-python/0.1.0",
+    role: ClientRole,
+    client_id: str,
     token: Optional[str] = None,
 ) -> Handshake:
-    """Open a Hello RPC. Returns Handshake on OK.
+    """Open a Hello RPC. Raises grpc.RpcError on FAILED_PRECONDITION /
+    PERMISSION_DENIED / ALREADY_EXISTS per contracts/README.md §Hello.
 
-    FAILED_PRECONDITION from the server bubbles as grpc.RpcError; the
-    status detail carries both server and client schema versions so
-    callers can surface a meaningful error.
+    ``token``: required when ``role == AI``. The server's auth
+    interceptor does not gate Hello on the token, but a token-carrying
+    Hello keeps the metadata handle available for subsequent RPCs on
+    the same channel.
     """
     stub = service_pb2_grpc.HighBarProxyStub(channel)
     req = service_pb2.HelloRequest(
         schema_version=SCHEMA_VERSION,
         client_id=client_id,
-        role=Role.ROLE_AI if role == "ai" else Role.ROLE_OBSERVER,
+        role=role.value,
     )
-    metadata = ()
+    metadata: list[tuple[str, str]] = []
     if token is not None:
-        metadata = (("x-highbar-ai-token", token),)
+        metadata.append((TOKEN_HEADER, token))
+
     resp = stub.Hello(req, metadata=metadata)
 
+    # FR-022a defense-in-depth mirror of the F# client: server already
+    # rejected mismatch with FAILED_PRECONDITION, but re-verify here so
+    # unit tests that stub the server can't silently drift.
     if resp.schema_version != SCHEMA_VERSION:
         raise RuntimeError(
             f"schema mismatch: server={resp.schema_version} "
@@ -89,19 +94,8 @@ def hello(
 
     return Handshake(
         session_id=resp.session_id,
+        schema_version=resp.schema_version,
         static_map=resp.static_map,
         current_frame=resp.current_frame,
         role=role,
     )
-
-
-def hello_ai(
-    channel: grpc.Channel,
-    client_id: str,
-    token_path: str,
-    max_token_wait_ms: int = 5_000,
-) -> tuple[Handshake, str]:
-    """AI-role convenience: read the token with backoff, then Hello."""
-    token = read_token_with_backoff(token_path, max_token_wait_ms)
-    handshake = hello(channel, role="ai", client_id=client_id, token=token)
-    return handshake, token

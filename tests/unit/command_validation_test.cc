@@ -1,37 +1,84 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //
-// HighBarV3 — ValidateCommand unit tests (T067).
+// HighBarV3 — CommandValidator unit test (T067).
 //
-// Exercises data-model §4 validation rules. Full validation requires
-// a live CCircuitAI + CCircuitUnit registry, which are only
-// available through the dlopen-driven integration harness (see
-// tests/integration/README.md — same blocker as T051/T052). The
-// testable pure-logic surface here is PosInMap plus the validation
-// error-code plumbing. Commit as GTEST_SKIP anchors so the file
-// compiles against a GoogleTest-linked build and will light up when
-// the mock-engine harness lands.
+// Covers the validator paths reachable without a real CCircuitAI:
+//   * batch.target_unit_id == 0 → rejected (not owned)
+//   * non-zero id with null AI → rejected (no such unit)
+//   * the error string names the offending id for diagnostics
+//
+// The richer paths — live unit owned, build.def_id constructibility,
+// positions in-map — are covered end-to-end by
+// tests/headless/us2-ai-coexist.sh against a real spring-headless
+// match. Those cases are GTEST_SKIP'd here with a pointer to the
+// headless script.
+
+#include "grpc/CommandValidator.h"
 
 #include <gtest/gtest.h>
 
 namespace {
 
-TEST(CommandValidation, InvalidTargetUnitIdReturnsInvalidArgument) {
-	GTEST_SKIP() << "requires mock CCircuitAI + teamUnits harness "
-	             << "(tests/integration/README.md)";
+using circuit::grpc::CommandValidator;
+using ::highbar::v1::CommandBatch;
+
+TEST(CommandValidator_WithoutAi, ZeroTargetRejected) {
+	CommandValidator v(/*ai=*/nullptr);
+	CommandBatch batch;
+	batch.set_target_unit_id(0);
+	batch.set_batch_seq(1);
+	batch.add_commands()->mutable_move_unit()->set_unit_id(0);
+
+	auto r = v.ValidateBatch(batch);
+	EXPECT_FALSE(r.ok);
+	EXPECT_NE(r.error.find("target_unit_id"), std::string::npos)
+		<< "error must name the offending field: " << r.error;
 }
 
-TEST(CommandValidation, NonConstructibleBuildDefReturnsInvalidArgument) {
-	GTEST_SKIP() << "requires mock CCircuitDef build-options graph";
+TEST(CommandValidator_WithoutAi, NonOwnedTargetRejected) {
+	CommandValidator v(/*ai=*/nullptr);
+	CommandBatch batch;
+	batch.set_target_unit_id(42);
+	auto* move = batch.add_commands()->mutable_move_unit();
+	move->set_unit_id(42);
+	move->mutable_to_position()->set_x(100.0f);
+	move->mutable_to_position()->set_y(0.0f);
+	move->mutable_to_position()->set_z(100.0f);
+
+	auto r = v.ValidateBatch(batch);
+	EXPECT_FALSE(r.ok);
+	EXPECT_NE(r.error.find("42"), std::string::npos)
+		<< "error must name the offending id for diagnostics: " << r.error;
 }
 
-TEST(CommandValidation, MoveToOutOfMapReturnsInvalidArgument) {
-	GTEST_SKIP() << "requires AIFloat3::maxxpos/maxzpos initialization from "
-	             << "CTerrainData; mock the terrain-manager construction in "
-	             << "the integration harness";
+TEST(CommandValidator_WithoutAi, NoPartialAcceptOnValidationFailure) {
+	// Validator is pure (stateless) — the no-partial-accept guarantee
+	// is structurally enforced: Validate does not enqueue. This test
+	// documents the contract by exercising the API: a failing batch
+	// returns ok=false with NO mutation visible to the caller.
+	CommandValidator v(/*ai=*/nullptr);
+	CommandBatch batch;
+	batch.set_target_unit_id(42);
+	batch.add_commands()->mutable_move_unit()->set_unit_id(42);
+
+	auto r1 = v.ValidateBatch(batch);
+	auto r2 = v.ValidateBatch(batch);
+	EXPECT_FALSE(r1.ok);
+	EXPECT_FALSE(r2.ok);
+	EXPECT_EQ(r1.error, r2.error)
+		<< "validator must be idempotent / stateless (no side effects)";
 }
 
-TEST(CommandValidation, ValidCommandReturnsOk) {
-	GTEST_SKIP() << "requires mock CCircuitAI harness";
+TEST(CommandValidator_PositionInMap, CoveredByHeadless) {
+	GTEST_SKIP() << "Map-extents path requires AIFloat3::maxxpos/maxzpos "
+	                "populated by a real CTerrainData init — covered by "
+	                "tests/headless/us2-ai-coexist.sh against spring-headless.";
+}
+
+TEST(CommandValidator_BuildDefConstructibility, CoveredByHeadless) {
+	GTEST_SKIP() << "build.def_id check routes through CCircuitAI::"
+	                "GetCircuitDefSafe; covered end-to-end by "
+	                "tests/headless/us2-ai-coexist.sh.";
 }
 
 }  // namespace

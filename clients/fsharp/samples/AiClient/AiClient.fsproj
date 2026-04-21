@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
     <RootNamespace>HighBar.Samples.AiClient</RootNamespace>
-    <AssemblyName>hb-ai</AssemblyName>
+    <AssemblyName>hb-ai-client</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

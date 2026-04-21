@@ -1,4 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!--
+  HighBarV3 — F# latency microbench (T065).
+
+  Measures p99 round-trip UnitDamaged engine event → F# OnEvent
+  callback. Gates Constitution V budgets (500µs UDS; TCP gated in
+  US4). Runs under `dotnet run` against a live gateway; without one
+  it prints "skipped" and exits 77 (same skip convention as the
+  GoogleTest harness and headless scripts).
+-->
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
@@ -7,7 +16,7 @@
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
     <RootNamespace>HighBar.Bench.Latency</RootNamespace>
-    <AssemblyName>hb-latency</AssemblyName>
+    <AssemblyName>hb-latency-bench</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

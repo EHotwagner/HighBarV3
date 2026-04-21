@@ -131,16 +131,18 @@ remain active and the gateway is additive (Constitution IV).
 ```bash
 cd clients/fsharp
 dotnet run --project samples/Observer -- \
-    --endpoint unix:/run/user/1000/highbar-<gameid>.sock
+    --transport uds \
+    --uds-path /run/user/1000/highbar-<gameid>.sock
 ```
 
 Expected output within ~2 seconds (SC-001):
 
 ```
-handshake ok schema=1.0.0 session=<uuid>
-snapshot seq=1 frame=N own_units=M visible_enemies=K
-delta    seq=2 frame=N+1 events=…
-delta    seq=3 frame=N+2 events=…
+connected  session=<uuid>  schema=1.0.0  frame=N
+static_map cells=<W>x<H> metal_spots=<K>
+seq=1 frame=N SNAPSHOT own=<M> enemies=<K>
+seq=2 frame=N+1 DELTA events=<…>
+seq=3 frame=N+2 DELTA events=<…>
 …
 ```
 
@@ -153,10 +155,12 @@ interceptor is over-enforcing — that's a bug, not a setup mistake.
 ## 6. Connect the F# AI client and submit a MoveTo
 
 ```bash
-dotnet run --project samples/AiClient -- \
-    --endpoint unix:/run/user/1000/highbar-<gameid>.sock \
+dotnet run --project clients/fsharp/samples/AiClient -- \
+    --transport uds \
+    --uds-path /run/user/1000/highbar-<gameid>.sock \
     --token-file ~/.spring/write/highbar.token \
-    --target-unit <unit-id-from-observer-log>
+    --target-unit <unit-id-from-observer-log> \
+    --move-to 1024,0,1024
 ```
 
 Expected behavior (User Story 2):
@@ -170,10 +174,19 @@ Expected behavior (User Story 2):
 4. Within one game frame the unit begins moving — visible in the
    observer stream as an `EnemyEnterLOS` or positional update delta.
 
-Measurement: run the latency microbench
-(`dotnet run --project bench/Latency`) to confirm p99 round-trip
+Measurement: run the latency microbench to confirm p99 round-trip
 (`UnitDamaged` → `OnEvent`) is under the Constitution V budget:
 500µs UDS, 1.5ms loopback TCP.
+
+```bash
+dotnet run --project clients/fsharp/bench/Latency -c Release -- \
+    --transport uds \
+    --uds-path /run/user/1000/highbar-<gameid>.sock \
+    --duration-sec 30
+```
+
+Or use the shell harness: `bash tests/bench/latency-uds.sh` (exits 77
+when the gateway isn't reachable).
 
 ---
 
@@ -181,9 +194,19 @@ Measurement: run the latency microbench
 
 ```bash
 cd clients/python
-pip install -e .
+python -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+
+# Regenerate the proto stubs (needed after any proto change).
+python -m grpc_tools.protoc \
+    -I../../proto \
+    --python_out=highbar_client \
+    --grpc_python_out=highbar_client \
+    ../../proto/highbar/*.proto
+
 python -m highbar_client.samples.observer \
-    --endpoint unix:/run/user/1000/highbar-<gameid>.sock
+    --transport uds \
+    --uds-path /run/user/1000/highbar-<gameid>.sock
 ```
 
 With the F# observer still connected, both clients must see the
@@ -199,8 +222,9 @@ Start the F# observer, let it run for 30 seconds, kill it. Restart
 with `--resume-from-seq <last-seen>`:
 
 ```bash
-dotnet run --project samples/Observer -- \
-    --endpoint unix:/run/user/1000/highbar-<gameid>.sock \
+dotnet run --project clients/fsharp/samples/Observer -- \
+    --transport uds \
+    --uds-path /run/user/1000/highbar-<gameid>.sock \
     --resume-from-seq <N>
 ```
 
