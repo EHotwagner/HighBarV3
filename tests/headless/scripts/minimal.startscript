@@ -1,0 +1,86 @@
+[GAME]
+{
+	GameType=Beyond All Reason test-29979-d574ddf;
+	MapName=Avalanche 3.4;
+	ModHash=1;
+	MapHash=1;
+	IsHost=1;
+	HostIP=127.0.0.1;
+	HostPort=0;
+	MyPlayerName=HighBarV3Test;
+	NoHelperAIs=0;
+	StartPosType=0;
+	GameStartDelay=0;
+	FixedRNGSeed=1;
+
+	[MODOPTIONS]
+	{
+		GameMode=3;
+		teamfaction_0=armada;
+		teamfaction_1=cortex;
+		MinSpeed=100;
+		MaxSpeed=100;
+	}
+
+	[MAPOPTIONS]
+	{
+	}
+
+	[PLAYER0]
+	{
+		Name=HighBarV3Test;
+		Team=0;
+		IsFromDemo=0;
+		Spectator=1;
+	}
+
+	[AI0]
+	{
+		Name=HighBarV3-team0;
+		Team=0;
+		ShortName=BARb;
+		Version=stable;
+		Host=0;
+	}
+
+	[AI1]
+	{
+		Name=HighBarV3-team1;
+		Team=1;
+		ShortName=BARb;
+		Version=stable;
+		Host=0;
+	}
+
+	[TEAM0]
+	{
+		TeamLeader=0;
+		AllyTeam=0;
+		Side=Armada;
+		StartPosX=1536;
+		StartPosZ=4096;
+	}
+
+	[TEAM1]
+	{
+		TeamLeader=0;
+		AllyTeam=1;
+		Side=Cortex;
+		StartPosX=4608;
+		StartPosZ=4096;
+	}
+
+	[ALLYTEAM0]
+	{
+		NumAllies=0;
+	}
+
+	[ALLYTEAM1]
+	{
+		NumAllies=0;
+	}
+
+	NumTeams=2;
+	NumAllyTeams=2;
+	NumPlayers=1;
+}

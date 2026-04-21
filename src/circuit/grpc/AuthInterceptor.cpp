@@ -3,7 +3,7 @@
 // HighBarV3 — AuthInterceptor impl (T022).
 
 #include "grpc/AuthInterceptor.h"
-#include "grpc/Log.h"
+#include "grpc/GrpcLog.h"
 
 #include <array>
 #include <grpcpp/grpcpp.h>

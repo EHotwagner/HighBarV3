@@ -38,3 +38,16 @@ compile_commands.json
 **/obj/
 *.user
 
+# Python codegen + caches under clients/python (T070).
+# Per T036 the regenerated stubs under clients/python/highbar_client/highbar/
+# ARE committed to match the repo's existing convention; only egg-info,
+# bytecode, and .pyc files stay ignored.
+clients/python/highbar_client.egg-info/
+clients/python/**/__pycache__/
+*.egg-info/
+__pycache__/
+
+# vcpkg manifest install dir + downloaded archives
+vcpkg_installed/
+.vcpkg-root
+

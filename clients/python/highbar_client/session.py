@@ -18,7 +18,7 @@ from typing import Optional
 import grpc
 
 from . import SCHEMA_VERSION
-from .highbar.v1 import service_pb2, service_pb2_grpc, state_pb2  # type: ignore
+from .highbar import service_pb2, service_pb2_grpc, state_pb2  # type: ignore
 
 TOKEN_HEADER = "x-highbar-ai-token"
 

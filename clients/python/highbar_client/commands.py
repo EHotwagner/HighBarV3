@@ -14,7 +14,7 @@ from typing import Optional
 
 import grpc
 
-from .highbar.v1 import (  # type: ignore
+from .highbar import (  # type: ignore
     commands_pb2,
     common_pb2,
     service_pb2,
@@ -184,8 +184,8 @@ def batch(
     batch_seq: int,
     orders: Iterable[Order],
     opts: OptionBits = OptionBits.NONE,
-) -> service_pb2.CommandBatch:
-    b = service_pb2.CommandBatch(batch_seq=batch_seq, target_unit_id=target_unit)
+) -> commands_pb2.CommandBatch:
+    b = commands_pb2.CommandBatch(batch_seq=batch_seq, target_unit_id=target_unit)
     for ord_ in orders:
         b.commands.append(_to_proto(ord_, target_unit, opts))
     return b
@@ -194,12 +194,12 @@ def batch(
 def submit_one(
     channel_: grpc.Channel,
     token: str,
-    batch_: service_pb2.CommandBatch,
+    batch_: commands_pb2.CommandBatch,
     timeout: Optional[float] = None,
 ) -> service_pb2.CommandAck:
     """One-shot SubmitCommands: send a single batch and await the ack."""
 
-    def _batches() -> Iterator[service_pb2.CommandBatch]:
+    def _batches() -> Iterator[commands_pb2.CommandBatch]:
         yield batch_
 
     stub = service_pb2_grpc.HighBarProxyStub(channel_)

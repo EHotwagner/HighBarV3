@@ -293,9 +293,19 @@ int CCircuitAI::HandleGameEvent(int topic, const void* data)
 			TRACY_TOPIC_UNIT("EVENT_UNIT_DAMAGED", UnitDamaged, evt->unit);
 
 			CCircuitUnit* unit = GetTeamUnit(evt->unit);
-			ret = (unit != nullptr)
-					? this->UnitDamaged(unit, evt->attacker, evt->weaponDefId, AIFloat3(evt->dir_posF3))
-					: ERROR_UNIT_DAMAGED;
+			if (unit != nullptr) {
+				// T061 — route the richer event (damage + dir + weapon + paralyzer)
+				// through the gateway BEFORE the IModule fanout so attacker/dir
+				// are authoritative if anything downstream mutates state.
+				if (grpcGateway != nullptr) {
+					grpcGateway->OnUnitDamagedFull(
+						unit, GetEnemyInfo(evt->attacker), evt->damage,
+						AIFloat3(evt->dir_posF3), evt->weaponDefId, evt->paralyzer);
+				}
+				ret = this->UnitDamaged(unit, evt->attacker, evt->weaponDefId, AIFloat3(evt->dir_posF3));
+			} else {
+				ret = ERROR_UNIT_DAMAGED;
+			}
 		} break;
 		case EVENT_UNIT_DESTROYED: {
 			struct SUnitDestroyedEvent* evt = (struct SUnitDestroyedEvent*)data;
@@ -661,7 +671,8 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	// happens via modules.clear() in Release(). Always registered so
 	// Phase-2-only operation (FR-017: survive with no external client)
 	// still has a live gateway.
-	modules.push_back(std::make_shared<CGrpcGatewayModule>(this));
+	grpcGateway = std::make_shared<CGrpcGatewayModule>(this);
+	modules.push_back(grpcGateway);
 
 	terrainManager->Init();
 	economyManager->InitEconomyScores();

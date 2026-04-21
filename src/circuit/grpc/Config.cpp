@@ -3,7 +3,7 @@
 // HighBarV3 — TransportEndpoint config parser (T019, T020).
 
 #include "grpc/Config.h"
-#include "grpc/Log.h"
+#include "grpc/GrpcLog.h"
 
 #include "CircuitAI.h"
 #include "util/FileSystem.h"

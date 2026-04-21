@@ -79,6 +79,13 @@ if    (BUILD_Cpp_AIWRAPPER)
 		set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-Bsymbolic")
 	endif ()
 
+	# T005: hard-fail when wire deps are missing (FR-002). The earlier
+	# WARNING fallback let the gateway module build as a stub, producing
+	# an .so that loaded but served no traffic — the exact silent-skip
+	# failure mode 002 exists to close.
+	option(HIGHBAR_REQUIRE_WIRE_DEPS
+		"Fail the build if Protobuf/gRPC are not found via vcpkg" ON)
+
 	# gRPC + Protobuf resolved via vcpkg manifest mode (see vcpkg.json).
 	# Consumer should pass -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake.
 	find_package(Protobuf CONFIG QUIET)
@@ -86,6 +93,20 @@ if    (BUILD_Cpp_AIWRAPPER)
 	if (Protobuf_FOUND AND gRPC_FOUND)
 		set(HIGHBAR_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
 		file(MAKE_DIRECTORY "${HIGHBAR_PROTO_GEN_DIR}/highbar")
+		# Pre-generated stubs live under HighBarV3/build/gen (emitted by
+		# `cd proto && buf generate`, per BUILD.md step 3). When this
+		# CMakeLists is included from the engine tree (AI-only build),
+		# CMAKE_CURRENT_BINARY_DIR points under the engine's build tree
+		# instead — copy the stubs in so the glob below resolves.
+		set(HIGHBAR_PROTO_SRC_STUBS "${CMAKE_CURRENT_SOURCE_DIR}/build/gen/highbar")
+		if (EXISTS "${HIGHBAR_PROTO_SRC_STUBS}")
+			file(GLOB _src_stubs "${HIGHBAR_PROTO_SRC_STUBS}/*.pb.cc"
+			                     "${HIGHBAR_PROTO_SRC_STUBS}/*.pb.h"
+			                     "${HIGHBAR_PROTO_SRC_STUBS}/*.grpc.pb.cc"
+			                     "${HIGHBAR_PROTO_SRC_STUBS}/*.grpc.pb.h")
+			file(COPY ${_src_stubs}
+			     DESTINATION "${HIGHBAR_PROTO_GEN_DIR}/highbar")
+		endif ()
 		file(GLOB HIGHBAR_PROTO_GEN_SRCS CONFIGURE_DEPENDS
 			"${HIGHBAR_PROTO_GEN_DIR}/highbar/*.pb.cc"
 			"${HIGHBAR_PROTO_GEN_DIR}/highbar/*.grpc.pb.cc"
@@ -104,15 +125,106 @@ if    (BUILD_Cpp_AIWRAPPER)
 			)
 		endif ()
 		list(APPEND additionalLibraries highbar_proto)
+	elseif (HIGHBAR_REQUIRE_WIRE_DEPS)
+		message(FATAL_ERROR
+			"HighBarV3: gRPC/Protobuf not found via vcpkg. The gateway "
+			"module MUST NOT build without wire deps (FR-002). Pass "
+			"-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake, "
+			"or -DHIGHBAR_REQUIRE_WIRE_DEPS=OFF to intentionally produce "
+			"a no-gateway .so (local development only).")
 	else ()
 		message(WARNING
-			"HighBarV3: gRPC/Protobuf not found via vcpkg — the gateway module will "
-			"build without its wire dependencies. Pass "
-			"-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake to enable.")
+			"HighBarV3: gRPC/Protobuf not found via vcpkg — gateway module "
+			"building without wire dependencies. HIGHBAR_REQUIRE_WIRE_DEPS=OFF.")
 	endif ()
+
+	# T006: emit SpringHeadlessPin.h from data/config/spring-headless.pin
+	# so GrpcGatewayModule.cpp's startup banner logs the engine pin
+	# (release_id + sha256). Pin-file changes force a reconfigure.
+	set(HIGHBAR_PIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/data/config/spring-headless.pin")
+	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${HIGHBAR_PIN_FILE}")
+	file(READ "${HIGHBAR_PIN_FILE}" _highbar_pin_content)
+	string(REGEX MATCH "release_id[ \t]*=[ \t]*\"([^\"]+)\"" _ "${_highbar_pin_content}")
+	set(HIGHBAR_ENGINE_RELEASE_ID "${CMAKE_MATCH_1}")
+	string(REGEX MATCH "sha256[ \t]*=[ \t]*\"([^\"]+)\"" _ "${_highbar_pin_content}")
+	set(HIGHBAR_ENGINE_SHA256 "${CMAKE_MATCH_1}")
+	if (NOT HIGHBAR_ENGINE_RELEASE_ID OR NOT HIGHBAR_ENGINE_SHA256)
+		message(FATAL_ERROR
+			"HighBarV3: failed to parse release_id/sha256 from ${HIGHBAR_PIN_FILE}")
+	endif ()
+	set(HIGHBAR_PIN_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
+	file(MAKE_DIRECTORY "${HIGHBAR_PIN_GEN_DIR}")
+	file(CONFIGURE
+		OUTPUT "${HIGHBAR_PIN_GEN_DIR}/SpringHeadlessPin.h"
+		CONTENT
+[[// Generated from data/config/spring-headless.pin — do not edit.
+#pragma once
+namespace circuit::grpc {
+constexpr const char* kEngineReleaseId = "@HIGHBAR_ENGINE_RELEASE_ID@";
+constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
+}  // namespace circuit::grpc
+]]
+		@ONLY)
+	include_directories(BEFORE "${HIGHBAR_PIN_GEN_DIR}")
 	# === end V3 additions ===
 
 	configure_native_skirmish_ai(mySourceDirRel additionalSources additionalCompileFlags additionalLibraries)
+
+	# T007: unit-test wiring (FR-015). Register every tests/unit/*_test.cc
+	# as a ctest target. GTest is optional: if not found, the tests don't
+	# build — but ctest still enumerates zero tests, which FR-016's CI
+	# job upgrades to failure.
+	option(HIGHBAR_BUILD_TESTS "Build HighBarV3 unit tests" ON)
+	if (HIGHBAR_BUILD_TESTS AND Protobuf_FOUND AND gRPC_FOUND)
+		enable_testing()
+		find_package(GTest CONFIG QUIET)
+		if (NOT GTest_FOUND)
+			find_package(GTest QUIET)  # fall back to FindGTest module
+		endif ()
+		if (GTest_FOUND OR GTEST_FOUND)
+			file(GLOB HIGHBAR_UNIT_TEST_SRCS CONFIGURE_DEPENDS
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/*_test.cc")
+			foreach (_test_src IN LISTS HIGHBAR_UNIT_TEST_SRCS)
+				get_filename_component(_test_name "${_test_src}" NAME_WE)
+				add_executable("${_test_name}" "${_test_src}")
+				target_include_directories("${_test_name}" PRIVATE
+					"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit"
+					"${HIGHBAR_PROTO_GEN_DIR}"
+					"${HIGHBAR_PIN_GEN_DIR}")
+				if (TARGET GTest::gtest_main)
+					target_link_libraries("${_test_name}" PRIVATE
+						GTest::gtest GTest::gtest_main)
+				else ()
+					target_link_libraries("${_test_name}" PRIVATE
+						${GTEST_BOTH_LIBRARIES})
+				endif ()
+				target_link_libraries("${_test_name}" PRIVATE
+					highbar_proto
+					gRPC::grpc++
+					protobuf::libprotobuf)
+				add_test(NAME "${_test_name}" COMMAND "${_test_name}")
+			endforeach ()
+		else ()
+			message(WARNING
+				"HighBarV3: GTest not found; unit tests will not be built. "
+				"Install via vcpkg (gtest) or disable with -DHIGHBAR_BUILD_TESTS=OFF.")
+		endif ()
+	endif ()
+
+	# T008: aicommand-arm-coverage build-time check (FR-013). The helper
+	# script (tests/headless/_gen-arm-coverage.sh) emits a CSV per
+	# contracts/aicommand-coverage-report.md; the target returns
+	# non-zero (failing the build) when any arm is unwired or uncovered.
+	set(HIGHBAR_COVERAGE_CSV "${CMAKE_CURRENT_BINARY_DIR}/reports/aicommand-arm-coverage.csv")
+	add_custom_target(aicommand-arm-coverage
+		COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless/_gen-arm-coverage.sh"
+			--repo-root "${CMAKE_CURRENT_SOURCE_DIR}"
+			--output    "${HIGHBAR_COVERAGE_CSV}"
+			--strict
+		BYPRODUCTS "${HIGHBAR_COVERAGE_CSV}"
+		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+		COMMENT "Generating AICommand arm-coverage CSV + strict check (FR-013)"
+		VERBATIM)
 else  (BUILD_Cpp_AIWRAPPER)
 	message ("warning: (New) C++ Circuit AI will not be built! (missing Cpp Wrapper)")
 endif (BUILD_Cpp_AIWRAPPER)

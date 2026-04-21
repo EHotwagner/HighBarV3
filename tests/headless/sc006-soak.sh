@@ -14,6 +14,11 @@
 
 set -euo pipefail
 
+# T027 — FR-024 fault-aware exit policy. Source the helper unconditionally;
+# `fault_status` returns 0=healthy, 2=disabled, 77=indeterminate.
+# Acceptance scripts MUST upgrade `disabled` to exit 1, never 77.
+source "$(dirname "$0")/_fault-assert.sh"
+
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 plugin_lib="${repo_root}/build/libSkirmishAI.so"
 fs_observer="${repo_root}/clients/fsharp/samples/Observer/bin/Debug/net8.0/hb-observer"

@@ -33,6 +33,14 @@ message StateUpdate {
     StateDelta    delta    = 4;
     KeepAlive     keepalive = 5;
   }
+
+  // CLOCK_MONOTONIC nanoseconds at the moment the plugin called
+  // Write() on its outgoing PushState stream. Set to 0 by clients
+  // that republish a StateUpdate (e.g. the coordinator's external
+  // fan-out, which forwards unchanged). Used by the latency bench
+  // for Constitution V measurement. Readers that don't care may
+  // ignore.
+  uint64 send_monotonic_ns = 6;
 }
 
 message KeepAlive {

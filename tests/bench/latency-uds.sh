@@ -1,71 +1,113 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
+# arm-covered: (none — observer-only; no SubmitCommands issued)
 #
-# HighBarV3 — UDS latency gate (T072).
+# T062 — UDS latency bench. Constitution V gate: p99 ≤ 500µs on
+# a round trip from the plugin's PushState send timestamp to the
+# external client's receipt via the coordinator.
 #
-# Constitution V gate: p99 round-trip UnitDamaged → F# OnEvent must
-# stay ≤ 500µs on UDS over a 30-second sample window (SC-002).
+# Architecture (matches the live system after the client-mode flip):
 #
-# Drives the F# bench binary built from clients/fsharp/bench/Latency/.
+#     plugin  --PushState (UDS)-->  coordinator  --StreamState (UDS)-->  bench_latency.py
+#
+# StateUpdate.send_monotonic_ns is stamped in
+# CoordinatorClient::PushStateUpdate; the coordinator forwards
+# StateUpdates unchanged; bench_latency.py computes (recv_ns - send_ns)
+# per sample and reports p50/p99/max.
+#
 # Exits:
-#   0  — bench ran and p99 within budget.
-#   1  — bench ran but p99 exceeded budget (Constitution V fail).
+#   0  — bench ran and p99 within 500µs.
+#   1  — bench ran but p99 exceeded 500µs (Constitution V breach).
 #   77 — prerequisites missing (skip).
 
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-plugin_lib="${repo_root}/build/libSkirmishAI.so"
-bench_bin="${repo_root}/clients/fsharp/bench/Latency/bin/Release/net8.0/hb-latency-bench"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+HEADLESS_DIR="$REPO_ROOT/tests/headless"
+EXAMPLES_DIR="$REPO_ROOT/specs/002-live-headless-e2e/examples"
+BENCH="$REPO_ROOT/tests/bench/bench_latency.py"
+REPORTS_DIR="$REPO_ROOT/build/reports"
+REPORT_FILE="$REPORTS_DIR/latency-uds-p99.txt"
 
-if [[ ! -x "${SPRING_HEADLESS:-}" ]]; then
-    echo "latency-uds: SPRING_HEADLESS not set/executable — skip." >&2
+# ---- prereqs -----------------------------------------------------------
+if [[ -z "${SPRING_HEADLESS:-}" ]]; then
+    echo "latency-uds: SPRING_HEADLESS not set — skip" >&2
     exit 77
 fi
-if [[ ! -f "${plugin_lib}" ]]; then
-    echo "latency-uds: plugin .so not built — skip." >&2
+[[ -x "$BENCH" ]] || chmod +x "$BENCH"
+[[ -f "$EXAMPLES_DIR/coordinator.py" ]] || {
+    echo "latency-uds: coordinator example missing — skip" >&2
     exit 77
-fi
-if [[ ! -x "${bench_bin}" ]]; then
-    echo "latency-uds: F# bench not built at ${bench_bin} — skip." >&2
-    echo "  cd clients/fsharp/bench/Latency && dotnet build -c Release" >&2
-    exit 77
-fi
+}
 
-: "${XDG_RUNTIME_DIR:=/tmp}"
-gameid="${HIGHBAR_BENCH_GAMEID:-bench-uds}"
-uds_path="${XDG_RUNTIME_DIR}/highbar-${gameid}.sock"
-log_dir="${repo_root}/build/tmp/latency-uds"
-mkdir -p "${log_dir}"
-engine_log="${log_dir}/engine.log"
-bench_log="${log_dir}/bench.log"
-rm -f "${uds_path}" "${engine_log}" "${bench_log}"
+RUN_DIR="${HIGHBAR_BENCH_RUN_DIR:-$(mktemp -d -t hb-latency-uds.XXXXXX)}"
+mkdir -p "$RUN_DIR" "$REPORTS_DIR"
+COORD_SOCK="$RUN_DIR/hb-coord.sock"
+COORD_LOG="$RUN_DIR/coord.log"
+BENCH_LOG="$RUN_DIR/bench.log"
+ENGINE_LOG="$RUN_DIR/highbar-launch.log"
+ENGINE_PID_FILE="$RUN_DIR/highbar-launch.pid"
+START_SCRIPT="$HEADLESS_DIR/scripts/minimal.startscript"
 
-"${SPRING_HEADLESS}" --ai HighBarV3 --config bench-uds.sdd \
-    > "${engine_log}" 2>&1 &
-engine_pid=$!
-cleanup() { kill "${engine_pid}" 2>/dev/null || true; }
+cleanup() {
+    [[ -f "$ENGINE_PID_FILE" ]] && kill -TERM "$(cat "$ENGINE_PID_FILE")" 2>/dev/null
+    [[ -n "${COORD_PID:-}" ]] && kill -TERM "$COORD_PID" 2>/dev/null
+}
 trap cleanup EXIT
 
-for i in {1..100}; do
-    [[ -S "${uds_path}" ]] && break
-    sleep 0.1
+# ---- coordinator -------------------------------------------------------
+rm -f "$COORD_SOCK"
+python3 "$EXAMPLES_DIR/coordinator.py" \
+    --endpoint "unix:$COORD_SOCK" --id bench-uds > "$COORD_LOG" 2>&1 &
+COORD_PID=$!
+for _ in $(seq 1 20); do
+    [[ -S "$COORD_SOCK" ]] && break
+    sleep 0.2
 done
-[[ -S "${uds_path}" ]] || { echo "latency-uds: UDS not bound"; exit 1; }
+[[ -S "$COORD_SOCK" ]] || {
+    echo "latency-uds: coordinator failed to bind — skip" >&2
+    cat "$COORD_LOG" >&2
+    exit 77
+}
 
-# The bench exits 0 within budget, 1 on budget breach, 77 on unreachable.
+# ---- spring-headless ---------------------------------------------------
+LAUNCH_OUT=$("$HEADLESS_DIR/_launch.sh" \
+    --start-script "$START_SCRIPT" \
+    --coordinator "unix:$COORD_SOCK" \
+    --runtime-dir "$RUN_DIR" 2>&1) || LAUNCH_RC=$?
+LAUNCH_RC=${LAUNCH_RC:-0}
+if [[ $LAUNCH_RC -eq 77 ]]; then
+    echo "latency-uds: _launch.sh missing prereq — skip" >&2
+    echo "$LAUNCH_OUT" >&2
+    exit 77
+elif [[ $LAUNCH_RC -ne 0 ]]; then
+    echo "latency-uds: _launch.sh failed (rc=$LAUNCH_RC) — fail" >&2
+    echo "$LAUNCH_OUT" >&2
+    exit 1
+fi
+
+# Let PushState stream open.
+for _ in $(seq 1 30); do
+    grep -q '\[hb-gateway\] startup' "$ENGINE_LOG" 2>/dev/null && break
+    sleep 1
+done
+
+# ---- bench -------------------------------------------------------------
 set +e
-"${bench_bin}" --transport uds --uds-path "${uds_path}" \
-    --duration-sec 30 --samples 1000 \
-    > "${bench_log}" 2>&1
+python3 "$BENCH" \
+    --transport uds --endpoint "$COORD_SOCK" \
+    --duration-sec "${HIGHBAR_BENCH_DURATION:-30}" \
+    --samples "${HIGHBAR_BENCH_SAMPLES:-1000}" \
+    --budget-us 500 \
+    --output "$REPORT_FILE" \
+    > "$BENCH_LOG" 2>&1
 rc=$?
 set -e
 
-cat "${bench_log}"
-
-case ${rc} in
-    0)  echo "latency-uds: PASS — p99 within 500µs budget" ;;
+cat "$BENCH_LOG"
+case $rc in
+    0)  echo "latency-uds: PASS"; exit 0 ;;
     1)  echo "latency-uds: FAIL — Constitution V breach"; exit 1 ;;
-    77) echo "latency-uds: SKIP — bench reported unreachable"; exit 77 ;;
-    *)  echo "latency-uds: unexpected exit ${rc}"; exit "${rc}" ;;
+    77) echo "latency-uds: SKIP — bench could not produce samples"; exit 77 ;;
+    *)  echo "latency-uds: unexpected exit $rc"; exit "$rc" ;;
 esac

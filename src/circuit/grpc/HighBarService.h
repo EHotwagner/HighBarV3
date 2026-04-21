@@ -18,6 +18,7 @@
 #include "grpc/Config.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <shared_mutex>
 #include <string>
@@ -74,6 +75,24 @@ public:
 	// Wire the US2 command-path handle (T058). `queue` outlives this
 	// service. Until set, SubmitCommands returns UNAVAILABLE.
 	void SetUs2Handles(CommandQueue* queue);
+
+	// T013 — wire a fault sink that the CQ worker and handler paths
+	// call when they catch an exception. The sink is expected to be
+	// thread-safe (CGrpcGatewayModule::RequestDisable is). Pass an
+	// empty std::function to disable; runtime-swappable for tests.
+	using FaultSink = std::function<void(const std::string& subsystem,
+	                                      const std::string& reason,
+	                                      const std::string& detail)>;
+	void SetFaultSink(FaultSink sink) { fault_sink_ = std::move(sink); }
+
+	// T011 side effect — close every active subscriber stream with
+	// UNAVAILABLE so clients see the disabled state promptly. Minimal
+	// impl: triggers server shutdown asynchronously (Shutdown's
+	// blocking wait runs in the engine thread only if the deadline is
+	// short). Full trailer metadata population per
+	// contracts/gateway-fault.md §3 is a follow-up.
+	void FaultCloseAllStreams(const std::string& subsystem,
+	                          const std::string& reason);
 
 	// Framesince-bind counter is bumped by CGrpcGatewayModule's
 	// frame-update hook (T026). The service reads it for
@@ -134,6 +153,9 @@ private:
 	std::unique_ptr<::grpc::Server> server_;
 	std::vector<std::thread> cq_workers_;
 	std::atomic<bool> shutting_down_{false};
+
+	FaultSink fault_sink_;
+	std::atomic<bool> faulted_{false};
 
 	// Session tracking (skeletal — filled in by US1/US2).
 	std::atomic<std::uint32_t> observer_count_{0};

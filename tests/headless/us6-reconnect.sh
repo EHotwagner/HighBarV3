@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
+# arm-covered: (none — 001-era skip stub; no arms dispatched)
 #
 # HighBarV3 — US6 reconnect acceptance (T100).
 #
@@ -15,6 +16,12 @@
 # drop/dup/oor over a 30-minute session) at the one-minute scale.
 
 set -euo pipefail
+
+# T030/T031 — FR-024 fault-aware exit policy. Source the helper
+# unconditionally; `fault_status` returns 0=healthy, 2=disabled,
+# 77=indeterminate. Acceptance scripts MUST upgrade `disabled` to
+# exit 1, never 77.
+source "$(dirname "$0")/_fault-assert.sh"
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 plugin_lib="${repo_root}/build/libSkirmishAI.so"

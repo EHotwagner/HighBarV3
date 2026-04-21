@@ -36,7 +36,10 @@ public:
 
 	CCircuitAI* GetCircuit() const { return circuit; }
 
-	bool InitScript();
+	// V3 — made virtual so CGrpcGatewayModule can bypass AngelScript
+	// (gateway has no script; without this override InitScript would
+	// dereference a null `script` member and deadlock CCircuitAI::Init).
+	virtual bool InitScript();
 
 	virtual int UnitCreated(CCircuitUnit* unit, CCircuitUnit* builder);
 	virtual int UnitFinished(CCircuitUnit* unit);

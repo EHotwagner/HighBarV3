@@ -19,6 +19,8 @@
 #include "unit/enemy/EnemyInfo.h"
 #include "unit/enemy/EnemyManager.h"
 
+#include "Unit.h"  // springai::Unit — for GetHealth() on the wrapper
+
 namespace circuit::grpc {
 
 namespace {
@@ -67,14 +69,18 @@ void SnapshotBuilder::FillOwnUnits(::highbar::v1::StateSnapshot* out) const {
 		ou->set_def_id(cdef != nullptr
 		               ? static_cast<std::uint32_t>(cdef->GetId()) : 0);
 		SetVec3(ou->mutable_position(), unit->GetPos(ai_->GetLastFrame()));
-		ou->set_health(unit->GetHealth());
-		// max_health: the CircuitUnit data struct exposes it; if the
-		// struct-level accessor name differs we route through the
-		// CircuitDef's max health as a fallback. Plan §data-model §1
-		// validation requires health <= max_health, so never 0.
+		// CCircuitUnit doesn't expose GetHealth() directly — route through
+		// the springai::Unit wrapper (ICoreUnit::GetUnit()). Guard on null
+		// in case the wrapper isn't bound (dying unit race).
+		springai::Unit* su = unit->GetUnit();
+		const float health = (su != nullptr) ? su->GetHealth() : 0.0f;
+		ou->set_health(health);
+		// max_health: prefer CircuitDef's GetMaxHealth on the springai def
+		// (wrapper-side). Plan §data-model §1 requires health <= max_health,
+		// so never 0.
 		const float max_hp = cdef != nullptr && cdef->GetDef() != nullptr
-		                     ? cdef->GetDef()->GetHealth() : unit->GetHealth();
-		ou->set_max_health(max_hp > 0.0f ? max_hp : unit->GetHealth());
+		                     ? cdef->GetDef()->GetHealth() : health;
+		ou->set_max_health(max_hp > 0.0f ? max_hp : health);
 		// under_construction / build_progress: CCircuitUnit doesn't
 		// expose a single "is under construction" predicate in a
 		// verified way from the header scan; leave false + 0.0 at
@@ -89,26 +95,29 @@ void SnapshotBuilder::FillOwnUnits(::highbar::v1::StateSnapshot* out) const {
 void SnapshotBuilder::FillEnemies(::highbar::v1::StateSnapshot* out) const {
 	const auto* em = ai_->GetEnemyManager();
 	if (em == nullptr) return;
-	for (const auto& [enemy_id, info] : em->GetEnemyInfos()) {
-		if (info == nullptr) continue;
-		const auto* cdef = info->GetCircuitDef();
-		if (info->IsInLOS()) {
-			auto* eu = out->add_visible_enemies();
-			eu->set_unit_id(static_cast<std::uint32_t>(enemy_id));
-			eu->set_def_id(cdef != nullptr
-			               ? static_cast<std::uint32_t>(cdef->GetId()) : 0);
-			SetVec3(eu->mutable_position(), info->GetPos());
-			eu->set_health(info->GetHealth());
-			eu->set_max_health(cdef != nullptr && cdef->GetDef() != nullptr
-			                   ? cdef->GetDef()->GetHealth()
-			                   : info->GetHealth());
-			eu->set_los_quality(::highbar::v1::LosQuality::LOS_VISUAL);
+	// CEnemyManager doesn't expose a "GetEnemyInfos" map in upstream BARb.
+	// The concrete container is the `enemyUnits` map of CEnemyUnit* — we
+	// added GetEnemyUnits() as a public read-only accessor on the fork.
+	for (const auto& [enemy_id, eu] : em->GetEnemyUnits()) {
+		if (eu == nullptr) continue;
+		const auto* cdef = eu->GetCircuitDef();
+		if (eu->IsInLOS()) {
+			auto* out_e = out->add_visible_enemies();
+			out_e->set_unit_id(static_cast<std::uint32_t>(enemy_id));
+			out_e->set_def_id(cdef != nullptr
+			                  ? static_cast<std::uint32_t>(cdef->GetId()) : 0);
+			SetVec3(out_e->mutable_position(), eu->GetPos());
+			out_e->set_health(eu->GetHealth());
+			out_e->set_max_health(cdef != nullptr && cdef->GetDef() != nullptr
+			                      ? cdef->GetDef()->GetHealth()
+			                      : eu->GetHealth());
+			out_e->set_los_quality(::highbar::v1::LosQuality::LOS_VISUAL);
 		} else {
-			// Radar blip: position is degraded per CEnemyInfo's
+			// Radar blip: position is degraded per CEnemyUnit's
 			// internal jitter (data-model §1 validation rule).
 			auto* blip = out->add_radar_enemies();
 			blip->set_blip_id(static_cast<std::uint32_t>(enemy_id));
-			SetVec3(blip->mutable_position(), info->GetPos());
+			SetVec3(blip->mutable_position(), eu->GetPos());
 			blip->set_suspected_def_id(
 				cdef != nullptr ? static_cast<std::uint32_t>(cdef->GetId()) : 0);
 		}

@@ -9,7 +9,7 @@
 #include "grpc/CommandValidator.h"
 #include "grpc/Counters.h"
 #include "grpc/DeltaBus.h"
-#include "grpc/Log.h"
+#include "grpc/GrpcLog.h"
 #include "grpc/RingBuffer.h"
 #include "grpc/SchemaVersion.h"
 #include "grpc/SnapshotBuilder.h"
@@ -831,9 +831,45 @@ void HighBarService::CqWorker() {
 	bool ok = false;
 	while (cq_ && cq_->Next(&tag, &ok)) {
 		auto* cd = static_cast<CallDataBase*>(tag);
-		if (cd != nullptr) {
+		if (cd == nullptr) continue;
+		// T013 — handler fault-capture. Every exception that escapes a
+		// CallData::Proceed is routed to the gateway's fault sink,
+		// which posts a disable request to run on the engine thread.
+		// The worker continues to drain the CQ so in-flight RPCs can
+		// complete cleanly before the server shuts down.
+		try {
 			cd->Proceed(ok);
+		} catch (...) {
+			if (!faulted_.exchange(true, std::memory_order_acq_rel)) {
+				const std::string reason = ReasonCodeFor(std::current_exception());
+				std::string detail;
+				try { std::rethrow_exception(std::current_exception()); }
+				catch (const std::exception& e) { detail = e.what(); }
+				catch (...)                      { detail = "unknown"; }
+				if (fault_sink_) {
+					fault_sink_("handler", reason, detail);
+				} else if (ai_) {
+					LogError(ai_, "CqWorker", detail);
+				}
+			}
 		}
+	}
+}
+
+void HighBarService::FaultCloseAllStreams(const std::string& subsystem,
+                                            const std::string& reason) {
+	// Minimal impl per contracts/gateway-fault.md §3. Triggering
+	// server_->Shutdown with a short deadline causes all pending
+	// streams to close with UNAVAILABLE (the "gateway disabled" message
+	// is carried in the final gRPC status). Per-stream trailer
+	// metadata (highbar-fault-subsystem / highbar-fault-reason) is a
+	// follow-up; subsystem/reason are already logged via LogFault and
+	// persisted in highbar.health for clients that read the file.
+	(void)subsystem; (void)reason;
+	if (server_ && !shutting_down_.exchange(true)) {
+		server_->Shutdown(std::chrono::system_clock::now()
+		                  + std::chrono::milliseconds(250));
+		if (cq_) cq_->Shutdown();
 	}
 }
 

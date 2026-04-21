@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
+# arm-covered: (none — 001-era skip stub; no arms dispatched)
 #
 # HighBarV3 — US1 framerate budget (T054).
 #

@@ -58,6 +58,7 @@ class CBuilderManager;
 class CFactoryManager;
 class CEconomyManager;
 class CMilitaryManager;
+class CGrpcGatewayModule;
 class CScriptManager;
 class CInitScript;
 class CScheduler;
@@ -358,6 +359,12 @@ private:
 	std::shared_ptr<CFactoryManager> factoryManager;
 	std::shared_ptr<CEconomyManager> economyManager;
 	std::shared_ptr<CMilitaryManager> militaryManager;
+	// V3 — typed handle to the gateway module. Enables the one surgical
+	// edit in EVENT_UNIT_DAMAGED that routes the engine's richer event
+	// payload (damage + paralyzer + direction + weaponDefId) through
+	// OnUnitDamagedFull (T058–T061), instead of losing those fields in
+	// IModule::UnitDamaged(unit, attacker).
+	std::shared_ptr<CGrpcGatewayModule> grpcGateway;
 	std::vector<std::shared_ptr<IModule>> modules;
 
 	friend class CInitScript;

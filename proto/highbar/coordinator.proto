@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// Client-mode service: the plugin is the gRPC CLIENT, dialing out to a
+// coordinator process that runs the server. Sidesteps the gRPC 1.76
+// EventEngine listener bug inside spring-headless (see
+// specs/002-live-headless-e2e/investigations/hello-rpc-deadline-exceeded.md).
+//
+// Phase A — minimal heartbeat RPC to prove the client-mode wire works.
+// Phase B will add PushState (plugin → coord, client streaming).
+// Phase C will add SessionStream (bidi for commands + state).
+
+syntax = "proto3";
+
+package highbar.v1;
+
+import "highbar/state.proto";
+import "highbar/commands.proto";
+
+// The coordinator exposes this service. The plugin dials out to it
+// from within spring-headless. Multiple observers/AI clients attach to
+// the coordinator, which fans out per match.
+service HighBarCoordinator {
+  // Plugin → coordinator heartbeat. Proves the client-mode wire works
+  // from inside spring. Sent every N frames; coordinator echoes.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Phase B — plugin streams StateUpdate messages to the coordinator.
+  // One stream per plugin instance, opened at gateway startup, kept
+  // alive for the lifetime of the match. First message is a
+  // PushStateInit-bearing StateUpdate? No — we keep it simple: plain
+  // StateUpdate messages per frame, coordinator demuxes by peer.
+  // Terminal PushAck carries the sum of seqs received so the plugin
+  // can log a final reconciliation line.
+  rpc PushState(stream highbar.v1.StateUpdate) returns (PushAck);
+
+  // Phase C — coordinator → plugin command stream. Plugin subscribes
+  // once at startup with CommandChannelSubscribe; coordinator sends
+  // CommandBatch messages as external AI-role clients submit them.
+  // Plugin's reader thread pushes each received batch onto the
+  // engine-thread CommandQueue, where DrainCommandQueue picks them up
+  // and dispatches on the next frame tick.
+  rpc OpenCommandChannel(CommandChannelSubscribe)
+      returns (stream highbar.v1.CommandBatch);
+}
+
+message HeartbeatRequest {
+  // Plugin-side identity. For Phase A this is the match's gameseed or
+  // a UUID assigned at gateway startup; coordinator uses it as a
+  // session key.
+  string plugin_id = 1;
+
+  // Monotonic engine frame at send time. Coordinator can reconstruct
+  // approximate timing without a separate timestamp.
+  uint32 frame = 2;
+
+  // Gateway's startup SHA of the pinned engine. Coordinator can
+  // cross-check against its own expectation.
+  string engine_sha256 = 3;
+
+  // Schema version — strict-equality check against coordinator's
+  // compile-time constant (FR-022a).
+  string schema_version = 4;
+}
+
+message HeartbeatResponse {
+  // Coordinator identity. Useful for logs when multiple coordinators
+  // run in parallel (test harness vs live viewer).
+  string coordinator_id = 1;
+
+  // Echoes the plugin-sent frame so plugin can compute a rough
+  // round-trip latency sample.
+  uint32 echoed_frame = 2;
+
+  // Coordinator-side schema version; plugin compares.
+  string schema_version = 3;
+}
+
+message CommandChannelSubscribe {
+  // Plugin identity — same format as HeartbeatRequest.plugin_id.
+  string plugin_id = 1;
+
+  // Schema-version strict-equality check.
+  string schema_version = 2;
+}
+
+// Terminal response on a PushState client-streaming RPC.
+message PushAck {
+  // Count of StateUpdate messages the coordinator actually processed
+  // (passed schema + length validation). On a clean shutdown this
+  // equals the number the plugin wrote. On a mid-match disconnect
+  // may be less.
+  uint64 messages_received = 1;
+
+  // Highest `seq` field the coordinator saw. Plugin compares against
+  // its local FlushDelta counter for reconciliation logging.
+  uint64 max_seq_seen = 2;
+
+  // Coordinator identity for log correlation.
+  string coordinator_id = 3;
+}

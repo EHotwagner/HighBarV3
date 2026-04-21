@@ -24,8 +24,11 @@
 
 #include "module/Module.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 
@@ -39,9 +42,19 @@ class SnapshotBuilder;
 class DeltaBus;
 class RingBuffer;
 class CommandQueue;
+class CoordinatorClient;
 }  // namespace circuit::grpc
 
 namespace circuit {
+
+// T009 — gateway runtime health state (data-model.md §2).
+// Monotonic: Healthy → Disabling → Disabled; no return to Healthy in
+// the same match.
+enum class GatewayState : std::uint8_t {
+	Healthy = 0,
+	Disabling = 1,
+	Disabled = 2,
+};
 
 class CGrpcGatewayModule final : public IModule {
 public:
@@ -51,6 +64,12 @@ public:
 	CGrpcGatewayModule(const CGrpcGatewayModule&) = delete;
 	CGrpcGatewayModule& operator=(const CGrpcGatewayModule&) = delete;
 
+	// V3 — the gateway has no AngelScript, so InitScript must bypass
+	// the base's `script->Init()` call (script is nullptr for us).
+	// Without this, CCircuitAI::Init dereferences null and the match
+	// never advances past frame -1.
+	bool InitScript() override { return true; }
+
 	// IModule event hooks (T037 — append to current_frame_delta_).
 	int UnitCreated(CCircuitUnit* unit, CCircuitUnit* builder) override;
 	int UnitFinished(CCircuitUnit* unit) override;
@@ -59,6 +78,18 @@ public:
 	int UnitDestroyed(CCircuitUnit* unit, CEnemyInfo* attacker) override;
 	int UnitGiven(CCircuitUnit* unit, int oldTeamId, int newTeamId) override;
 	int UnitCaptured(CCircuitUnit* unit, int oldTeamId, int newTeamId) override;
+
+	// T058 — rich UnitDamaged event. IModule::UnitDamaged(unit, attacker)
+	// drops damage / dir / weaponDefId / paralyzer on the floor; this
+	// variant receives them directly from CCircuitAI::HandleEvent's
+	// EVENT_UNIT_DAMAGED dispatch (the one surgical edit in
+	// CircuitAI.cpp keeps 001's Constitution I envelope intact).
+	void OnUnitDamagedFull(CCircuitUnit* unit,
+	                       CEnemyInfo* attacker,
+	                       float damage,
+	                       const springai::AIFloat3& dir,
+	                       int weaponDefId,
+	                       bool paralyzer);
 
 	// Non-virtual on CircuitAI side (invoked from CircuitAI.cpp's
 	// event dispatch — wiring of those call sites is a follow-up
@@ -90,6 +121,24 @@ public:
 	std::shared_mutex&                StateMutex()         { return state_mutex_; }
 	std::uint64_t                     HeadSeq() const;
 
+	// T011 — queue a fault transition from any thread. Worker-thread
+	// callers (gRPC handlers, snapshot serializer) use this; the actual
+	// side effects (log, unlink, health file) execute on the engine
+	// thread the next time OnFrameTick runs. Idempotent.
+	void RequestDisable(const std::string& subsystem,
+	                    const std::string& reason,
+	                    const std::string& detail);
+
+	// T011 — engine-thread fault transition. Runs the 6 ordered side
+	// effects from data-model.md §2. Engine-thread-only. Idempotent:
+	// subsequent calls after the first are no-ops.
+	void TransitionToDisabled(const std::string& subsystem,
+	                          const std::string& reason,
+	                          const std::string& detail);
+
+	GatewayState State() const { return state_.load(std::memory_order_acquire); }
+	bool IsDisabled() const { return State() == GatewayState::Disabled; }
+
 private:
 	// Per-frame delta accumulator (T037/T038). Mutated on engine
 	// thread only, so no lock needed for reads/writes from handlers.
@@ -117,8 +166,37 @@ private:
 	std::unique_ptr<grpc::RingBuffer> ring_;
 	std::unique_ptr<grpc::CommandQueue> command_queue_;
 	std::unique_ptr<grpc::HighBarService> service_;
+	// Client-mode: plugin dials out to an external coordinator. See
+	// specs/.../investigations/hello-rpc-deadline-exceeded.md for why
+	// client-mode exists alongside the server-mode HighBarService.
+	std::unique_ptr<grpc::CoordinatorClient> coordinator_client_;
+	static constexpr std::uint32_t kHeartbeatEveryNFrames = 30;
+	std::uint32_t frame_counter_ = 0;
 
 	std::string bound_address_;
+
+	// T009 — paths retained for TransitionToDisabled side effects.
+	// `socket_path_` is empty for TCP; set to the UDS filesystem path
+	// for UDS so TransitionToDisabled can unlink it.
+	std::string socket_path_;
+	std::string token_file_path_;
+	std::string health_file_path_;
+
+	// T009 — monotonic health state. Loaded with acquire semantics on
+	// every hook entry; stored with release semantics on the last step
+	// of TransitionToDisabled so readers see all side effects completed.
+	std::atomic<GatewayState> state_{GatewayState::Healthy};
+
+	// T011 — deferred fault request from worker threads. OnFrameTick
+	// checks this at the top of each tick and runs TransitionToDisabled
+	// on the engine thread if populated.
+	struct PendingFault {
+		std::string subsystem;
+		std::string reason;
+		std::string detail;
+	};
+	std::mutex pending_fault_mutex_;
+	std::optional<PendingFault> pending_fault_;
 
 	// T038 helper: serialize + publish current_frame_delta_.
 	// Called from OnFrameTick under the exclusive lock.
@@ -128,6 +206,9 @@ private:
 	// T057 helper: drain CommandQueue, dispatch each via
 	// CCircuitUnit::Cmd*. Engine-thread only.
 	void DrainCommandQueue();
+	// Pull a deferred fault (if any) and run TransitionToDisabled on
+	// the engine thread. Called at the top of OnFrameTick.
+	void DrainPendingFault();
 };
 
 }  // namespace circuit

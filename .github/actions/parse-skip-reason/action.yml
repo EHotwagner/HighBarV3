@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# T057 — composite action that parses `ci-skip-reason:` trailers from
+# the HEAD commit and exposes the accepted-skip set as both a JSON
+# array (for downstream parsing) and a newline list (for bash loops).
+#
+# Contract: contracts/ci-skip-reason.md §CI enforcement. Trailer
+# format is `<script-basename> — <free-text justification>`; only the
+# script basename is forwarded.  Unknown or malformed trailers are
+# silently dropped — the headless-acceptance job fails closed when a
+# skip isn't on the allow-list, so a typo becomes a loud failure.
+
+name: parse-skip-reason
+description: Parse ci-skip-reason trailers from HEAD and expose allow-list outputs.
+
+outputs:
+  allowed_skips_json:
+    description: "JSON array of script basenames allowed to exit 77."
+    value: ${{ steps.parse.outputs.allowed_skips_json }}
+  allowed_skips_newline:
+    description: "Newline-separated script basenames allowed to exit 77."
+    value: ${{ steps.parse.outputs.allowed_skips_newline }}
+
+runs:
+  using: composite
+  steps:
+    - id: parse
+      shell: bash
+      run: |
+        set -euo pipefail
+        # `git interpret-trailers --parse` is the official parser;
+        # falling back to grep would misinterpret multi-line bodies.
+        mapfile -t trailer_vals < <(
+            git log -1 --format='%B' \
+                | git interpret-trailers --parse \
+                | awk -F': ' 'tolower($1)=="ci-skip-reason"{print $2}'
+        )
+
+        declare -a names
+        for raw in "${trailer_vals[@]}"; do
+            # Trailer body is `<script-basename> — <reason>`; we
+            # keep only the basename (first space-delimited token).
+            name=$(awk '{print $1}' <<< "$raw")
+            [ -n "$name" ] || continue
+            names+=("$name")
+        done
+
+        # JSON output — compact array literal.  No jq dependency so
+        # the action works on runners without jq pre-installed.
+        json="["
+        for i in "${!names[@]}"; do
+            [ "$i" -gt 0 ] && json+=","
+            json+="\"${names[$i]//\"/\\\"}\""
+        done
+        json+="]"
+
+        {
+            echo "allowed_skips_json=$json"
+            echo "allowed_skips_newline<<EOF"
+            printf '%s\n' "${names[@]}"
+            echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "parse-skip-reason: ${#names[@]} trailer(s) parsed"

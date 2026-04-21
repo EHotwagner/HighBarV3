@@ -1,5 +1,5 @@
 version: v2
-clean: true
+clean: false
 plugins:
   # C++ (plugin side) → consumed by the highbar_proto static lib in CMakeLists.txt
   - remote: buf.build/protocolbuffers/cpp
@@ -13,8 +13,12 @@ plugins:
   - remote: buf.build/grpc/csharp
     out: ../build/gen/csharp
 
-  # Python → consumed by clients/python/
+  # Python → consumed by clients/python/highbar_client/. Buf places
+  # stubs under <out>/highbar/v1/ from the proto's `package highbar.v1`.
+  # T032 — committed under highbar_client/highbar/v1/ matching the
+  # `from .highbar.v1 import ...` imports already in commands.py /
+  # session.py / state_stream.py.
   - remote: buf.build/protocolbuffers/python
-    out: ../build/gen/python
+    out: ../clients/python/highbar_client
   - remote: buf.build/grpc/python
-    out: ../build/gen/python
+    out: ../clients/python/highbar_client

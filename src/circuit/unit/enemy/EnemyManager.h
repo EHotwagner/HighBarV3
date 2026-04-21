@@ -50,6 +50,10 @@ public:
 	void ApplyAuthority(CCircuitAI* authority);
 
 	CEnemyUnit* GetEnemyUnit(ICoreUnit::Id unitId) const;
+	// V3: surgical accessor for the full enemy map so the gRPC
+	// SnapshotBuilder can enumerate all known enemies when materialising
+	// a StateSnapshot. Read-only; enemy lifecycle is still managed here.
+	const EnemyUnits& GetEnemyUnits() const { return enemyUnits; }
 
 	const std::set<CEnemyUnit*>& GetDyingEnemies() const { return enemyDying; }
 

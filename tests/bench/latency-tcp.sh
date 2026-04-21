@@ -1,77 +1,106 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
+# arm-covered: (none — observer-only; no SubmitCommands issued)
 #
-# HighBarV3 — loopback TCP latency gate (T076).
+# T063 — loopback TCP latency bench. Constitution V gate: p99 ≤ 1500µs
+# round-trip from plugin's PushState send timestamp to external-client
+# receipt via the coordinator's TCP endpoint.
 #
-# Constitution V gate: p99 round-trip UnitDamaged → F# OnEvent must
-# stay ≤ 1.5ms on loopback TCP over a 30-second sample (SC-002).
+# Same architecture as latency-uds.sh but the coordinator binds loopback
+# TCP instead of a UDS path. bench_latency.py speaks insecure gRPC TCP.
 #
-# Exit codes: 0 pass · 1 budget breach · 77 skip (prereqs missing).
+# Exits:
+#   0  — p99 ≤ 1500µs.
+#   1  — p99 > 1500µs (Constitution V breach).
+#   77 — prerequisites missing.
 
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-plugin_lib="${repo_root}/build/libSkirmishAI.so"
-bench_bin="${repo_root}/clients/fsharp/bench/Latency/bin/Release/net8.0/hb-latency-bench"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+HEADLESS_DIR="$REPO_ROOT/tests/headless"
+EXAMPLES_DIR="$REPO_ROOT/specs/002-live-headless-e2e/examples"
+BENCH="$REPO_ROOT/tests/bench/bench_latency.py"
+REPORTS_DIR="$REPO_ROOT/build/reports"
+REPORT_FILE="$REPORTS_DIR/latency-tcp-p99.txt"
 
-if [[ ! -x "${SPRING_HEADLESS:-}" ]]; then
-    echo "latency-tcp: SPRING_HEADLESS not set — skip." >&2
+if [[ -z "${SPRING_HEADLESS:-}" ]]; then
+    echo "latency-tcp: SPRING_HEADLESS not set — skip" >&2
     exit 77
 fi
-if [[ ! -f "${plugin_lib}" ]]; then
-    echo "latency-tcp: plugin .so not built — skip." >&2
+[[ -f "$EXAMPLES_DIR/coordinator.py" ]] || {
+    echo "latency-tcp: coordinator example missing — skip" >&2
     exit 77
-fi
-if [[ ! -x "${bench_bin}" ]]; then
-    echo "latency-tcp: F# bench not built — skip." >&2
-    echo "  cd clients/fsharp/bench/Latency && dotnet build -c Release" >&2
-    exit 77
-fi
-
-: "${XDG_RUNTIME_DIR:=/tmp}"
-tcp_bind="${HIGHBAR_TCP_BIND:-127.0.0.1:50511}"
-log_dir="${repo_root}/build/tmp/latency-tcp"
-mkdir -p "${log_dir}"
-engine_log="${log_dir}/engine.log"
-bench_log="${log_dir}/bench.log"
-cfg_dir="${log_dir}/cfg"
-mkdir -p "${cfg_dir}"
-cat > "${cfg_dir}/grpc.json" <<EOF
-{
-  "transport": "tcp",
-  "tcp_bind": "${tcp_bind}",
-  "ai_token_path": "${log_dir}/highbar.token",
-  "max_recv_mb": 32,
-  "ring_size": 2048
 }
-EOF
 
-HIGHBAR_CONFIG_DIR="${cfg_dir}" \
-"${SPRING_HEADLESS}" --ai HighBarV3 --config bench-tcp.sdd \
-    > "${engine_log}" 2>&1 &
-engine_pid=$!
-cleanup() { kill "${engine_pid}" 2>/dev/null || true; }
+RUN_DIR="${HIGHBAR_BENCH_RUN_DIR:-$(mktemp -d -t hb-latency-tcp.XXXXXX)}"
+mkdir -p "$RUN_DIR" "$REPORTS_DIR"
+TCP_BIND="${HIGHBAR_TCP_BIND:-127.0.0.1:50521}"
+COORD_LOG="$RUN_DIR/coord.log"
+BENCH_LOG="$RUN_DIR/bench.log"
+ENGINE_LOG="$RUN_DIR/highbar-launch.log"
+ENGINE_PID_FILE="$RUN_DIR/highbar-launch.pid"
+START_SCRIPT="$HEADLESS_DIR/scripts/minimal.startscript"
+
+cleanup() {
+    [[ -f "$ENGINE_PID_FILE" ]] && kill -TERM "$(cat "$ENGINE_PID_FILE")" 2>/dev/null
+    [[ -n "${COORD_PID:-}" ]] && kill -TERM "$COORD_PID" 2>/dev/null
+}
 trap cleanup EXIT
 
-for _ in {1..100}; do
-    if (exec 3<>"/dev/tcp/${tcp_bind%:*}/${tcp_bind##*:}") 2>/dev/null; then
+# ---- coordinator (TCP) -------------------------------------------------
+python3 "$EXAMPLES_DIR/coordinator.py" \
+    --endpoint "$TCP_BIND" --id bench-tcp > "$COORD_LOG" 2>&1 &
+COORD_PID=$!
+for _ in $(seq 1 30); do
+    if (exec 3<>/dev/tcp/${TCP_BIND%:*}/${TCP_BIND##*:}) 2>/dev/null; then
         exec 3<&-; exec 3>&-; break
     fi
-    sleep 0.1
+    sleep 0.2
+done
+if ! (exec 3<>/dev/tcp/${TCP_BIND%:*}/${TCP_BIND##*:}) 2>/dev/null; then
+    echo "latency-tcp: coordinator failed to bind $TCP_BIND — skip" >&2
+    cat "$COORD_LOG" >&2
+    exit 77
+fi
+exec 3<&-; exec 3>&- || true
+
+# ---- spring-headless ---------------------------------------------------
+LAUNCH_OUT=$("$HEADLESS_DIR/_launch.sh" \
+    --start-script "$START_SCRIPT" \
+    --coordinator "$TCP_BIND" \
+    --runtime-dir "$RUN_DIR" 2>&1) || LAUNCH_RC=$?
+LAUNCH_RC=${LAUNCH_RC:-0}
+if [[ $LAUNCH_RC -eq 77 ]]; then
+    echo "latency-tcp: _launch.sh missing prereq — skip" >&2
+    echo "$LAUNCH_OUT" >&2
+    exit 77
+elif [[ $LAUNCH_RC -ne 0 ]]; then
+    echo "latency-tcp: _launch.sh failed (rc=$LAUNCH_RC) — fail" >&2
+    echo "$LAUNCH_OUT" >&2
+    exit 1
+fi
+
+for _ in $(seq 1 30); do
+    grep -q '\[hb-gateway\] startup' "$ENGINE_LOG" 2>/dev/null && break
+    sleep 1
 done
 
+# ---- bench -------------------------------------------------------------
 set +e
-"${bench_bin}" --transport tcp --tcp-bind "${tcp_bind}" \
-    --duration-sec 30 --samples 1000 \
-    > "${bench_log}" 2>&1
+python3 "$BENCH" \
+    --transport tcp --endpoint "$TCP_BIND" \
+    --duration-sec "${HIGHBAR_BENCH_DURATION:-30}" \
+    --samples "${HIGHBAR_BENCH_SAMPLES:-1000}" \
+    --budget-us 1500 \
+    --output "$REPORT_FILE" \
+    > "$BENCH_LOG" 2>&1
 rc=$?
 set -e
 
-cat "${bench_log}"
-
-case ${rc} in
-    0)  echo "latency-tcp: PASS — p99 within 1.5ms budget" ;;
+cat "$BENCH_LOG"
+case $rc in
+    0)  echo "latency-tcp: PASS"; exit 0 ;;
     1)  echo "latency-tcp: FAIL — Constitution V breach"; exit 1 ;;
-    77) echo "latency-tcp: SKIP — bench reported unreachable"; exit 77 ;;
-    *)  echo "latency-tcp: unexpected exit ${rc}"; exit "${rc}" ;;
+    77) echo "latency-tcp: SKIP — bench could not produce samples"; exit 77 ;;
+    *)  echo "latency-tcp: unexpected exit $rc"; exit "$rc" ;;
 esac
