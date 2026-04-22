@@ -131,11 +131,13 @@ detect_wired() {
     for arm in "${!ARM_FIELD_NUM[@]}"; do
         local pascal
         pascal="$(snake_to_pascal "$arm")"
-        # Look for `case C::k<Pascal>:` followed within ~20 lines by a
-        # dispatch call. awk handles the windowed scan.
+        # Look for `case C::k<Pascal>:` followed later in the same case body by
+        # a dispatch call. Some cases, notably `custom`, do meaningful
+        # validation before the engine-facing call, so a short line window is
+        # not reliable.
         local wired
         wired="$(awk -v label="case C::k${pascal}:" '
-            $0 ~ label { in_case=1; depth=0; next }
+            $0 ~ label { in_case=1; next }
             in_case {
                 if ($0 ~ /case C::k[A-Z][A-Za-z0-9_]*:/) { in_case=0; next }
                 if ($0 ~ /unit->Cmd[A-Z]/ \
@@ -146,8 +148,6 @@ detect_wired() {
                     || $0 ~ /ExecuteCustomCommand/) {
                     print "true"; in_case=0; exit
                 }
-                depth++
-                if (depth > 25) in_case=0
             }
         ' "$DISPATCH_CPP")"
         if [[ "$wired" == "true" ]]; then

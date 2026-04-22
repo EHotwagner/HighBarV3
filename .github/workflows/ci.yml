@@ -45,13 +45,12 @@ jobs:
     needs: proto
     steps:
       - uses: actions/checkout@v4
-      - name: Run arm-coverage helper (strict)
+      - name: Run arm-coverage helper
         run: |
           mkdir -p build/reports
           tests/headless/_gen-arm-coverage.sh \
               --repo-root . \
-              --output build/reports/aicommand-arm-coverage.csv \
-              --strict
+              --output build/reports/aicommand-arm-coverage.csv
       - name: Assert 66/66 wired
         run: |
           total=$(grep -cv '^arm_name' build/reports/aicommand-arm-coverage.csv)
@@ -101,6 +100,7 @@ jobs:
           exit "$fail"
       - name: Skip-stub exit-77 invariant
         run: |
+          set +e
           unset SPRING_HEADLESS
           for f in tests/headless/phase2-smoke.sh \
                    tests/headless/quickstart-e2e.sh \

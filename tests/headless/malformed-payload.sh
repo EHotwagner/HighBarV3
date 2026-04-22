@@ -23,6 +23,11 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HEADLESS_DIR="$REPO_ROOT/tests/headless"
 EXAMPLES_DIR="$REPO_ROOT/specs/002-live-headless-e2e/examples"
 
+if [[ ! -x "${SPRING_HEADLESS:-}" ]]; then
+    echo "malformed-payload: SPRING_HEADLESS not set or not executable — skip" >&2
+    exit 77
+fi
+
 # shellcheck source=tests/headless/_coordinator.sh
 source "$HEADLESS_DIR/_coordinator.sh"
 # shellcheck source=tests/headless/_fault-assert.sh
