@@ -18,22 +18,10 @@ for arg in "$@"; do
 done
 
 mkdir -p "${repo_root}/build/reports"
-report_path="${repo_root}/build/reports/004-repro-${row_id}.md"
+report_path="${repo_root}/build/reports/repro-${row_id}.md"
 
 if [[ "${row_id}" == rpc-* || "${row_id}" == cmd-* ]]; then
-    PYTHONPATH="${repo_root}/clients/python" python -m highbar_client.behavioral_coverage audit >/dev/null
-    summary="$(
-        REPO_ROOT="${repo_root}" ROW_ID="${row_id}" PHASE_NAME="${phase}" REPORT_PATH="${report_path}" \
-        PYTHONPATH="${repo_root}/clients/python" python - <<'PY'
-from pathlib import Path
-import os
-from highbar_client.behavioral_coverage.audit_runner import render_repro_report
-
-result = render_repro_report(os.environ["ROW_ID"], os.environ["PHASE_NAME"])
-Path(os.environ["REPORT_PATH"]).write_text(result.body, encoding="utf-8")
-print(result.summary)
-PY
-    )"
+    summary="$(PYTHONPATH="${repo_root}/clients/python" python -m highbar_client.behavioral_coverage audit repro "${row_id}" --phase "${phase}" --report-path "${report_path}")"
     echo "${summary}"
     exit 0
 fi

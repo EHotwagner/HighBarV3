@@ -1,7 +1,6 @@
 # V2 -> V3 Problem Ledger
 
-> Source-of-truth for V2 pathologies: `/home/developer/projects/HighBarV2/docs/known-issues.md`
-> and `/home/developer/projects/HighBarV2/reports/017-fix-client-socket-hang.md`.
+> Latest completed run: `live-audit-20260422T064705Z`
 
 ## Row table summary
 
@@ -12,7 +11,7 @@
 | 8 MB max-message-size insufficient | fixed | rpc-stream-state | Large-map coverage should still be rechecked on bigger pools. |
 | Single-connection lockout, no auto-reconnect | fixed | rpc-submit-commands | The single-AI invariant still intentionally rejects duplicate AI writers. |
 | Frame-budget timeout and AI removal | partial | rpc-submit-commands | Very slow consumers may fall out of the ring buffer and require a fresh snapshot. |
-| Save / Load proxy-side TODO stubs | fixed | rpc-save | Live save/load evidence still needs to be refreshed on the reference host. |
+| Save / Load proxy-side TODO stubs | fixed | rpc-save | Live save/load evidence is linked from the latest completed manifest. |
 
 ## Details
 
@@ -110,4 +109,4 @@
 
 **Audit row reference**: [`rpc-save`](command-audit.md#rpc-save)
 
-**Residual risk**: Live save/load evidence still needs to be refreshed on the reference host.
+**Residual risk**: Live save/load evidence is linked from the latest completed manifest.

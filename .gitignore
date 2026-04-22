@@ -46,8 +46,21 @@ clients/python/highbar_client.egg-info/
 clients/python/**/__pycache__/
 *.egg-info/
 __pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+node_modules/
+*.log
+.env*
+reports/itertesting/
 build/reports/004-*.md
 build/reports/004-*.log
+build/reports/live-audit-*.json
+build/reports/repro-*.md
+build/reports/hypothesis-*.md
+build/reports/drift-*.md
+build/reports/phase2-macro-chain.md
 
 # vcpkg manifest install dir + downloaded archives
 vcpkg_installed/

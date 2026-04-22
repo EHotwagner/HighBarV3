@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .registry import REGISTRY
@@ -105,6 +106,43 @@ def artifacts() -> AuditArtifacts:
         audit_dir=root / "audit",
         reports_dir=root / "build" / "reports",
     )
+
+
+def ensure_reports_dir() -> Path:
+    reports_dir = artifacts().reports_dir
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    return reports_dir
+
+
+def make_run_id(now: datetime | None = None) -> str:
+    instant = now or datetime.now(timezone.utc)
+    return instant.strftime("live-audit-%Y%m%dT%H%M%SZ")
+
+
+def manifest_path_for_run(run_id: str) -> Path:
+    return ensure_reports_dir() / f"{run_id}.json"
+
+
+def row_report_path(row_id: str, kind: str, suffix: str = "md") -> Path:
+    safe_row_id = row_id.replace("/", "-")
+    return ensure_reports_dir() / f"{kind}-{safe_row_id}.{suffix}"
+
+
+def phase2_report_path() -> Path:
+    return ensure_reports_dir() / "phase2-macro-chain.md"
+
+
+def drift_report_path(current_run_id: str, previous_run_id: str) -> Path:
+    return ensure_reports_dir() / f"drift-{previous_run_id}-vs-{current_run_id}.md"
+
+
+def manifest_paths() -> list[Path]:
+    return sorted(ensure_reports_dir().glob("live-audit-*.json"))
+
+
+def latest_manifest_path() -> Path | None:
+    files = manifest_paths()
+    return files[-1] if files else None
 
 
 def command_dispatch_citations() -> dict[str, str]:

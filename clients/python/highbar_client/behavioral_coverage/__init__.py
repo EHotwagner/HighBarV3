@@ -80,15 +80,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-# ---- dry-run (no live engine) -------------------------------------------
-
-
-def run_dry(threshold: float, output_dir: Path) -> int:
-    """Emit a CSV with all rows marked (dispatched=false, verified=na,
-    error=precondition_unmet). Used when --skip-live is set OR when
-    the orchestrator cannot connect to the gateway. This is legit per
-    contracts/bootstrap-plan.md §Execution §Wait timeout fallback.
-    """
+def _collect_dry_rows() -> list[dict]:
     rows: list[dict] = []
     for arm_name, case in sorted(REGISTRY.items()):
         rows.append({
@@ -99,6 +91,19 @@ def run_dry(threshold: float, output_dir: Path) -> int:
             "evidence": "",
             "error": "precondition_unmet",
         })
+    return rows
+
+
+# ---- dry-run (no live engine) -------------------------------------------
+
+
+def run_dry(threshold: float, output_dir: Path) -> int:
+    """Emit a CSV with all rows marked (dispatched=false, verified=na,
+    error=precondition_unmet). Used when --skip-live is set OR when
+    the orchestrator cannot connect to the gateway. This is legit per
+    contracts/bootstrap-plan.md §Execution §Wait timeout fallback.
+    """
+    rows = _collect_dry_rows()
     csv_path = output_dir / "aicommand-behavioral-coverage.csv"
     digest_path = output_dir / "aicommand-behavioral-coverage.digest"
     write_csv(csv_path, rows)
@@ -214,27 +219,14 @@ def _row_for_outcome(case: BehavioralTestCase,
     }
 
 
-def run_live(args: argparse.Namespace) -> int:
-    """Full live-topology run. Returns process exit code.
-
-    Implementation is intentionally simple: we rely on the periodic
-    snapshot tick (contract: ≈ 1s cadence) to capture before/after
-    snapshots for each arm. If `RequestSnapshot` is plumbed we use it
-    to tighten the pre-dispatch capture.
-    """
-    output_dir = Path(args.output_dir)
-    if args.run_index > 0:
-        output_dir = output_dir / f"run-{args.run_index}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    start = time.monotonic()
-
+def collect_live_rows(args: argparse.Namespace) -> list[dict]:
+    """Collect live behavioral rows without emitting artifacts."""
     try:
         channel = _open_channel(args.endpoint)
         stub, hello_resp = _hello_ai(channel, client_id="bcov")
     except Exception as e:  # noqa: BLE001
         print(f"behavioral-coverage: connection failed: {e}", file=sys.stderr)
-        return run_dry(args.threshold, output_dir)
+        return _collect_dry_rows()
 
     print(f"behavioral-coverage: connected schema={hello_resp.schema_version} "
           f"session={hello_resp.session_id}", flush=True)
@@ -270,7 +262,7 @@ def run_live(args: argparse.Namespace) -> int:
     if commander is None:
         print("behavioral-coverage: no commander within 30s — falling back "
               "to dry output", file=sys.stderr)
-        return run_dry(args.threshold, output_dir)
+        return _collect_dry_rows()
 
     ctx = BootstrapContext(
         commander_unit_id=commander.unit_id,
@@ -375,6 +367,24 @@ def run_live(args: argparse.Namespace) -> int:
         rows.append(_row_for_outcome(case, dispatched, outcome))
 
     shared["stop"] = True
+    return rows
+
+
+def run_live(args: argparse.Namespace) -> int:
+    """Full live-topology run. Returns process exit code.
+
+    Implementation is intentionally simple: we rely on the periodic
+    snapshot tick (contract: ≈ 1s cadence) to capture before/after
+    snapshots for each arm. If `RequestSnapshot` is plumbed we use it
+    to tighten the pre-dispatch capture.
+    """
+    output_dir = Path(args.output_dir)
+    if args.run_index > 0:
+        output_dir = output_dir / f"run-{args.run_index}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    start = time.monotonic()
+    rows = collect_live_rows(args)
 
     # ---- Emit CSV + digest ------------------------------------------
     csv_path = output_dir / "aicommand-behavioral-coverage.csv"
@@ -404,10 +414,12 @@ def run_live(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    if argv and argv[:1] == ["audit"]:
-        from .audit_report import main as audit_main
+    if argv and argv[:1] == ["itertesting"]:
+        from .itertesting_runner import itertesting_main
 
-        return audit_main(argv[1:])
+        return itertesting_main(argv[1:])
+    if argv and argv[:1] == ["audit"]:
+        return _audit_main(argv[1:])
     args = _parse_args(argv)
     output_dir = Path(args.output_dir)
     if args.run_index > 0:
@@ -427,3 +439,91 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 __all__ = ["main", "run_dry", "run_live", "REGISTRY", "validate_registry"]
+def _audit_main(argv: list[str]) -> int:
+    from .audit_report import generate
+    from .audit_runner import (
+        collect_live_audit_run,
+        execute_hypothesis,
+        latest_completed_run,
+        refresh_summary_text,
+        render_repro_report,
+        serialize_manifest,
+        write_drift_report,
+        write_phase2_report,
+    )
+
+    audit = argparse.ArgumentParser(prog="highbar_client.behavioral_coverage audit")
+    sub = audit.add_subparsers(dest="command", required=True)
+
+    refresh = sub.add_parser("refresh")
+    refresh.add_argument("--audit-dir", default="audit")
+    refresh.add_argument("--summary-only", action="store_true")
+    refresh.add_argument("--fail-rows", default="")
+    refresh.add_argument("--fail-rpcs", default="")
+    refresh.add_argument("--topology-failure", default="")
+    refresh.add_argument("--session-failure", default="")
+
+    repro = sub.add_parser("repro")
+    repro.add_argument("row_id")
+    repro.add_argument("--phase", default="phase1")
+    repro.add_argument("--report-path")
+
+    hypothesis = sub.add_parser("hypothesis")
+    hypothesis.add_argument("row_id")
+    hypothesis.add_argument("hypothesis_class")
+    hypothesis.add_argument("--report-path")
+
+    drift = sub.add_parser("drift")
+
+    phase2 = sub.add_parser("phase2")
+
+    args = audit.parse_args(argv)
+
+    if args.command == "refresh":
+        if args.fail_rows:
+            os.environ["HIGHBAR_AUDIT_FAIL_ROWS"] = args.fail_rows
+        if args.fail_rpcs:
+            os.environ["HIGHBAR_AUDIT_FAIL_RPCS"] = args.fail_rpcs
+        if args.topology_failure:
+            os.environ["HIGHBAR_AUDIT_TOPOLOGY_FAILURE"] = args.topology_failure
+        if args.session_failure:
+            os.environ["HIGHBAR_AUDIT_SESSION_FAILURE"] = args.session_failure
+        previous = latest_completed_run()
+        run = collect_live_audit_run(previous)
+        manifest_path = serialize_manifest(run)
+        write_phase2_report()
+        if not args.summary_only:
+            generate(run, Path(args.audit_dir))
+        print(refresh_summary_text(run.summary))
+        print(f"Manifest: {manifest_path}")
+        return 0
+
+    if args.command == "repro":
+        result = render_repro_report(args.row_id, args.phase)
+        if args.report_path:
+            Path(args.report_path).write_text(result.body, encoding="utf-8")
+        print(result.summary)
+        return 0
+
+    if args.command == "hypothesis":
+        result = execute_hypothesis(args.row_id, args.hypothesis_class)
+        if args.report_path:
+            Path(args.report_path).write_text(result.body, encoding="utf-8")
+        print(f"{result.verdict}: {result.hypothesis_class}")
+        return 0
+
+    if args.command == "drift":
+        run = latest_completed_run()
+        if run is None:
+            print("No completed manifest found.")
+            return 1
+        report = write_drift_report(run)
+        print(f"PASS: drift report written to {report}")
+        return 0
+
+    if args.command == "phase2":
+        report = write_phase2_report()
+        print(f"PASS: phase2 macro-chain report generated at {report}")
+        return 0
+
+    return 2

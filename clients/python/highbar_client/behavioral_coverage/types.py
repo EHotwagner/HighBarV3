@@ -123,6 +123,11 @@ class GatewayNotHealthyError(RuntimeError):
 
 
 OutcomeBucket = Literal["verified", "dispatched-only", "blocked", "broken"]
+FreshnessState = Literal["refreshed-live", "not-refreshed-live", "drifted"]
+DeliverableStatus = Literal["refreshed", "partial", "not-refreshed-live"]
+PhaseMode = Literal["phase1", "phase2", "mixed"]
+TopologyStatus = Literal["healthy", "partial", "failed"]
+SessionStatus = Literal["connected", "partial", "failed"]
 EvidenceShape = Literal[
     "snapshot_diff",
     "engine_log",
@@ -161,12 +166,16 @@ class AuditRow:
     evidence_shape: EvidenceShape
     gametype_pin: str
     engine_pin: str
+    freshness_state: FreshnessState = "refreshed-live"
     evidence_excerpt: str = ""
     reproduction_recipe: str = ""
     hypothesis_class: Optional[HypothesisClass] = None
     hypothesis_summary: str = ""
     falsification_test: str = ""
     channel: Optional[AuditChannel] = None
+    repro_artifact: Optional[str] = None
+    failure_reason: Optional[str] = None
+    prior_run_delta: Optional[str] = None
     notes: str = ""
 
 
@@ -208,3 +217,73 @@ class AuditArtifacts:
     repo_root: Path
     audit_dir: Path
     reports_dir: Path
+
+
+@dataclass(frozen=True)
+class ObservedRowResult:
+    row_id: str
+    kind: Literal["aicommand", "rpc"]
+    arm_or_rpc_name: str
+    category: str
+    dispatch_citation: str
+    outcome_bucket: OutcomeBucket
+    freshness_state: FreshnessState
+    evidence_shape: EvidenceShape
+    gametype_pin: str
+    engine_pin: str
+    evidence_excerpt: str = ""
+    reproduction_recipe: str = ""
+    hypothesis_class: Optional[HypothesisClass] = None
+    hypothesis_summary: str = ""
+    falsification_test: str = ""
+    channel: Optional[AuditChannel] = None
+    repro_artifact: Optional[str] = None
+    failure_reason: Optional[str] = None
+    prior_run_delta: Optional[str] = None
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class DeliverableRefreshStatus:
+    deliverable_name: Literal["command-audit", "hypothesis-plan", "v2-v3-ledger"]
+    status: DeliverableStatus
+    row_totals: dict[str, int]
+    blocking_reasons: tuple[str, ...] = ()
+    output_path: str = ""
+
+
+@dataclass(frozen=True)
+class RefreshSummary:
+    run_id: str
+    verified_live_count: int
+    blocked_count: int
+    broken_count: int
+    not_refreshed_count: int
+    drifted_count: int
+    deliverable_states: dict[str, DeliverableStatus]
+    top_failures: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HistoricalComparison:
+    previous_run_id: str
+    current_run_id: str
+    changed_rows: tuple[str, ...]
+    unchanged_rows: int
+    deliverable_changes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LiveAuditRun:
+    run_id: str
+    started_at: str
+    completed_at: Optional[str]
+    engine_pin: str
+    gametype_pin: str
+    phase_mode: PhaseMode
+    topology_status: TopologyStatus
+    session_status: SessionStatus
+    row_results: tuple[ObservedRowResult, ...]
+    deliverables: tuple[DeliverableRefreshStatus, ...]
+    summary: RefreshSummary
+    historical_comparison: Optional[HistoricalComparison] = None

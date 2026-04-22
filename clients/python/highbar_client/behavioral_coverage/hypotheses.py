@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Closed hypothesis vocabulary and ranking helpers for the 004 audit."""
+"""Closed hypothesis vocabulary and ranking helpers for the live audit."""
 
 from __future__ import annotations
 
@@ -8,35 +8,35 @@ from .types import AuditRow, HypothesisCandidate, HypothesisClass
 
 HYPOTHESIS_CLASSES: dict[HypothesisClass, dict[str, str]] = {
     "phase1_reissuance": {
-        "confirmed": "Phase-1 shows no durable snapshot effect; Phase-2 reproduces the expected state change.",
-        "falsified": "Phase-2 also lacks the expected state change, pushing suspicion toward dispatcher or setup defects.",
+        "confirmed": "The latest phase-1 run shows no durable snapshot effect, while phase-2 reproduces the expected state change.",
+        "falsified": "Phase-2 also lacks the expected state change, pushing suspicion toward dispatcher or setup defects in the latest manifest.",
     },
     "effect_not_snapshotable": {
-        "confirmed": "Snapshot diffs stay empty while engine log or callback evidence proves the command-specific state changed.",
-        "falsified": "Neither the snapshot nor the log shows the expected command-specific state change.",
+        "confirmed": "Snapshot diffs stay empty while engine log or callback evidence from the latest run proves the command-specific state changed.",
+        "falsified": "Neither the snapshot nor the log from the latest run shows the expected command-specific state change.",
     },
     "target_missing": {
-        "confirmed": "Re-running with an explicit bootstrap target causes the effect to appear.",
-        "falsified": "Even with the target precondition provisioned, the effect is still absent.",
+        "confirmed": "Re-running with an explicit bootstrap target causes the effect to appear in the latest live repro.",
+        "falsified": "Even with the target precondition provisioned, the effect is still absent in the latest live repro.",
     },
     "cross_team_rejection": {
-        "confirmed": "A faction-correct def-id makes the build or spawn effect appear immediately.",
-        "falsified": "The command still has no effect after resolving a faction-correct def-id.",
+        "confirmed": "A faction-correct def-id makes the build or spawn effect appear immediately in the latest run.",
+        "falsified": "The command still has no effect after resolving a faction-correct def-id in the latest run.",
     },
     "cheats_required": {
-        "confirmed": "The cheats-enabled run produces the expected state change while the default run does not.",
-        "falsified": "The cheats-enabled run still does not produce the expected effect.",
+        "confirmed": "The cheats-enabled live repro produces the expected state change while the default run does not.",
+        "falsified": "The cheats-enabled live repro still does not produce the expected effect.",
     },
     "dispatcher_defect": {
-        "confirmed": "Both Phase-1 and Phase-2 lack the effect, and no arm-specific log evidence appears.",
-        "falsified": "Phase-2 or targeted logging shows the dispatcher called the correct engine path.",
+        "confirmed": "Both Phase-1 and Phase-2 lack the effect in the latest run history, and no arm-specific log evidence appears.",
+        "falsified": "Phase-2 or targeted logging from the latest run shows the dispatcher called the correct engine path.",
     },
     "intended_noop": {
-        "confirmed": "Source comments or contracts show the arm intentionally has no observable runtime effect.",
+        "confirmed": "Current source comments or contracts show the arm intentionally has no observable runtime effect.",
         "falsified": "A concrete runtime side effect becomes observable and should move the row out of intended-noop.",
     },
     "engine_version_drift": {
-        "confirmed": "The active engine pin lacks the callback or subsystem the arm depends on.",
+        "confirmed": "The active engine pin in the latest manifest lacks the callback or subsystem the arm depends on.",
         "falsified": "The same engine pin proves the subsystem exists and the fault lies elsewhere.",
     },
 }
