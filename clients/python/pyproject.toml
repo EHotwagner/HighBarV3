@@ -24,12 +24,18 @@ authors = [
 ]
 dependencies = [
     "grpcio >= 1.62",
-    "protobuf >= 4.25",
+    # 003-snapshot-arm-coverage T028 — grpcio-tools 1.71 emits gencode
+    # 6.x which requires protobuf runtime >= 6.x. Pin to the 6.x line
+    # (still compatible with pre-003 stubs that used older gencode).
+    "protobuf >= 6.0, < 7",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "grpcio-tools >= 1.62",
+    # 003-snapshot-arm-coverage T028 — pinned to the 1.72..1.73 window
+    # whose bundled libprotoc emits gencode 6.x compatible with the
+    # protobuf 6.x runtime our project depends on.
+    "grpcio-tools >= 1.72.1, < 1.74",
     "pytest >= 8.0",
     "pytest-asyncio >= 0.23",
 ]

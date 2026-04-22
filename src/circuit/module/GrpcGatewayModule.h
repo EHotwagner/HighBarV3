@@ -33,6 +33,7 @@
 #include <string>
 
 #include "highbar/state.pb.h"
+#include "grpc/SnapshotTick.h"
 
 namespace circuit::grpc {
 class HighBarService;
@@ -139,6 +140,20 @@ public:
 	GatewayState State() const { return state_.load(std::memory_order_acquire); }
 	bool IsDisabled() const { return State() == GatewayState::Disabled; }
 
+	// 003-snapshot-arm-coverage — accessors for the snapshot tick.
+	//
+	// RequestSnapshot worker handlers call PendingSnapshotRequest() to
+	// set the atomic flag; the engine thread drains it in OnFrameTick
+	// at the top of every frame. Engine frame snapshot is exposed to
+	// the RPC handler via CurrentFrame() (atomic; counter-based so no
+	// lock is needed on the worker side).
+	std::atomic<bool>& PendingSnapshotRequest() {
+		return snapshot_tick_.PendingRequest();
+	}
+	std::uint32_t CurrentFrame() const {
+		return current_frame_.load(std::memory_order_acquire);
+	}
+
 private:
 	// Per-frame delta accumulator (T037/T038). Mutated on engine
 	// thread only, so no lock needed for reads/writes from handlers.
@@ -209,6 +224,24 @@ private:
 	// Pull a deferred fault (if any) and run TransitionToDisabled on
 	// the engine thread. Called at the top of OnFrameTick.
 	void DrainPendingFault();
+
+	// 003-snapshot-arm-coverage T011 — engine-thread snapshot
+	// serializer + fan-out. Called from OnFrameTick when
+	// snapshot_tick_.Pump() returns emit=true. Reuses the same
+	// serializer/lock/ring/DeltaBus path that FlushDelta uses so the
+	// snapshot emission inherits 002's Constitution V latency budget.
+	void BroadcastSnapshot(std::uint32_t effective_cadence_frames);
+
+	// 003-snapshot-arm-coverage — periodic-snapshot scheduler.
+	::circuit::grpc::SnapshotTick snapshot_tick_;
+
+	// 003-snapshot-arm-coverage — atomic mirror of the current engine
+	// frame. Written from OnFrameTick on the engine thread; read from
+	// gRPC worker threads (RequestSnapshot handler). Monotonic but
+	// allowed to lag the true engine frame by one tick on readers —
+	// RequestSnapshot only uses it for the scheduled_frame return
+	// value, which is an advisory correlation hint.
+	std::atomic<std::uint32_t> current_frame_{0};
 };
 
 }  // namespace circuit

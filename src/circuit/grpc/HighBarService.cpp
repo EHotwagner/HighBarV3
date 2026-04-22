@@ -13,6 +13,7 @@
 #include "grpc/RingBuffer.h"
 #include "grpc/SchemaVersion.h"
 #include "grpc/SnapshotBuilder.h"
+#include "module/GrpcGatewayModule.h"  // 003 — for RequestSnapshot handler
 
 #include "CircuitAI.h"
 
@@ -735,6 +736,86 @@ HIGHBAR_NOOP_UNARY_CALLDATA(
 
 #undef HIGHBAR_NOOP_UNARY_CALLDATA
 
+// --- RequestSnapshot (unary, 003-snapshot-arm-coverage T014) ---------------
+//
+// Worker-thread handler. Contract: contracts/request-snapshot.md §Handler
+// behavior. The auth interceptor has already gated on AI-role token; if
+// we reach Proceed() the caller is authorized. The handler must be
+// non-blocking, touch no CircuitAI state, and coalesce concurrent
+// callers by atomic flag.
+
+class HighBarService::RequestSnapshotCallData final : public CallDataBase {
+public:
+	RequestSnapshotCallData(HighBarService* svc,
+	                         ::grpc::ServerCompletionQueue* cq)
+		: svc_(svc), cq_(cq), responder_(&ctx_) {
+		svc_->RequestRequestSnapshot(&ctx_, &request_, &responder_,
+		                              cq_, cq_, this);
+	}
+
+	void Proceed(bool ok) override {
+		switch (stage_) {
+		case Stage::kCreated: {
+			new RequestSnapshotCallData(svc_, cq_);
+			if (!ok) { delete this; return; }
+
+			// Health gating. If the gateway has faulted, return
+			// FAILED_PRECONDITION with scheduled_frame = 0 (the proto3
+			// default for the unset field; explicit for clarity).
+			if (svc_->gateway_module_ == nullptr) {
+				stage_ = Stage::kFinishing;
+				responder_.Finish(response_,
+					::grpc::Status(::grpc::StatusCode::UNAVAILABLE,
+					                "RequestSnapshot handle not yet wired"),
+					this);
+				return;
+			}
+			const auto state = svc_->gateway_module_->State();
+			if (state != ::circuit::GatewayState::Healthy) {
+				response_.set_scheduled_frame(0);
+				std::string msg = "gateway state=";
+				msg += (state == ::circuit::GatewayState::Disabling
+				         ? "disabling" : "disabled");
+				stage_ = Stage::kFinishing;
+				responder_.Finish(response_,
+					::grpc::Status(::grpc::StatusCode::FAILED_PRECONDITION, msg),
+					this);
+				return;
+			}
+
+			// Compute the frame the forced snapshot will fire on. Engine
+			// thread advances current_frame_ each OnFrameTick; we schedule
+			// at CurrentFrame() + 1 so callers can correlate. Raising the
+			// atomic is idempotent — concurrent callers all observe the
+			// same scheduled_frame, per FR-006 coalescing.
+			const std::uint32_t scheduled =
+				svc_->gateway_module_->CurrentFrame() + 1u;
+			svc_->gateway_module_->PendingSnapshotRequest().store(
+				true, std::memory_order_release);
+			response_.set_scheduled_frame(scheduled);
+
+			stage_ = Stage::kFinishing;
+			responder_.Finish(response_, ::grpc::Status::OK, this);
+			return;
+		}
+		case Stage::kFinishing:
+		default:
+			delete this;
+			return;
+		}
+	}
+
+private:
+	enum class Stage { kCreated, kFinishing };
+	HighBarService* svc_;
+	::grpc::ServerCompletionQueue* cq_;
+	::grpc::ServerContext ctx_;
+	::highbar::v1::RequestSnapshotRequest request_;
+	::highbar::v1::RequestSnapshotResponse response_;
+	::grpc::ServerAsyncResponseWriter<::highbar::v1::RequestSnapshotResponse> responder_;
+	Stage stage_ = Stage::kCreated;
+};
+
 // ============================================================================
 // HighBarService public surface
 // ============================================================================
@@ -798,6 +879,7 @@ void HighBarService::Bind(const TransportEndpoint& endpoint,
 	new InvokeCallbackCallData(this, cq_.get());
 	new SaveCallData(this, cq_.get());
 	new LoadCallData(this, cq_.get());
+	new RequestSnapshotCallData(this, cq_.get());  // 003-snapshot-arm-coverage
 
 	// One worker thread for Phase 2. US1's 4-observer + AI pressure
 	// will require 2-4; fine to scale here when needed.
@@ -888,6 +970,10 @@ void HighBarService::SetUs2Handles(CommandQueue* queue) {
 	if (validator_ == nullptr && ai_ != nullptr) {
 		validator_ = std::make_unique<CommandValidator>(ai_);
 	}
+}
+
+void HighBarService::SetSnapshotHandle(::circuit::CGrpcGatewayModule* module) {
+	gateway_module_ = module;
 }
 
 void HighBarService::AdvanceFrame() {

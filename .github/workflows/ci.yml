@@ -234,6 +234,70 @@ jobs:
           done
           exit "$fail"
 
+  behavioral-acceptance:
+    # 003-snapshot-arm-coverage T033 — per-PR behavioral-verification
+    # scripts. Four hard jobs (snapshot-tick + move + build + macro
+    # coverage) fail the PR on regression; behavioral-attack is soft
+    # (accepts 77 per spec §Edge Case: no enemy LOS on minimal.startscript).
+    # Non-regression gate (FR-011): us1-observer.sh, us2-ai-coexist.sh,
+    # and the latency benches continue to run under the default snapshot
+    # tick. If any of those regress after 003 lands, this gate blocks
+    # the PR until the regression is fixed.
+    needs: cpp-build
+    if: ${{ vars.HIGHBAR_HAVE_RUNNER == 'true' }}
+    runs-on: [self-hosted, Linux, X64, bar-engine]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pre-flight
+        run: .github/runner-setup/preflight.sh
+      - name: snapshot-tick.sh (cadence + SC-005 regression)
+        run: tests/headless/snapshot-tick.sh
+      - name: behavioral-move.sh (US1)
+        run: tests/headless/behavioral-move.sh
+      - name: behavioral-build.sh (US2)
+        run: tests/headless/behavioral-build.sh
+      - name: behavioral-attack.sh (US3, soft — accepts 77)
+        run: |
+          set +e
+          tests/headless/behavioral-attack.sh
+          rc=$?
+          if [ "$rc" -eq 0 ] || [ "$rc" -eq 77 ]; then exit 0; fi
+          exit "$rc"
+      - name: aicommand-behavioral-coverage.sh (US4 macro driver)
+        env:
+          HIGHBAR_BEHAVIORAL_THRESHOLD: "0.50"
+        run: tests/headless/aicommand-behavioral-coverage.sh
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aicommand-behavioral-coverage
+          path: |
+            build/reports/aicommand-behavioral-coverage.csv
+            build/reports/aicommand-behavioral-coverage.digest
+          if-no-files-found: warn
+
+  behavioral-reproducibility:
+    # 003 T033 — post-merge-only because 5× runs exceed PR-budget wall-clock.
+    # Triggered on pushes to master.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'
+         && vars.HIGHBAR_HAVE_RUNNER == 'true' }}
+    needs: behavioral-acceptance
+    runs-on: [self-hosted, Linux, X64, bar-engine]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pre-flight
+        run: .github/runner-setup/preflight.sh
+      - name: behavioral-reproducibility.sh (5× runs, digest + p50 fps spread)
+        run: tests/headless/behavioral-reproducibility.sh
+      - name: Upload per-run artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: behavioral-reproducibility-runs
+          path: build/reports/run-*
+          if-no-files-found: warn
+
   bench-latency:
     # T054 — Constitution V gate. p99 ≤ 500µs UDS, ≤ 1.5ms TCP.
     needs: headless-acceptance

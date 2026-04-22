@@ -18,16 +18,19 @@ namespace {
 // Metadata header carrying the token. Lower-case per gRPC convention.
 constexpr const char* kTokenHeader = "x-highbar-ai-token";
 
-// RPCs that require the AI token (FR-014 + clarification Q1). Hardcoded
-// rather than computed from the service descriptor because interceptors
-// run in the critical path of every RPC and a static std::array beats
-// a set/map lookup for 5 entries.
-constexpr std::array<const char*, 5> kTokenProtected = {
+// RPCs that require the AI token (FR-014 + clarification Q1; plus the
+// 003-snapshot-arm-coverage RequestSnapshot RPC per contracts/
+// request-snapshot.md §Handler behavior invariant 1). Hardcoded rather
+// than computed from the service descriptor because interceptors run
+// in the critical path of every RPC and a static std::array beats a
+// set/map lookup for 6 entries.
+constexpr std::array<const char*, 6> kTokenProtected = {
 	"/highbar.v1.HighBarProxy/SubmitCommands",
 	"/highbar.v1.HighBarProxy/InvokeCallback",
 	"/highbar.v1.HighBarProxy/Save",
 	"/highbar.v1.HighBarProxy/Load",
 	"/highbar.v1.HighBarProxy/GetRuntimeCounters",
+	"/highbar.v1.HighBarProxy/RequestSnapshot",
 };
 
 }  // namespace

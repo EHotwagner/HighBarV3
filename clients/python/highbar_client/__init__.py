@@ -5,6 +5,17 @@ Generated proto stubs (`highbar/*_pb2.py`, `*_pb2_grpc.py`) are produced
 by grpc_tools.protoc at dev-install time; see README.md.
 """
 
+import os as _os
+import sys as _sys
+
+# Generated stubs use absolute `from highbar import common_pb2` imports.
+# Make the `highbar/` subpackage importable as a top-level name so those
+# resolve at runtime (parity with the conftest.py trick used in tests).
+# Idempotent — only inserted once per interpreter.
+_pkg_dir = _os.path.dirname(__file__)
+if _pkg_dir not in _sys.path:
+    _sys.path.insert(0, _pkg_dir)
+
 __version__ = "0.1.0"
 
 SCHEMA_VERSION = "1.0.0"

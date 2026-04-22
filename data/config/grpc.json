@@ -4,5 +4,10 @@
   "tcp_bind": "127.0.0.1:50511",
   "ai_token_path": "$writeDir/highbar.token",
   "max_recv_mb": 32,
-  "ring_size": 2048
+  "ring_size": 2048,
+
+  "snapshot_tick": {
+    "snapshot_cadence_frames": 30,
+    "snapshot_max_units": 1000
+  }
 }

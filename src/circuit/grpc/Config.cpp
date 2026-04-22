@@ -140,6 +140,29 @@ TransportEndpoint LoadTransportConfig(CCircuitAI* ai) {
 		}
 		cfg.ring_size = v;
 	}
+	// 003-snapshot-arm-coverage — snapshot_tick block. Missing block ⇒
+	// defaults (contracts/snapshot-tick.md §Missing-block behavior).
+	if (root.isMember("snapshot_tick")) {
+		const Json::Value& st = root["snapshot_tick"];
+		if (st.isMember("snapshot_cadence_frames")) {
+			const auto v = st["snapshot_cadence_frames"].asUInt();
+			if (v < 1u || v > 1024u) {
+				throw std::runtime_error(
+					"grpc.json: snapshot_tick.snapshot_cadence_frames must be in [1, 1024] (got "
+					+ std::to_string(v) + ")");
+			}
+			cfg.snapshot_tick.snapshot_cadence_frames = v;
+		}
+		if (st.isMember("snapshot_max_units")) {
+			const auto v = st["snapshot_max_units"].asUInt();
+			if (v < 1u || v > 100000u) {
+				throw std::runtime_error(
+					"grpc.json: snapshot_tick.snapshot_max_units must be in [1, 100000] (got "
+					+ std::to_string(v) + ")");
+			}
+			cfg.snapshot_tick.snapshot_max_units = v;
+		}
+	}
 	return cfg;
 }
 

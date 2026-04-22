@@ -29,6 +29,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include <exception>
 #include <memory>
 #include <stdexcept>
@@ -67,6 +68,13 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 
 	try {
 		auto endpoint = grpc::LoadTransportConfig(ai);
+
+		// 003-snapshot-arm-coverage T012 — configure the snapshot tick
+		// scheduler from grpc.json. Config.cpp already validated the
+		// ranges; the ctor just applies them here. The scheduler is
+		// pumped from OnFrameTick once the gateway is Healthy.
+		snapshot_tick_.Configure({endpoint.snapshot_tick.snapshot_cadence_frames,
+		                           endpoint.snapshot_tick.snapshot_max_units});
 		if (endpoint.transport == grpc::Transport::kUds) {
 			socket_path_ = grpc::ResolveUdsPath(endpoint, ai);
 		}
@@ -106,6 +114,9 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 		service_->SetUs1Handles(snapshot_.get(), delta_bus_.get(),
 		                        ring_.get(), &state_mutex_);
 		service_->SetUs2Handles(command_queue_.get());
+		// 003-snapshot-arm-coverage — RequestSnapshot handler needs the
+		// module to flip the pending atomic + read the current frame.
+		service_->SetSnapshotHandle(this);
 		// T013 — worker-thread fault requests from service handlers
 		// route here and are applied on the engine thread next tick.
 		service_->SetFaultSink([this](const std::string& s,
@@ -495,6 +506,23 @@ void CGrpcGatewayModule::OnFrameTick() {
 		// they land in the engine this tick. Engine-thread only.
 		DrainCommandQueue();
 
+		// 003-snapshot-arm-coverage T012 — pump the snapshot scheduler.
+		// Engine-thread only; inherits the same frame-scope as the
+		// delta flush below. The tick call is cheap when not firing
+		// (a single branch on next_snapshot_frame_), so unconditional
+		// invocation is fine.
+		{
+			const std::uint32_t frame = circuit != nullptr
+				? static_cast<std::uint32_t>(circuit->GetLastFrame()) : 0u;
+			current_frame_.store(frame, std::memory_order_release);
+			const std::size_t own_units_count = circuit != nullptr
+				? circuit->GetTeamUnits().size() : 0;
+			const auto pump = snapshot_tick_.Pump(frame, own_units_count);
+			if (pump.emit) {
+				BroadcastSnapshot(pump.effective_cadence_frames);
+			}
+		}
+
 		// Emit an EconomyTick every 30 frames (1s at 30Hz). Keeps the
 		// observers' economy plot moving without flooding the delta stream.
 		static constexpr std::uint32_t kEconomyEveryNFrames = 30;
@@ -597,6 +625,67 @@ void CGrpcGatewayModule::EmitKeepAlive() {
 		TransitionToDisabled("serialization",
 			grpc::ReasonCodeFor(std::current_exception()),
 			"keepalive_threw");
+	}
+}
+
+// 003-snapshot-arm-coverage T011 — build a StateSnapshot via the existing
+// SnapshotBuilder, wrap in a StateUpdate, and push through ring + DeltaBus
+// + optional coordinator. Stamps effective_cadence_frames + send_monotonic_ns
+// per contracts/snapshot-tick.md §Scheduler behavior invariants 2–7.
+//
+// Engine-thread only. Takes state_mutex_ exclusive for the ring push, same
+// as FlushDelta. On serializer/OOM failure transitions to Disabled with
+// subsystem=serialization, same failure mode as FlushDelta.
+void CGrpcGatewayModule::BroadcastSnapshot(std::uint32_t effective_cadence_frames) {
+	if (snapshot_ == nullptr || ring_ == nullptr || delta_bus_ == nullptr) return;
+	try {
+		const std::uint64_t t0 = NowMicros();
+
+		::highbar::v1::StateUpdate update;
+		update.set_seq(++seq_);
+		update.set_frame(static_cast<std::uint32_t>(circuit->GetLastFrame()));
+
+		// Build the snapshot. BuildIncremental omits StaticMap — it was
+		// already delivered in HelloResponse and on any StreamState
+		// resume-from-empty path; per-tick resends would be wasted bytes.
+		auto* snap = update.mutable_snapshot();
+		*snap = snapshot_->BuildIncremental();
+		snap->set_effective_cadence_frames(effective_cadence_frames);
+		snap->set_frame_number(static_cast<std::uint32_t>(circuit->GetLastFrame()));
+
+		// Constitution V: stamp CLOCK_MONOTONIC_ns at the moment we hand
+		// the frame to the fan-out. Same pattern as CoordinatorClient.
+		{
+			struct timespec ts;
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			update.set_send_monotonic_ns(
+				static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ULL
+				+ static_cast<std::uint64_t>(ts.tv_nsec));
+		}
+
+		auto payload = std::make_shared<std::string>();
+		if (!update.SerializeToString(payload.get())) {
+			throw std::runtime_error("SerializeToString failed");
+		}
+		auto frozen = std::const_pointer_cast<const std::string>(payload);
+
+		{
+			std::unique_lock<std::shared_mutex> lock(state_mutex_);
+			ring_->Push(seq_, frozen);
+		}
+		delta_bus_->Publish(frozen);
+
+		if (coordinator_client_) {
+			coordinator_client_->PushStateUpdate(update);
+		}
+
+		if (counters_ != nullptr) {
+			counters_->RecordFrameFlushUs(NowMicros() - t0);
+		}
+	} catch (...) {
+		TransitionToDisabled("serialization",
+			grpc::ReasonCodeFor(std::current_exception()),
+			"broadcast_snapshot_threw");
 	}
 }
 

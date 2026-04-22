@@ -22,6 +22,17 @@ enum class Transport : std::uint8_t {
 	kTcp,
 };
 
+// 003-snapshot-arm-coverage — configuration for the periodic snapshot
+// scheduler. Embedded in TransportEndpoint since grpc.json is the
+// single source of truth for plugin-side gateway config. Validation
+// bounds per contracts/snapshot-tick.md §Plugin-side config surface:
+// cadence ∈ [1, 1024], max_units ∈ [1, 100000]. Out-of-range values
+// transition the gateway to Disabled with cfg_invalid at startup.
+struct SnapshotTickSettings {
+	std::uint32_t snapshot_cadence_frames = 30;
+	std::uint32_t snapshot_max_units      = 1000;
+};
+
 struct TransportEndpoint {
 	Transport transport = Transport::kUds;
 
@@ -52,6 +63,10 @@ struct TransportEndpoint {
 	// field is the resume-history ring; the fan-out ring is not
 	// configurable from grpc.json.
 	std::uint32_t ring_size = 2048;
+
+	// 003-snapshot-arm-coverage — periodic snapshot tick config. See
+	// SnapshotTickSettings for defaults + validation.
+	SnapshotTickSettings snapshot_tick;
 };
 
 // Parse data/config/grpc.json relative to the plugin's data root.

@@ -86,6 +86,11 @@ class HighBarProxyStub(object):
                 request_serializer=highbar_dot_service__pb2.CountersRequest.SerializeToString,
                 response_deserializer=highbar_dot_service__pb2.CountersResponse.FromString,
                 _registered_method=True)
+        self.RequestSnapshot = channel.unary_unary(
+                '/highbar.v1.HighBarProxy/RequestSnapshot',
+                request_serializer=highbar_dot_service__pb2.RequestSnapshotRequest.SerializeToString,
+                response_deserializer=highbar_dot_service__pb2.RequestSnapshotResponse.FromString,
+                _registered_method=True)
 
 
 class HighBarProxyServicer(object):
@@ -167,6 +172,25 @@ class HighBarProxyServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RequestSnapshot(self, request, context):
+        """NEW (003-snapshot-arm-coverage).
+
+        Request an out-of-cadence StateSnapshot. The plugin emits exactly
+        one extra snapshot on the next engine frame following the RPC,
+        regardless of how many concurrent callers made the request. The
+        snapshot arrives on the caller's existing `StreamState`
+        subscription — this RPC does not itself return snapshot data.
+
+        AI role only (same token as SubmitCommands); observers use the
+        periodic tick or their existing StreamState resume path.
+
+        Use sparingly — the plugin guards against DoS via the
+        1-per-frame coalescing described in FR-006.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_HighBarProxyServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -204,6 +228,11 @@ def add_HighBarProxyServicer_to_server(servicer, server):
                     servicer.GetRuntimeCounters,
                     request_deserializer=highbar_dot_service__pb2.CountersRequest.FromString,
                     response_serializer=highbar_dot_service__pb2.CountersResponse.SerializeToString,
+            ),
+            'RequestSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.RequestSnapshot,
+                    request_deserializer=highbar_dot_service__pb2.RequestSnapshotRequest.FromString,
+                    response_serializer=highbar_dot_service__pb2.RequestSnapshotResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -409,6 +438,33 @@ class HighBarProxy(object):
             '/highbar.v1.HighBarProxy/GetRuntimeCounters',
             highbar_dot_service__pb2.CountersRequest.SerializeToString,
             highbar_dot_service__pb2.CountersResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RequestSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/highbar.v1.HighBarProxy/RequestSnapshot',
+            highbar_dot_service__pb2.RequestSnapshotRequest.SerializeToString,
+            highbar_dot_service__pb2.RequestSnapshotResponse.FromString,
             options,
             channel_credentials,
             insecure,

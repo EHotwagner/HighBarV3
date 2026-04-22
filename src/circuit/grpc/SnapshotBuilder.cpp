@@ -81,14 +81,15 @@ void SnapshotBuilder::FillOwnUnits(::highbar::v1::StateSnapshot* out) const {
 		const float max_hp = cdef != nullptr && cdef->GetDef() != nullptr
 		                     ? cdef->GetDef()->GetHealth() : health;
 		ou->set_max_health(max_hp > 0.0f ? max_hp : health);
-		// under_construction / build_progress: CCircuitUnit doesn't
-		// expose a single "is under construction" predicate in a
-		// verified way from the header scan; leave false + 0.0 at
-		// Phase 2. US1's unit-created/finished event wiring (T037)
-		// fills this in via the cdef's GetBuildTime field once the
-		// correct accessor is confirmed.
-		ou->set_under_construction(false);
-		ou->set_build_progress(0.0f);
+		// under_construction / build_progress: springai::Unit exposes
+		// IsBeingBuilt() + GetBuildProgress() directly. 003 wires them
+		// up so behavioral-build predicates can verify BuildUnit
+		// side-effects on the wire (spec FR-001). Guard on null su
+		// (dying unit race) by reporting defaults.
+		const bool being_built = (su != nullptr) ? su->IsBeingBuilt() : false;
+		const float bp = (su != nullptr) ? su->GetBuildProgress() : 0.0f;
+		ou->set_under_construction(being_built);
+		ou->set_build_progress(bp);
 	}
 }
 

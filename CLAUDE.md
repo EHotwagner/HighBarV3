@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
-Active feature plan: [specs/002-live-headless-e2e/plan.md](specs/002-live-headless-e2e/plan.md).
+Active feature plan: [specs/003-snapshot-arm-coverage/plan.md](specs/003-snapshot-arm-coverage/plan.md).
 See also the feature's research, data-model, contracts, and quickstart in the same
 directory.
 <!-- SPECKIT END -->

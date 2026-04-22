@@ -68,6 +68,21 @@ service HighBarProxy {
   // coherent snapshot of RuntimeCounters; implementations take
   // atomic reads, no global lock.
   rpc GetRuntimeCounters(CountersRequest) returns (CountersResponse);
+
+  // NEW (003-snapshot-arm-coverage).
+  //
+  // Request an out-of-cadence StateSnapshot. The plugin emits exactly
+  // one extra snapshot on the next engine frame following the RPC,
+  // regardless of how many concurrent callers made the request. The
+  // snapshot arrives on the caller's existing `StreamState`
+  // subscription — this RPC does not itself return snapshot data.
+  //
+  // AI role only (same token as SubmitCommands); observers use the
+  // periodic tick or their existing StreamState resume path.
+  //
+  // Use sparingly — the plugin guards against DoS via the
+  // 1-per-frame coalescing described in FR-006.
+  rpc RequestSnapshot(RequestSnapshotRequest) returns (RequestSnapshotResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -189,4 +204,23 @@ message CountersResponse {
 
   // Plugin uptime since bind, in engine frames.
   uint32 frames_since_bind = 8;
+}
+
+// ---------------------------------------------------------------------------
+// RequestSnapshot (003-snapshot-arm-coverage)
+// ---------------------------------------------------------------------------
+
+message RequestSnapshotRequest {
+  // Empty. Reserved for future extensions (e.g., per-team restriction
+  // if multi-team subscriptions ever land).
+}
+
+message RequestSnapshotResponse {
+  // Engine frame the plugin committed to emit the forced snapshot
+  // on. Clients MAY use this to correlate the forced snapshot on
+  // their StreamState stream (match `StateSnapshot.frame_number ==
+  // scheduled_frame`). Zero if the gateway was not Healthy at
+  // dispatch time — the RPC then returns with status code
+  // FAILED_PRECONDITION.
+  uint32 scheduled_frame = 1;
 }

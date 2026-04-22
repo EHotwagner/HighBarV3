@@ -27,6 +27,7 @@
 
 namespace circuit {
 class CCircuitAI;
+class CGrpcGatewayModule;  // fwd for SetSnapshotHandles (003)
 }  // namespace circuit
 
 namespace circuit::grpc {
@@ -75,6 +76,13 @@ public:
 	// Wire the US2 command-path handle (T058). `queue` outlives this
 	// service. Until set, SubmitCommands returns UNAVAILABLE.
 	void SetUs2Handles(CommandQueue* queue);
+
+	// 003-snapshot-arm-coverage T013/T014 — wire the snapshot-tick handle.
+	// `module` exposes PendingSnapshotRequest() (atomic flag to set) and
+	// CurrentFrame() (engine-thread-updated frame counter) and State()
+	// (health gating). Must outlive this service. RequestSnapshot
+	// returns UNAVAILABLE until set.
+	void SetSnapshotHandle(::circuit::CGrpcGatewayModule* module);
 
 	// T013 — wire a fault sink that the CQ worker and handler paths
 	// call when they catch an exception. The sink is expected to be
@@ -126,6 +134,7 @@ private:
 	class InvokeCallbackCallData;
 	class SaveCallData;
 	class LoadCallData;
+	class RequestSnapshotCallData;  // 003-snapshot-arm-coverage
 
 	void CqWorker();
 	static std::string NewSessionId();
@@ -148,6 +157,10 @@ private:
 	// checking.
 	CommandQueue* command_queue_ = nullptr;
 	std::unique_ptr<CommandValidator> validator_;
+
+	// 003-snapshot-arm-coverage — module handle for RequestSnapshot.
+	// Read on worker threads; never written after SetSnapshotHandle.
+	::circuit::CGrpcGatewayModule* gateway_module_ = nullptr;
 
 	std::unique_ptr<::grpc::ServerCompletionQueue> cq_;
 	std::unique_ptr<::grpc::Server> server_;

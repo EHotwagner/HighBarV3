@@ -136,6 +136,18 @@ engine thread (where `HandleEvent` runs). Commands arriving on gRPC
 worker threads are pushed to an MPSC queue drained by the gateway on each
 frame-update event. **Never** call a `Cmd*` method from a gRPC worker.
 
+**Periodic snapshot tick (003-snapshot-arm-coverage).** A `SnapshotTick`
+scheduler in `src/circuit/grpc/SnapshotTick.{h,cpp}` is pumped from
+`CGrpcGatewayModule::OnFrameTick` after `DrainCommandQueue`. It emits a
+`StateUpdate.payload.snapshot` every `snapshot_cadence_frames` frames
+(default 30) while `own_units.length <= snapshot_max_units` (default
+1000); over-cap emissions halve the effective cadence (doubling the
+interval, capped at 1024 frames) and snap back to base on the first
+under-cap emission. The `HighBarProxy.RequestSnapshot` RPC (AI-role,
+auth-gated) sets an atomic `pending_request_` flag that the engine
+thread drains exactly once per frame regardless of caller count, so
+concurrent requests coalesce to one forced emission.
+
 ## Transport config
 
 Added to BARb's existing `data/config/*.json` (or a new
@@ -271,6 +283,18 @@ Discard entirely:
   — gRPC does framing.
 
 ## Verification
+
+The **macro-coverage driver** (`clients/python/highbar_client/
+behavioral_coverage/`, added in 003-snapshot-arm-coverage) is the
+source of truth for AICommand-arm behavioral coverage. It executes
+a deterministic 7-step bootstrap plan, iterates the 66-row arm
+registry against the live engine, runs per-arm snapshot-diff
+verify-predicates, and emits `build/reports/aicommand-behavioral-
+coverage.csv` + its `.digest` sidecar. The per-PR CI job enforces a
+ratcheted verified-rate threshold (default 50% of wire-observable
+arms); the post-merge reproducibility job runs the driver 5× at the
+same gameseed and asserts byte-identical digests plus p50 framerate
+spread ≤ 5%.
 
 1. **Unit tests** (proxy-local, no engine): feed synthetic event streams
    to `GrpcGatewayModule`, assert `StateDelta` shape; stress `DeltaBus`

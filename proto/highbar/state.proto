@@ -66,6 +66,24 @@ message StateSnapshot {
   // handshake for the state feed) or when the plugin chose to include
   // it (large-map config).
   StaticMap static_map = 7;
+
+  // NEW (003-snapshot-arm-coverage).
+  //
+  // The effective cadence, in engine frames, that was in effect when
+  // this snapshot fired. Clients compute the expected next-snapshot
+  // frame as `frame_number + effective_cadence_frames`.
+  //
+  // Equals SnapshotTickConfig.snapshot_cadence_frames under normal
+  // load. Doubles (up to a 1024-frame cap) on each emission while
+  // own_units.length > snapshot_max_units; snaps back to the
+  // configured base value on the first emission with the count back
+  // under the cap.
+  //
+  // Zero (proto3 default) iff the snapshot was emitted by the Hello
+  // one-shot path rather than by the tick scheduler; clients that
+  // need a cadence hint in that case treat 0 as "unknown, assume
+  // configured default."
+  uint32 effective_cadence_frames = 8;
 }
 
 message OwnUnit {
