@@ -1,8 +1,8 @@
-# Specification Quality Checklist: Command Contract Hardening Completion
+# Specification Quality Checklist: Build-Root Validation Completion
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-04-22  
-**Feature**: [spec.md](/home/developer/projects/HighBarV3/specs/011-contract-hardening-completion/spec.md)
+**Feature**: [spec.md](/home/developer/projects/HighBarV3/specs/012-build-root-validation/spec.md)
 
 ## Content Quality
 
@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Validation passed after the 011 spec refresh. No clarification markers remain, and the spec is ready for planning and task generation.
+- Validation passed on the first iteration. The spec is ready for planning and task generation.

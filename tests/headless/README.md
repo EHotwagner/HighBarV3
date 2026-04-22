@@ -1,6 +1,8 @@
 # Headless Workflow Notes
 
 `tests/headless/itertesting.sh` is the maintainer entrypoint for the Itertesting CLI from the repo root.
+The live wrappers prefer a Unix-socket coordinator endpoint and fall back to
+loopback TCP when the local gRPC runtime cannot bind `unix:` endpoints.
 
 The command-contract completion suite also depends on the standard
 build-root CTest entrypoints:

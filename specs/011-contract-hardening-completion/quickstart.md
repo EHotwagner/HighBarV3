@@ -13,6 +13,7 @@ Every step below is required for feature completion. A skipped required step lea
 2. Have an engine build tree available so `ctest` can run from the standard build root.
 3. Ensure Python dependencies and `uv` are available for the behavioral-coverage and headless scripts.
 4. Configure any required headless engine prerequisites before running the shell harnesses.
+5. The live headless wrappers prefer a Unix-socket coordinator endpoint and may fall back to loopback TCP if the local gRPC runtime cannot bind `unix:` endpoints.
 
 ## 1. Confirm build-root discovery and focused C++ coverage
 
@@ -59,6 +60,7 @@ Expected behavior:
 - The live-hardening path covers both synthetic regression behavior and a real headless validation run for inert-dispatch versus intentionally effect-free commands.
 - Malformed payloads fail with `INVALID_ARGUMENT` without disabling the gateway.
 - The wrapper stops on blocked or pattern-review states and proceeds only when contract health is ready.
+- A `blocked_foundational` Itertesting result or interrupted command channel remains an open completion failure, not a successful rerun.
 - A skipped headless step does not satisfy completion.
 
 ## 4. Follow the focused foundational repros

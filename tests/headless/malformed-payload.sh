@@ -23,6 +23,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HEADLESS_DIR="$REPO_ROOT/tests/headless"
 EXAMPLES_DIR="$REPO_ROOT/specs/002-live-headless-e2e/examples"
 
+# shellcheck source=tests/headless/_coordinator.sh
+source "$HEADLESS_DIR/_coordinator.sh"
 # shellcheck source=tests/headless/_fault-assert.sh
 source "$HEADLESS_DIR/_fault-assert.sh"
 
@@ -59,6 +61,7 @@ fi
 RUN_DIR="${HIGHBAR_RUN_DIR:-/tmp/hb-run}"
 mkdir -p "$RUN_DIR"
 COORD_SOCK="$RUN_DIR/hb-coord.sock"
+COORD_ENDPOINT=""
 COORD_LOG="$RUN_DIR/coord.log"
 ENGINE_LOG="$RUN_DIR/highbar-launch.log"
 ENGINE_PID_FILE="$RUN_DIR/highbar-launch.pid"
@@ -73,24 +76,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-rm -f "$COORD_SOCK"
-python3 "$EXAMPLES_DIR/coordinator.py" \
-    --endpoint "unix:$COORD_SOCK" --id malformed-payload \
-    > "$COORD_LOG" 2>&1 &
-COORD_PID=$!
-for _ in $(seq 1 20); do
-    [[ -S "$COORD_SOCK" ]] && break
-    sleep 0.2
-done
-if [[ ! -S "$COORD_SOCK" ]]; then
-    echo "malformed-payload: coordinator did not bind — skip" >&2
+if ! highbar_start_coordinator "$EXAMPLES_DIR" "$RUN_DIR" "malformed-payload" "$COORD_LOG"; then
+    echo "malformed-payload: coordinator did not bind on unix or tcp — skip" >&2
     cat "$COORD_LOG" >&2
     exit 77
 fi
+COORD_PID="$HIGHBAR_COORDINATOR_PID"
+COORD_ENDPOINT="$HIGHBAR_COORDINATOR_ENDPOINT"
 
 LAUNCH_OUT=$("$HEADLESS_DIR/_launch.sh" \
     --start-script "$START_SCRIPT" \
-    --coordinator "unix:$COORD_SOCK" \
+    --coordinator "$COORD_ENDPOINT" \
     --runtime-dir "$RUN_DIR" 2>&1)
 LAUNCH_RC=$?
 if [[ $LAUNCH_RC -eq 77 ]]; then
@@ -119,7 +115,7 @@ for _ in $(seq 1 30); do
 done
 hb_before=$(grep -c '\[hb=' "$COORD_LOG" || true)
 
-PYTHONPATH="$PYPROTO_DIR" timeout 30 python3 - "$COORD_SOCK" > "$CLIENT_LOG" 2>&1 <<'PYEOF'
+PYTHONPATH="$PYPROTO_DIR" timeout 30 python3 - "$COORD_ENDPOINT" > "$CLIENT_LOG" 2>&1 <<'PYEOF'
 import sys
 import threading
 import time
@@ -127,7 +123,7 @@ import time
 import grpc
 from highbar import service_pb2, service_pb2_grpc, commands_pb2
 
-endpoint = "unix:" + sys.argv[1]
+endpoint = sys.argv[1]
 ch = grpc.insecure_channel(endpoint)
 stub = service_pb2_grpc.HighBarProxyStub(ch)
 
@@ -223,4 +219,4 @@ if ! grep -q '^\[mp\] SubmitCommands rpc error: INVALID_ARGUMENT' "$CLIENT_LOG";
     exit 1
 fi
 
-echo "malformed-payload: PASS invalid=INVALID_ARGUMENT hb_before=$hb_before hb_after=$hb_after"
+echo "malformed-payload: PASS transport=$HIGHBAR_COORDINATOR_TRANSPORT invalid=INVALID_ARGUMENT hb_before=$hb_before hb_after=$hb_after"

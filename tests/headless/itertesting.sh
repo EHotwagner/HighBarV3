@@ -7,6 +7,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HEADLESS_DIR="$REPO_ROOT/tests/headless"
 EXAMPLES_DIR="$REPO_ROOT/specs/002-live-headless-e2e/examples"
 
+# shellcheck source=tests/headless/_coordinator.sh
+source "$HEADLESS_DIR/_coordinator.sh"
 # shellcheck source=tests/headless/_fault-assert.sh
 source "$HEADLESS_DIR/_fault-assert.sh"
 
@@ -45,6 +47,7 @@ if [[ "$SKIP_LIVE" != "true" && -z "$MAX_RUNS" ]]; then
 fi
 ACTIVE_RUN_DIR=""
 COORD_SOCK=""
+COORD_ENDPOINT=""
 COORD_LOG=""
 ENGINE_LOG=""
 ENGINE_PID_FILE=""
@@ -68,6 +71,7 @@ prepare_attempt_dir() {
     rm -rf "$ACTIVE_RUN_DIR"
     mkdir -p "$ACTIVE_RUN_DIR"
     COORD_SOCK="$ACTIVE_RUN_DIR/hb-coord.sock"
+    COORD_ENDPOINT=""
     COORD_LOG="$ACTIVE_RUN_DIR/coord.log"
     ENGINE_LOG="$ACTIVE_RUN_DIR/highbar-launch.log"
     ENGINE_PID_FILE="$ACTIVE_RUN_DIR/highbar-launch.pid"
@@ -181,22 +185,17 @@ PY
 }
 
 launch_live_topology() {
-    rm -f "$COORD_SOCK"
-    python3 "$EXAMPLES_DIR/coordinator.py" \
-        --endpoint "unix:$COORD_SOCK" --id bcov > "$COORD_LOG" 2>&1 &
-    COORD_PID=$!
-    for _ in $(seq 1 20); do
-        [[ -S "$COORD_SOCK" ]] && break
-        sleep 0.2
-    done
-    if [[ ! -S "$COORD_SOCK" ]]; then
-        echo "itertesting: coordinator failed to bind — skip" >&2
+    if ! highbar_start_coordinator "$EXAMPLES_DIR" "$ACTIVE_RUN_DIR" "bcov" "$COORD_LOG"; then
+        echo "itertesting: coordinator failed to bind on unix or tcp — skip" >&2
+        cat "$COORD_LOG" >&2
         return 77
     fi
+    COORD_PID="$HIGHBAR_COORDINATOR_PID"
+    COORD_ENDPOINT="$HIGHBAR_COORDINATOR_ENDPOINT"
 
     LAUNCH_OUT=$("$HEADLESS_DIR/_launch.sh" \
         --start-script "$START_SCRIPT" \
-        --coordinator "unix:$COORD_SOCK" \
+        --coordinator "$COORD_ENDPOINT" \
         --runtime-dir "$ACTIVE_RUN_DIR" 2>&1)
     LAUNCH_RC=$?
     if [[ $LAUNCH_RC -eq 77 ]]; then
@@ -239,7 +238,7 @@ run_live_campaign() {
     before_manifest="$(latest_run_manifest_path)"
     ARGS=(
         itertesting
-        --endpoint "unix:$COORD_SOCK"
+        --endpoint "$COORD_ENDPOINT"
         --startscript "$START_SCRIPT"
         --reports-dir "$REPORTS_DIR"
         --retry-intensity "$RETRY_INTENSITY"
