@@ -26,12 +26,17 @@ from .itertesting_retry_policy import (
     normalize_retry_policy,
 )
 from .itertesting_types import (
+    ArmVerificationRule,
     CampaignStopDecision,
+    ChannelHealthOutcome,
     CommandVerificationRecord,
+    FailureCauseClassification,
+    FixtureProvisioningResult,
     ImprovementAction,
     ImprovementInstruction,
     ItertestingCampaign,
     ItertestingRun,
+    LiveFixtureProfile,
     RetryIntensityName,
     RunProgressSnapshot,
     RunComparison,
@@ -39,12 +44,38 @@ from .itertesting_types import (
     manifest_dict,
     run_from_dict,
 )
+from .live_failure_classification import (
+    affected_commands_for_missing_fixtures,
+    classify_failure_cause,
+    default_live_fixture_profile,
+    default_verification_rules,
+    is_channel_failure_signal,
+)
 from .registry import REGISTRY
 
 
 _ALWAYS_NATURAL = {"attack", "build_unit", "self_destruct"}
 _NATURAL_IMPROVABLE = {"fight", "move_unit", "patrol"}
 _CHEAT_ONLY = {"give_me", "give_me_new_unit"}
+_SAVED_INSTRUCTION_PREFIX = "Build on saved instruction r"
+_DEFAULT_PROVISIONED_FIXTURES = (
+    "commander",
+    "builder",
+    "hostile_target",
+    "movement_lane",
+    "resource_baseline",
+    "cloakable",
+)
+_OPTIONAL_FIXTURE_GAPS = (
+    "damaged_friendly",
+    "reclaim_target",
+    "transport_unit",
+    "payload_unit",
+    "capturable_target",
+    "restore_target",
+    "wreck_target",
+    "custom_target",
+)
 
 
 def utc_now() -> datetime:
@@ -145,10 +176,134 @@ def _instruction_detail(
 ) -> str:
     if prior_instruction is None:
         return default_detail
+    prior_detail = _instruction_body(prior_instruction.instruction)
     return (
         f"Build on saved instruction r{prior_instruction.revision}: "
-        f"{prior_instruction.instruction}"
+        f"{prior_detail}"
     )
+
+
+def _instruction_body(instruction: str) -> str:
+    detail = instruction.strip()
+    while detail.startswith(_SAVED_INSTRUCTION_PREFIX):
+        _prefix, _separator, remainder = detail.partition(": ")
+        if not remainder:
+            break
+        detail = remainder.strip()
+    return detail
+
+
+def _verification_rule_map() -> dict[str, ArmVerificationRule]:
+    return {
+        rule.command_id: rule
+        for rule in default_verification_rules()
+    }
+
+
+def _fixture_profile() -> LiveFixtureProfile:
+    return default_live_fixture_profile()
+
+
+def _fixture_provisioning_for_run(
+    run_id: str,
+    *,
+    cheat_enabled: bool,
+    live_rows: list[dict] | None,
+) -> FixtureProvisioningResult:
+    provisioned = set(_DEFAULT_PROVISIONED_FIXTURES)
+    missing = set(_OPTIONAL_FIXTURE_GAPS)
+    if cheat_enabled:
+        provisioned.update(_OPTIONAL_FIXTURE_GAPS)
+        missing.clear()
+    if live_rows:
+        live_text = " ".join(
+            f"{item.get('evidence', '')} {item.get('error', '')}" for item in live_rows
+        ).lower()
+        if "reclaim" in live_text:
+            provisioned.add("reclaim_target")
+            missing.discard("reclaim_target")
+        if "damaged" in live_text or "repair" in live_text:
+            provisioned.add("damaged_friendly")
+            missing.discard("damaged_friendly")
+    return FixtureProvisioningResult(
+        run_id=run_id,
+        profile_id=_fixture_profile().profile_id,
+        provisioned_fixture_classes=tuple(sorted(provisioned)),
+        missing_fixture_classes=tuple(sorted(missing)),
+        affected_command_ids=affected_commands_for_missing_fixtures(
+            tuple(sorted(missing))
+        ),
+        completed_at=format_timestamp(utc_now()),
+    )
+
+
+def _channel_health_for_run(
+    run_id: str,
+    records: tuple[CommandVerificationRecord, ...],
+    live_rows: list[dict] | None,
+) -> ChannelHealthOutcome:
+    failure_index: int | None = None
+    failure_signal = ""
+    if live_rows:
+        for index, row in enumerate(live_rows):
+            detail = f"{row.get('evidence', '')} {row.get('error', '')}".strip()
+            if is_channel_failure_signal(detail):
+                failure_index = index
+                failure_signal = detail
+                break
+    if failure_index is None:
+        return ChannelHealthOutcome(
+            run_id=run_id,
+            status="healthy",
+            first_failure_stage=None,
+            failure_signal="",
+            commands_attempted_before_failure=sum(
+                1 for item in records if item.attempt_status != "blocked"
+            ),
+            recovery_attempted=False,
+            finalized_at=format_timestamp(utc_now()),
+        )
+    return ChannelHealthOutcome(
+        run_id=run_id,
+        status="interrupted",
+        first_failure_stage="dispatch",
+        failure_signal=failure_signal,
+        commands_attempted_before_failure=failure_index,
+        recovery_attempted=True,
+        finalized_at=format_timestamp(utc_now()),
+    )
+
+
+def _failure_classifications_for_run(
+    records: tuple[CommandVerificationRecord, ...],
+    fixture_provisioning: FixtureProvisioningResult,
+    channel_health: ChannelHealthOutcome,
+    verification_rules: tuple[ArmVerificationRule, ...],
+) -> tuple[FailureCauseClassification, ...]:
+    rules = {rule.command_id: rule for rule in verification_rules}
+    out: list[FailureCauseClassification] = []
+    for record in records:
+        if record.verified or record.category in {"channel_b_query", "channel_c_lua"}:
+            continue
+        rule = rules.get(record.command_id)
+        if rule is None:
+            rule = ArmVerificationRule(
+                command_id=record.command_id,
+                rule_mode="generic",
+                expected_effect="no explicit rule recorded",
+                evidence_window_shape="default verification window",
+                predicate_family="generic_snapshot_or_dispatch",
+                fallback_classification="behavioral_failure",
+            )
+        out.append(
+            classify_failure_cause(
+                record,
+                fixture_provisioning,
+                channel_health,
+                rule,
+            )
+        )
+    return tuple(out)
 
 
 def _improvement_defaults(
@@ -445,6 +600,23 @@ def _record_from_live_row(
         if cheat_enabled and arm_name in _CHEAT_ONLY
         else "natural"
     )
+    if is_channel_failure_signal(f"{evidence} {error}"):
+        return CommandVerificationRecord(
+            command_id=command_id,
+            command_name=arm_name,
+            category=row["category"],
+            attempt_status="blocked",
+            verification_mode="not-attempted" if not dispatched else verification_mode,
+            evidence_kind="none" if not dispatched else "dispatch-only",
+            verified=False,
+            source_run_id=run_id,
+            blocking_reason="plugin command channel is not connected",
+            improvement_state="candidate",
+            improvement_note=_instruction_detail(
+                prior_instruction,
+                "Retry after restoring the plugin command channel.",
+            ),
+        )
     if verified == "true":
         return CommandVerificationRecord(
             command_id=command_id,
@@ -549,6 +721,9 @@ def _summary_for_run(
     run_id: str,
     records: tuple[CommandVerificationRecord, ...],
     previous_run: ItertestingRun | None,
+    failure_classifications: tuple[FailureCauseClassification, ...],
+    channel_health: ChannelHealthOutcome,
+    verification_rules: tuple[ArmVerificationRule, ...],
 ) -> RunSummary:
     previous_map = {}
     if previous_run is not None:
@@ -558,7 +733,11 @@ def _summary_for_run(
     newly_verified = tuple(
         item.command_id
         for item in records
-        if item.verified and not previous_map.get(item.command_id, item).verified
+        if item.verified
+        and (
+            previous_run is None
+            or not previous_map.get(item.command_id, item).verified
+        )
     )
     regressed = tuple(
         item.command_id
@@ -570,6 +749,14 @@ def _summary_for_run(
         for item in records
         if (not item.verified) and item.improvement_state == "exhausted"
     )
+    cause_totals = {
+        "missing_fixture": 0,
+        "transport_interruption": 0,
+        "predicate_or_evidence_gap": 0,
+        "behavioral_failure": 0,
+    }
+    for item in failure_classifications:
+        cause_totals[item.primary_cause] += 1
     return RunSummary(
         run_id=run_id,
         tracked_commands=len(records),
@@ -592,6 +779,16 @@ def _summary_for_run(
         newly_verified=newly_verified,
         regressed=regressed,
         stalled=stalled,
+        direct_commands_blocked_by_fixture=cause_totals["missing_fixture"],
+        transport_interrupted=channel_health.status != "healthy",
+        arm_rules_tuned_count=sum(
+            1 for item in verification_rules if item.rule_mode != "generic"
+        ),
+        manual_restart_required=False,
+        missing_fixture_total=cause_totals["missing_fixture"],
+        transport_interruption_total=cause_totals["transport_interruption"],
+        predicate_or_evidence_gap_total=cause_totals["predicate_or_evidence_gap"],
+        behavioral_failure_total=cause_totals["behavioral_failure"],
     )
 
 
@@ -645,6 +842,8 @@ def build_run(
     started = utc_now()
     run_id = make_run_id(reports_dir, started)
     loaded_instructions = prior_instructions or {}
+    fixture_profile = _fixture_profile()
+    verification_rules = default_verification_rules()
     if live_rows is None:
         command_records = tuple(
             _record_for_command(
@@ -655,6 +854,11 @@ def build_run(
                 loaded_instructions.get(_command_id(arm_name)),
             )
             for arm_name in sorted(REGISTRY)
+        )
+        fixture_provisioning = _fixture_provisioning_for_run(
+            run_id,
+            cheat_enabled=cheat_enabled,
+            live_rows=None,
         )
     else:
         row_map = {item["arm_name"]: item for item in live_rows}
@@ -678,6 +882,18 @@ def build_run(
             )
             for arm_name in sorted(REGISTRY)
         )
+        fixture_provisioning = _fixture_provisioning_for_run(
+            run_id,
+            cheat_enabled=cheat_enabled,
+            live_rows=live_rows,
+        )
+    channel_health = _channel_health_for_run(run_id, command_records, live_rows)
+    failure_classifications = _failure_classifications_for_run(
+        command_records,
+        fixture_provisioning,
+        channel_health,
+        verification_rules,
+    )
     actions = _build_actions(
         command_records,
         current_run_id=run_id,
@@ -685,7 +901,14 @@ def build_run(
         cheat_enabled=cheat_enabled,
         prior_instructions=loaded_instructions,
     )
-    summary = _summary_for_run(run_id, command_records, previous_run)
+    summary = _summary_for_run(
+        run_id,
+        command_records,
+        previous_run,
+        failure_classifications,
+        channel_health,
+        verification_rules,
+    )
     setup_mode = (
         "cheat-assisted"
         if summary.verified_total and summary.verified_total == summary.verified_cheat_assisted
@@ -705,6 +928,11 @@ def build_run(
         command_records=command_records,
         improvement_actions=actions,
         summary=summary,
+        fixture_profile=fixture_profile,
+        fixture_provisioning=fixture_provisioning,
+        channel_health=channel_health,
+        verification_rules=verification_rules,
+        failure_classifications=failure_classifications,
     )
     comparison = _comparison_for_run(run, previous_run)
     return replace(run, previous_run_comparison=comparison)
@@ -798,15 +1026,19 @@ def update_instruction_store(
         if record.verified and record.improvement_state == "applied":
             action_type = action.action_type if action is not None else "timing-change"
             status = "superseded" if prior is not None else "retired"
-            instruction = record.improvement_note or (
-                action.details if action is not None else "Applied a targeted retry change."
+            instruction = _instruction_body(
+                record.improvement_note or (
+                    action.details if action is not None else "Applied a targeted retry change."
+                )
             )
             trigger_reason = action.trigger_reason if action is not None else ""
         elif record.improvement_state == "candidate":
             action_type = action.action_type if action is not None else "setup-change"
             status = "active"
-            instruction = record.improvement_note or (
-                action.details if action is not None else "Retry with improved setup."
+            instruction = _instruction_body(
+                record.improvement_note or (
+                    action.details if action is not None else "Retry with improved setup."
+                )
             )
             trigger_reason = record.blocking_reason or (
                 action.trigger_reason if action is not None else ""
@@ -816,8 +1048,10 @@ def update_instruction_store(
                 action.action_type if action is not None else "skip-no-better-action"
             )
             status = "retired"
-            instruction = record.improvement_note or (
-                action.details if action is not None else "No better next action remains."
+            instruction = _instruction_body(
+                record.improvement_note or (
+                    action.details if action is not None else "No better next action remains."
+                )
             )
             trigger_reason = record.blocking_reason or (
                 action.trigger_reason if action is not None else ""

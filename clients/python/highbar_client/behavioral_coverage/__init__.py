@@ -26,8 +26,10 @@ from .bootstrap import (
     BootstrapContext,
     DEFAULT_BOOTSTRAP_PLAN,
     compute_manifest,
+    fixture_classes_for_command,
     manifest_shortages,
 )
+from .live_failure_classification import is_channel_failure_signal
 from .capabilities import CAPABILITY_TAGS
 from .registry import REGISTRY, validate_registry
 from .report import (
@@ -261,7 +263,12 @@ def _simplified_bootstrap_precondition_message(
                 f"not provisioned by simplified bootstrap"
             )
     if arm_name in _SIMPLIFIED_BOOTSTRAP_TARGET_MISSING_ARMS:
-        return "simplified bootstrap does not provision the target fixture required for this arm"
+        command_id = f"cmd-{arm_name.replace('_', '-')}"
+        fixture_classes = ", ".join(fixture_classes_for_command(command_id))
+        return (
+            "simplified bootstrap does not provision the target fixture "
+            f"required for this arm ({fixture_classes})"
+        )
     return None
 
 
@@ -375,6 +382,15 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
             _dispatch(stub, batch)
             dispatched = True
         except Exception as e:  # noqa: BLE001
+            detail = str(e)
+            if is_channel_failure_signal(detail):
+                outcome = VerificationOutcome(
+                    verified="na",
+                    evidence="plugin command channel is not connected",
+                    error="dispatcher_rejected",
+                )
+                rows.append(_row_for_outcome(case, False, outcome))
+                continue
             outcome = VerificationOutcome(
                 verified="na",
                 evidence=f"dispatch failed: {e}",
@@ -389,6 +405,14 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
             shared, target_frame,
             timeout_s=max(5.0, case.verify_window_frames / 30.0 + 2.0))
         if post is None:
+            if shared["deltas"] and is_channel_failure_signal(str(shared["deltas"][-1])):
+                outcome = VerificationOutcome(
+                    verified="na",
+                    evidence="plugin command channel is not connected",
+                    error="dispatcher_rejected",
+                )
+                rows.append(_row_for_outcome(case, dispatched, outcome))
+                continue
             outcome = VerificationOutcome(
                 verified="false",
                 evidence=f"timeout waiting for frame {target_frame}",

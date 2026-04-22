@@ -22,6 +22,7 @@ from highbar_client.behavioral_coverage.itertesting_runner import (
     run_campaign,
 )
 from highbar_client.behavioral_coverage.itertesting_types import (
+    FailureCauseClassification,
     RunProgressSnapshot,
     manifest_dict,
 )
@@ -211,6 +212,7 @@ def test_instruction_store_reuse_updates_revisions_and_statuses(tmp_path):
     assert instruction_path(tmp_path, "cmd-move-unit").exists()
     assert second["cmd-move-unit"].revision > first["cmd-move-unit"].revision
     assert second["cmd-move-unit"].status in {"active", "superseded", "retired"}
+    assert "Build on saved instruction" not in second["cmd-move-unit"].instruction
 
 
 def test_summary_tracks_direct_and_non_observable_splits(tmp_path):
@@ -231,6 +233,97 @@ def test_summary_tracks_direct_and_non_observable_splits(tmp_path):
         summary.direct_verified_natural + summary.direct_verified_cheat_assisted
         == summary.direct_verified_total
     )
+
+
+def test_first_run_marks_verified_commands_as_newly_verified(tmp_path):
+    _campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=0,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    assert runs[0].summary.newly_verified
+    assert "cmd-attack" in runs[0].summary.newly_verified
+
+
+def test_synthetic_run_records_fixture_provisioning_and_missing_fixture_causes(tmp_path):
+    _campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=0,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    run = runs[0]
+
+    assert run.fixture_profile is not None
+    assert run.fixture_provisioning is not None
+    assert "cmd-load-units" in run.fixture_provisioning.affected_command_ids
+    causes = {item.command_id: item for item in run.failure_classifications}
+    assert causes["cmd-load-units"].primary_cause == "missing_fixture"
+
+
+def test_live_rows_promote_channel_failures_to_run_level_health_outcome(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "attack",
+                "category": REGISTRY["attack"].category,
+                "dispatched": "true",
+                "verified": "true",
+                "evidence": "enemy health dropped",
+                "error": "",
+            },
+            {
+                "arm_name": "fight",
+                "category": REGISTRY["fight"].category,
+                "dispatched": "false",
+                "verified": "na",
+                "evidence": "plugin command channel is not connected",
+                "error": "dispatcher_rejected",
+            },
+        ],
+    )
+
+    assert run.channel_health is not None
+    assert run.channel_health.status == "interrupted"
+    assert run.channel_health.first_failure_stage == "dispatch"
+    causes = {item.command_id: item for item in run.failure_classifications}
+    assert causes["cmd-fight"].primary_cause == "transport_interruption"
+
+
+def test_summary_tracks_tuned_rule_count(tmp_path):
+    _campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=0,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    assert runs[0].summary.arm_rules_tuned_count >= 3
+
+
+def test_run_exposes_tuned_verification_rules_for_priority_arms(tmp_path):
+    _campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=0,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    rules = {item.command_id: item for item in runs[0].verification_rules}
+
+    assert rules["cmd-move-unit"].rule_mode == "movement_tuned"
+    assert rules["cmd-fight"].rule_mode == "combat_tuned"
+    assert rules["cmd-build-unit"].rule_mode == "construction_tuned"
 
 
 def test_cli_emits_run_bundle(tmp_path):

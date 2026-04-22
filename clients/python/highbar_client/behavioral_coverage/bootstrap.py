@@ -167,6 +167,59 @@ def validate_plan(plan: tuple[BuildStep, ...]) -> None:
 validate_plan(DEFAULT_BOOTSTRAP_PLAN)
 
 
+DEFAULT_LIVE_FIXTURE_CLASS_BY_COMMAND: dict[str, tuple[str, ...]] = {
+    "cmd-attack": ("commander", "hostile_target"),
+    "cmd-attack-area": ("commander", "hostile_target"),
+    "cmd-build-unit": ("commander", "builder", "resource_baseline"),
+    "cmd-capture": ("commander", "capturable_target"),
+    "cmd-capture-area": ("commander", "capturable_target"),
+    "cmd-custom": ("commander", "custom_target"),
+    "cmd-dgun": ("commander", "hostile_target"),
+    "cmd-fight": ("commander", "hostile_target", "movement_lane"),
+    "cmd-guard": ("commander", "damaged_friendly"),
+    "cmd-load-onto": ("commander", "transport_unit", "payload_unit"),
+    "cmd-load-units": ("commander", "transport_unit", "payload_unit"),
+    "cmd-load-units-area": ("commander", "transport_unit", "payload_unit"),
+    "cmd-move-unit": ("commander", "movement_lane"),
+    "cmd-patrol": ("commander", "movement_lane"),
+    "cmd-reclaim-area": ("commander", "reclaim_target"),
+    "cmd-reclaim-feature": ("commander", "reclaim_target"),
+    "cmd-reclaim-in-area": ("commander", "reclaim_target"),
+    "cmd-reclaim-unit": ("commander", "reclaim_target"),
+    "cmd-repair": ("commander", "damaged_friendly"),
+    "cmd-restore-area": ("commander", "restore_target"),
+    "cmd-resurrect": ("commander", "wreck_target"),
+    "cmd-resurrect-in-area": ("commander", "wreck_target"),
+    "cmd-self-destruct": ("cloakable",),
+    "cmd-unload-unit": ("commander", "transport_unit", "payload_unit"),
+    "cmd-unload-units-area": ("commander", "transport_unit", "payload_unit"),
+}
+
+DEFAULT_LIVE_FIXTURE_CLASSES: tuple[str, ...] = (
+    "commander",
+    "builder",
+    "hostile_target",
+    "movement_lane",
+    "resource_baseline",
+    "cloakable",
+)
+
+OPTIONAL_LIVE_FIXTURE_CLASSES: tuple[str, ...] = (
+    "damaged_friendly",
+    "reclaim_target",
+    "transport_unit",
+    "payload_unit",
+    "capturable_target",
+    "restore_target",
+    "wreck_target",
+    "custom_target",
+)
+
+
+def fixture_classes_for_command(command_id: str) -> tuple[str, ...]:
+    return DEFAULT_LIVE_FIXTURE_CLASS_BY_COMMAND.get(command_id, ("commander",))
+
+
 # ---- execution + reset (engine-dependent, kept thin) --------------------
 
 
@@ -218,6 +271,10 @@ __all__ = [
     "manifest_shortages",
     "critical_path_seconds",
     "validate_plan",
+    "DEFAULT_LIVE_FIXTURE_CLASS_BY_COMMAND",
+    "DEFAULT_LIVE_FIXTURE_CLASSES",
+    "OPTIONAL_LIVE_FIXTURE_CLASSES",
+    "fixture_classes_for_command",
     "execute_bootstrap",
     "reset_to_manifest",
 ]

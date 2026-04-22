@@ -129,6 +129,77 @@ def render_run_report(
             lines.append(f"- Stop reason: {stop_reason}")
         lines.append("")
 
+    if run.fixture_profile is not None and run.fixture_provisioning is not None:
+        lines.extend(
+            [
+                "## Fixture Provisioning",
+                "",
+                f"- Profile id: `{run.fixture_profile.profile_id}`",
+                (
+                    "- Provisioned fixtures: "
+                    + ", ".join(run.fixture_provisioning.provisioned_fixture_classes)
+                ),
+                (
+                    "- Missing fixtures: "
+                    + (
+                        ", ".join(run.fixture_provisioning.missing_fixture_classes)
+                        if run.fixture_provisioning.missing_fixture_classes
+                        else "none"
+                    )
+                ),
+                (
+                    "- Commands blocked by fixture: "
+                    f"{run.summary.direct_commands_blocked_by_fixture}"
+                ),
+                "",
+            ]
+        )
+
+    if run.channel_health is not None:
+        lines.extend(
+            [
+                "## Channel Health",
+                "",
+                f"- Status: {run.channel_health.status}",
+                (
+                    "- First failure stage: "
+                    f"{run.channel_health.first_failure_stage or 'none'}"
+                ),
+                (
+                    "- Failure signal: "
+                    f"{run.channel_health.failure_signal or 'none'}"
+                ),
+                (
+                    "- Commands attempted before failure: "
+                    f"{run.channel_health.commands_attempted_before_failure}"
+                ),
+                (
+                    "- Recovery attempted: "
+                    f"{'yes' if run.channel_health.recovery_attempted else 'no'}"
+                ),
+                "",
+            ]
+        )
+
+    if run.failure_classifications:
+        lines.extend(
+            [
+                "## Failure Cause Summary",
+                "",
+                f"- Missing fixture: {run.summary.missing_fixture_total}",
+                (
+                    "- Transport interruption: "
+                    f"{run.summary.transport_interruption_total}"
+                ),
+                (
+                    "- Predicate or evidence gap: "
+                    f"{run.summary.predicate_or_evidence_gap_total}"
+                ),
+                f"- Behavioral failure: {run.summary.behavioral_failure_total}",
+                "",
+            ]
+        )
+
     lines.extend(["## Unverified Direct Commands", ""])
     unverified_direct = [
         record
@@ -136,9 +207,13 @@ def render_run_report(
         if _is_direct(record) and not record.verified
     ]
     if unverified_direct:
+        causes = {
+            item.command_id: item.primary_cause for item in run.failure_classifications
+        }
         for record in unverified_direct:
             lines.append(
                 f"- `{record.command_id}` — {record.attempt_status} — "
+                f"{causes.get(record.command_id, 'unclassified')} — "
                 f"{record.blocking_reason or 'no reason recorded'} — "
                 f"next action: {record.improvement_note or 'no next action recorded'}"
             )

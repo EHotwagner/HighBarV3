@@ -10,7 +10,7 @@
 	MyPlayerName=HighBarV3Test;
 	NoHelperAIs=0;
 	StartPosType=0;
-	GameStartDelay=0;
+	GameStartDelay=3;
 	FixedRNGSeed=1;
 
 	[MODOPTIONS]

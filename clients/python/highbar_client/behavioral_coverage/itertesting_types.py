@@ -11,6 +11,27 @@ AttemptStatus = Literal["verified", "inconclusive", "blocked", "failed"]
 VerificationMode = Literal["natural", "cheat-assisted", "not-attempted"]
 EvidenceKind = Literal["game-state", "live-artifact", "dispatch-only", "none"]
 ImprovementState = Literal["none", "candidate", "applied", "exhausted"]
+FixtureFallbackBehavior = Literal["classify_missing_fixture", "interrupt_run"]
+ChannelHealthStatus = Literal["healthy", "degraded", "recovered", "interrupted"]
+ChannelFailureStage = Literal["startup", "dispatch", "verification", "shutdown"]
+VerificationRuleMode = Literal[
+    "generic",
+    "movement_tuned",
+    "combat_tuned",
+    "construction_tuned",
+]
+FailureCause = Literal[
+    "missing_fixture",
+    "transport_interruption",
+    "predicate_or_evidence_gap",
+    "behavioral_failure",
+]
+FailureSourceScope = Literal[
+    "bootstrap",
+    "channel_health",
+    "verification_rule",
+    "command_outcome",
+]
 ActionType = Literal[
     "setup-change",
     "target-change",
@@ -62,6 +83,56 @@ class CommandVerificationRecord:
     setup_actions: tuple[str, ...] = ()
     improvement_state: ImprovementState = "none"
     improvement_note: str = ""
+
+
+@dataclass(frozen=True)
+class LiveFixtureProfile:
+    profile_id: str
+    fixture_classes: tuple[str, ...]
+    supported_command_ids: tuple[str, ...]
+    optional_fixture_classes: tuple[str, ...] = ()
+    provisioning_budget_seconds: int = 0
+    fallback_behavior: FixtureFallbackBehavior = "classify_missing_fixture"
+
+
+@dataclass(frozen=True)
+class FixtureProvisioningResult:
+    run_id: str
+    profile_id: str
+    provisioned_fixture_classes: tuple[str, ...]
+    missing_fixture_classes: tuple[str, ...]
+    affected_command_ids: tuple[str, ...]
+    completed_at: str
+
+
+@dataclass(frozen=True)
+class ChannelHealthOutcome:
+    run_id: str
+    status: ChannelHealthStatus
+    first_failure_stage: Optional[ChannelFailureStage]
+    failure_signal: str
+    commands_attempted_before_failure: int
+    recovery_attempted: bool
+    finalized_at: str
+
+
+@dataclass(frozen=True)
+class ArmVerificationRule:
+    command_id: str
+    rule_mode: VerificationRuleMode
+    expected_effect: str
+    evidence_window_shape: str
+    predicate_family: str
+    fallback_classification: FailureCause
+
+
+@dataclass(frozen=True)
+class FailureCauseClassification:
+    command_id: str
+    run_id: str
+    primary_cause: FailureCause
+    supporting_detail: str
+    source_scope: FailureSourceScope
 
 
 @dataclass(frozen=True)
@@ -161,6 +232,14 @@ class RunSummary:
     configured_improvement_runs: int = 0
     effective_improvement_runs: int = 0
     retry_intensity_profile: RetryIntensityName = "standard"
+    direct_commands_blocked_by_fixture: int = 0
+    transport_interrupted: bool = False
+    arm_rules_tuned_count: int = 0
+    manual_restart_required: bool = False
+    missing_fixture_total: int = 0
+    transport_interruption_total: int = 0
+    predicate_or_evidence_gap_total: int = 0
+    behavioral_failure_total: int = 0
 
 
 @dataclass(frozen=True)
@@ -190,6 +269,11 @@ class ItertestingRun:
     summary: RunSummary
     instruction_updates: tuple[ImprovementInstruction, ...] = ()
     previous_run_comparison: Optional[RunComparison] = None
+    fixture_profile: LiveFixtureProfile | None = None
+    fixture_provisioning: FixtureProvisioningResult | None = None
+    channel_health: ChannelHealthOutcome | None = None
+    verification_rules: tuple[ArmVerificationRule, ...] = ()
+    failure_classifications: tuple[FailureCauseClassification, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -233,6 +317,71 @@ def _command_record_from_dict(payload: dict[str, Any]) -> CommandVerificationRec
     )
 
 
+def _fixture_profile_from_dict(payload: dict[str, Any]) -> LiveFixtureProfile:
+    return LiveFixtureProfile(
+        profile_id=payload["profile_id"],
+        fixture_classes=tuple(payload.get("fixture_classes", ())),
+        supported_command_ids=tuple(payload.get("supported_command_ids", ())),
+        optional_fixture_classes=tuple(payload.get("optional_fixture_classes", ())),
+        provisioning_budget_seconds=payload.get("provisioning_budget_seconds", 0),
+        fallback_behavior=payload.get(
+            "fallback_behavior", "classify_missing_fixture"
+        ),
+    )
+
+
+def _fixture_provisioning_from_dict(
+    payload: dict[str, Any],
+) -> FixtureProvisioningResult:
+    return FixtureProvisioningResult(
+        run_id=payload["run_id"],
+        profile_id=payload["profile_id"],
+        provisioned_fixture_classes=tuple(payload.get("provisioned_fixture_classes", ())),
+        missing_fixture_classes=tuple(payload.get("missing_fixture_classes", ())),
+        affected_command_ids=tuple(payload.get("affected_command_ids", ())),
+        completed_at=payload["completed_at"],
+    )
+
+
+def _channel_health_from_dict(payload: dict[str, Any]) -> ChannelHealthOutcome:
+    return ChannelHealthOutcome(
+        run_id=payload["run_id"],
+        status=payload["status"],
+        first_failure_stage=payload.get("first_failure_stage"),
+        failure_signal=payload.get("failure_signal", ""),
+        commands_attempted_before_failure=payload.get(
+            "commands_attempted_before_failure", 0
+        ),
+        recovery_attempted=payload.get("recovery_attempted", False),
+        finalized_at=payload["finalized_at"],
+    )
+
+
+def _verification_rule_from_dict(payload: dict[str, Any]) -> ArmVerificationRule:
+    return ArmVerificationRule(
+        command_id=payload["command_id"],
+        rule_mode=payload.get("rule_mode", "generic"),
+        expected_effect=payload.get("expected_effect", ""),
+        evidence_window_shape=payload.get("evidence_window_shape", ""),
+        predicate_family=payload.get("predicate_family", ""),
+        fallback_classification=payload.get(
+            "fallback_classification", "behavioral_failure"
+        ),
+    )
+
+
+def _failure_classification_from_dict(
+    payload: dict[str, Any],
+) -> FailureCauseClassification:
+    return FailureCauseClassification(
+        command_id=payload["command_id"],
+        run_id=payload["run_id"],
+        primary_cause=payload["primary_cause"],
+        supporting_detail=payload.get("supporting_detail", ""),
+        source_scope=payload.get("source_scope", "command_outcome"),
+    )
+
+
 def _improvement_action_from_dict(payload: dict[str, Any]) -> ImprovementAction:
     return ImprovementAction(
         action_id=payload["action_id"],
@@ -273,6 +422,18 @@ def _summary_from_dict(payload: dict[str, Any]) -> RunSummary:
         configured_improvement_runs=payload.get("configured_improvement_runs", 0),
         effective_improvement_runs=payload.get("effective_improvement_runs", 0),
         retry_intensity_profile=payload.get("retry_intensity_profile", "standard"),
+        direct_commands_blocked_by_fixture=payload.get(
+            "direct_commands_blocked_by_fixture", 0
+        ),
+        transport_interrupted=payload.get("transport_interrupted", False),
+        arm_rules_tuned_count=payload.get("arm_rules_tuned_count", 0),
+        manual_restart_required=payload.get("manual_restart_required", False),
+        missing_fixture_total=payload.get("missing_fixture_total", 0),
+        transport_interruption_total=payload.get("transport_interruption_total", 0),
+        predicate_or_evidence_gap_total=payload.get(
+            "predicate_or_evidence_gap_total", 0
+        ),
+        behavioral_failure_total=payload.get("behavioral_failure_total", 0),
     )
 
 
@@ -314,5 +475,28 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
         summary=_summary_from_dict(payload["summary"]),
         previous_run_comparison=(
             _comparison_from_dict(comparison) if comparison else None
+        ),
+        fixture_profile=(
+            _fixture_profile_from_dict(payload["fixture_profile"])
+            if payload.get("fixture_profile")
+            else None
+        ),
+        fixture_provisioning=(
+            _fixture_provisioning_from_dict(payload["fixture_provisioning"])
+            if payload.get("fixture_provisioning")
+            else None
+        ),
+        channel_health=(
+            _channel_health_from_dict(payload["channel_health"])
+            if payload.get("channel_health")
+            else None
+        ),
+        verification_rules=tuple(
+            _verification_rule_from_dict(item)
+            for item in payload.get("verification_rules", ())
+        ),
+        failure_classifications=tuple(
+            _failure_classification_from_dict(item)
+            for item in payload.get("failure_classifications", ())
         ),
     )

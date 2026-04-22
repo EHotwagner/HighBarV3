@@ -49,6 +49,7 @@ WRITE_DIR="${HIGHBAR_WRITE_DIR:-$HOME/.local/state/Beyond All Reason}"
 OUTPUT_DIR="${HIGHBAR_OUTPUT_DIR:-$REPO_ROOT/build/reports}"
 THRESHOLD="${HIGHBAR_BEHAVIORAL_THRESHOLD:-0.50}"
 GAMESEED="${HIGHBAR_GAMESEED:-0x42424242}"
+BOOTSTRAP_WAIT_SECONDS="${HIGHBAR_BEHAVIORAL_BOOTSTRAP_WAIT_SECONDS:-12}"
 
 # Allow override from args.
 while [[ $# -gt 0 ]]; do
@@ -115,7 +116,7 @@ if [[ $fs -eq 2 ]]; then
     exit 77
 fi
 
-sleep 5  # Let commanders spawn so the driver finds them.
+sleep "$BOOTSTRAP_WAIT_SECONDS"  # Let the default live fixtures stabilize.
 
 # ---- Invoke the macro driver ---------------------------------------------
 

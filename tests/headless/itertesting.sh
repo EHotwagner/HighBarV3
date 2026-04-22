@@ -35,6 +35,7 @@ LIVE_RETRIES="${HIGHBAR_ITERTESTING_LIVE_RETRIES:-1}"
 THRESHOLD="${HIGHBAR_BEHAVIORAL_THRESHOLD:-0.50}"
 GAMESEED="${HIGHBAR_GAMESEED:-0x42424242}"
 MAX_RUNS="${HIGHBAR_ITERTESTING_MAX_IMPROVEMENT_RUNS:-}"
+BOOTSTRAP_WAIT_SECONDS="${HIGHBAR_ITERTESTING_BOOTSTRAP_WAIT_SECONDS:-12}"
 # The maintainer-facing live path is documented as a default single run.
 # Keep profile-driven defaults for synthetic campaign validation, but
 # clamp the live wrapper to one run unless the maintainer explicitly
@@ -90,26 +91,48 @@ latest_stop_decision_path() {
         | cut -d' ' -f2-
 }
 
+latest_run_manifest_path() {
+    find "$REPORTS_DIR" -maxdepth 2 -name 'manifest.json' -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr \
+        | head -n 1 \
+        | cut -d' ' -f2-
+}
+
 should_retry_live_session() {
-    local decision_path="$1"
-    local command_output="$2"
+    local manifest_path="$1"
+    local decision_path="$2"
+    local command_output="$3"
     local channel_dropped=1
     if [[ -f "$COORD_LOG" ]] && grep -q '\[cmd-ch\].*disconnected' "$COORD_LOG"; then
         channel_dropped=0
     fi
 
-    if [[ -n "$decision_path" && -f "$decision_path" ]]; then
-        python3 - "$decision_path" "$channel_dropped" <<'PY'
+    if [[ -n "$manifest_path" && -f "$manifest_path" ]]; then
+        python3 - "$manifest_path" "$decision_path" "$channel_dropped" <<'PY'
 import json
 import sys
-path = sys.argv[1]
-channel_dropped = sys.argv[2] == "0"
-with open(path, "r", encoding="utf-8") as handle:
-    payload = json.load(handle)
+manifest_path = sys.argv[1]
+decision_path = sys.argv[2]
+channel_dropped = sys.argv[3] == "0"
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+decision = {}
+if decision_path and decision_path != "None":
+    try:
+        with open(decision_path, "r", encoding="utf-8") as handle:
+            decision = json.load(handle)
+    except FileNotFoundError:
+        decision = {}
+channel = manifest.get("channel_health") or {}
+summary = manifest.get("summary") or {}
 should_retry = (
     channel_dropped
-    and payload.get("stop_reason") in {"stalled", "interrupted"}
-    and payload.get("direct_verified_total", 0) == 0
+    and channel.get("status") in {"degraded", "recovered", "interrupted"}
+    and (
+        decision.get("stop_reason") in {"stalled", "interrupted"}
+        or summary.get("transport_interrupted")
+    )
+    and summary.get("direct_verified_total", 0) == 0
 )
 raise SystemExit(0 if should_retry else 1)
 PY
@@ -164,7 +187,7 @@ launch_live_topology() {
         return 77
     fi
 
-    sleep 5
+    sleep "$BOOTSTRAP_WAIT_SECONDS"
     return 0
 }
 
@@ -173,10 +196,13 @@ run_live_campaign() {
     local out_file="$ACTIVE_RUN_DIR/itertesting.out"
     local before_stop=""
     local after_stop=""
+    local before_manifest=""
+    local after_manifest=""
     local command_output=""
     local rc=0
 
     before_stop="$(latest_stop_decision_path)"
+    before_manifest="$(latest_run_manifest_path)"
     ARGS=(
         itertesting
         --endpoint "unix:$COORD_SOCK"
@@ -202,9 +228,12 @@ run_live_campaign() {
     printf '%s\n' "$command_output"
 
     after_stop="$(latest_stop_decision_path)"
-    if should_retry_live_session "$after_stop" "$command_output"; then
+    after_manifest="$(latest_run_manifest_path)"
+    if should_retry_live_session "$after_manifest" "$after_stop" "$command_output"; then
         if [[ "$after_stop" != "$before_stop" && -n "$after_stop" ]]; then
             echo "itertesting: live session degraded; latest stop decision=$(basename "$(dirname "$after_stop")")/$(basename "$after_stop")" >&2
+        elif [[ "$after_manifest" != "$before_manifest" && -n "$after_manifest" ]]; then
+            echo "itertesting: live session degraded; latest manifest=$(basename "$(dirname "$after_manifest")")/$(basename "$after_manifest")" >&2
         else
             echo "itertesting: live session degraded before a new stop decision artifact was written" >&2
         fi

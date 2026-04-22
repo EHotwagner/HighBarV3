@@ -41,6 +41,16 @@ HYPOTHESIS_CLASSES: dict[HypothesisClass, dict[str, str]] = {
     },
 }
 
+TUNED_LIVE_RULE_HYPOTHESES: dict[str, HypothesisClass] = {
+    "move_unit": "dispatcher_defect",
+    "fight": "dispatcher_defect",
+    "build_unit": "cross_team_rejection",
+}
+
+
+def live_rule_fallback_hypothesis(command_name: str) -> HypothesisClass | None:
+    return TUNED_LIVE_RULE_HYPOTHESES.get(command_name)
+
 
 def primary_hypothesis_for_row(row: AuditRow) -> HypothesisClass:
     name = row.arm_or_rpc_name

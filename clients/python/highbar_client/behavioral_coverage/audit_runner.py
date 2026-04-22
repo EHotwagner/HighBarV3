@@ -191,13 +191,14 @@ def phase2_macro_chain() -> tuple[str, dict[str, str]]:
             "",
             "Phase-2 attribution summary:",
             "",
-            "- `cmd-move-unit`, `cmd-fight`, and `cmd-patrol` keep their `phase1_reissuance` classification until a stronger phase-1 repro lands.",
+            "- `cmd-move-unit` and `cmd-fight` now use tuned live evidence rules; Phase-2 remains the fallback repro when Phase-1 evidence stays ambiguous.",
+            "- `cmd-patrol` still keeps its `phase1_reissuance` classification until a stronger Phase-1 repro lands.",
             "- The latest completed manifest links these rows back to this phase-2 smoke report.",
         ]
     )
     return "\n".join(table) + "\n", {
-        "cmd-move-unit": "Phase-2 macro chain Step 3 PASS with built-in AI disabled.",
-        "cmd-fight": "Phase-2 smoke keeps combat follow-up wiring reachable with built-in AI disabled.",
+        "cmd-move-unit": "Phase-2 macro chain Step 3 PASS and supports the movement-tuned live rule.",
+        "cmd-fight": "Phase-2 smoke keeps combat follow-up wiring reachable when the combat-tuned live rule needs extra evidence.",
         "cmd-patrol": "Phase-2 smoke preserves the movement-chain path without ambient AI reissue.",
     }
 
@@ -560,7 +561,13 @@ def build_row_index(rows: Iterable[AuditRow] | None = None, run: LiveAuditRun | 
 
 
 def build_hypothesis_plan(rows: list[AuditRow]) -> list[HypothesisPlanEntry]:
-    phase1_fragile = {"cmd-build-unit", "cmd-attack", "cmd-self-destruct"}
+    phase1_fragile = {
+        "cmd-build-unit",
+        "cmd-attack",
+        "cmd-fight",
+        "cmd-move-unit",
+        "cmd-self-destruct",
+    }
     entries: list[HypothesisPlanEntry] = []
     for row in rows:
         if row.kind != "aicommand":

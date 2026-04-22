@@ -29,6 +29,14 @@ Expected bundle per run:
 - `reports/itertesting/instructions/index.json`
 - `reports/itertesting/instructions/cmd-*.json`
 
+Live-hardening validation now has a dedicated entrypoint:
+
+```bash
+tests/headless/test_live_itertesting_hardening.sh
+```
+
+The script validates fixture provisioning, channel-health reporting, failure-cause summaries, and tuned repro coverage for `cmd-move-unit`, `cmd-fight`, and `cmd-build-unit`.
+
 Use `tests/headless/test_itertesting_campaign.sh` to validate that chained runs emit both artifacts.
 
 Malformed payload resilience can be checked directly with:

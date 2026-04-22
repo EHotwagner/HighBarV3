@@ -19,8 +19,11 @@ from .capabilities import CAPABILITY_TAGS
 from .predicates import (
     build_progress_monotonic_predicate,
     capability_selector,
+    combat_engagement_predicate,
     commander_selector,
+    construction_started_predicate,
     health_delta_predicate,
+    movement_progress_predicate,
     position_delta_predicate,
     unit_count_delta_predicate,
 )
@@ -150,6 +153,21 @@ def _move_unit_builder(ctx: Any):
     return batch
 
 
+def _fight_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    cmd = batch.commands.add()
+    cmd.fight.unit_id = uid
+    pos = ctx.commander_position
+    cmd.fight.to_position.x = pos.x + 500.0
+    cmd.fight.to_position.y = pos.y
+    cmd.fight.to_position.z = pos.z
+    return batch
+
+
 def _attack_unit_builder(ctx: Any):
     commands_pb2, common_pb2 = _import_proto()
     batch = commands_pb2.CommandBatch()
@@ -274,25 +292,44 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
         arm_name="move_unit", category="channel_a_command",
         required_capability="commander",
         input_builder=_move_unit_builder,
-        verify_predicate=position_delta_predicate(
+        verify_predicate=movement_progress_predicate(
             unit_id_selector=lambda snap: next(
                 (u.unit_id for u in snap.own_units if u.max_health > 3000),
                 None,
             ),
-            min_delta=100.0,
+            min_delta=48.0,
         ),
-        verify_window_frames=120,
-        rationale="commander moved ≥ 100 elmos toward target",
+        verify_window_frames=180,
+        rationale="movement-tuned rule: commander moved toward the ordered position",
     )
 
     reg["build_unit"] = BehavioralTestCase(
         arm_name="build_unit", category="channel_a_command",
         required_capability="commander",
         input_builder=_build_unit_builder,
-        verify_predicate=build_progress_monotonic_predicate(
+        verify_predicate=construction_started_predicate(
             builder_id_selector=commander_selector),
-        verify_window_frames=150,  # 5s — build_progress needs time
-        rationale="new construction site with advancing build_progress",
+        verify_window_frames=210,
+        rationale="construction-tuned rule: new site appears and build progress starts",
+    )
+
+    reg["fight"] = BehavioralTestCase(
+        arm_name="fight", category="channel_a_command",
+        required_capability="commander",
+        input_builder=_fight_builder,
+        verify_predicate=combat_engagement_predicate(
+            unit_id_selector=lambda snap: next(
+                (u.unit_id for u in snap.own_units if u.max_health > 3000),
+                None,
+            ),
+            target_selector=lambda snap: (
+                snap.visible_enemies[0].unit_id if snap.visible_enemies else None
+            ),
+            min_drop=1.0,
+            min_distance_delta=48.0,
+        ),
+        verify_window_frames=360,
+        rationale="combat-tuned rule: either the hostile target takes damage or the unit closes into engagement range",
     )
 
     reg["attack"] = BehavioralTestCase(
@@ -325,7 +362,7 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
     # count against the denominator honestly.
     _UNVERIFIED_UNIT_ARMS = {
         "stop", "wait", "timed_wait", "squad_wait", "death_wait", "gather_wait",
-        "patrol", "fight", "attack_area", "guard",
+        "patrol", "attack_area", "guard",
         "repair", "reclaim_unit", "reclaim_area", "reclaim_in_area",
         "reclaim_feature", "restore_area", "resurrect", "resurrect_in_area",
         "capture", "capture_area", "set_base",

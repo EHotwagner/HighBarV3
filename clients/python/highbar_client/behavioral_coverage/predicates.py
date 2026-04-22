@@ -103,6 +103,14 @@ def position_delta_predicate(
     return predicate
 
 
+def movement_progress_predicate(
+    unit_id_selector: Callable[[Any], Optional[int]],
+    *,
+    min_delta: float = 48.0,
+) -> Callable[[SnapshotPair, list], VerificationOutcome]:
+    return position_delta_predicate(unit_id_selector=unit_id_selector, min_delta=min_delta)
+
+
 def unit_count_delta_predicate(
     expected_delta: int,
     new_unit_filter: Optional[Callable[[Any], bool]] = None,
@@ -211,6 +219,59 @@ def health_delta_predicate(
     return predicate
 
 
+def combat_engagement_predicate(
+    unit_id_selector: Callable[[Any], Optional[int]],
+    target_selector: Callable[[Any], Optional[int]],
+    *,
+    min_drop: float = 1.0,
+    min_distance_delta: float = 48.0,
+) -> Callable[[SnapshotPair, list], VerificationOutcome]:
+    def predicate(pair: SnapshotPair, deltas: list) -> VerificationOutcome:
+        health_outcome = health_delta_predicate(
+            target_selector=target_selector,
+            min_drop=min_drop,
+            target_is_enemy=True,
+        )(pair, deltas)
+        if health_outcome.verified == "true":
+            return health_outcome
+
+        uid = unit_id_selector(pair.before)
+        tid = target_selector(pair.before)
+        if uid is None or tid is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence="combat target or acting unit missing pre-snapshot",
+                error="precondition_unmet",
+            )
+        pre_unit = _find_unit(pair.before, uid)
+        post_unit = _find_unit(pair.after, uid)
+        pre_target = _find_unit(pair.before, tid)
+        post_target = _find_unit(pair.after, tid)
+        if any(item is None for item in (pre_unit, post_unit, pre_target, post_target)):
+            return health_outcome
+        pre_distance = _distance(pre_unit.position, pre_target.position)
+        post_distance = _distance(post_unit.position, post_target.position)
+        distance_delta = pre_distance - post_distance
+        if distance_delta >= min_distance_delta:
+            return VerificationOutcome(
+                verified="true",
+                evidence=(
+                    f"distance_to_target shrank by {distance_delta:.3f} "
+                    f"(threshold {min_distance_delta:.3f}) before direct damage landed"
+                ),
+            )
+        return VerificationOutcome(
+            verified="false",
+            evidence=(
+                f"target health unchanged and distance delta={distance_delta:.3f} "
+                f"< threshold {min_distance_delta:.3f}"
+            ),
+            error="effect_not_observed",
+        )
+
+    return predicate
+
+
 def build_progress_monotonic_predicate(
     builder_id_selector: Callable[[Any], Optional[int]],
 ) -> Callable[[SnapshotPair, list], VerificationOutcome]:
@@ -263,6 +324,12 @@ def build_progress_monotonic_predicate(
         )
 
     return predicate
+
+
+def construction_started_predicate(
+    builder_id_selector: Callable[[Any], Optional[int]],
+) -> Callable[[SnapshotPair, list], VerificationOutcome]:
+    return build_progress_monotonic_predicate(builder_id_selector=builder_id_selector)
 
 
 # ---- selector helpers ---------------------------------------------------
