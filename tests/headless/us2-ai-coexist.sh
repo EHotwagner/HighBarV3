@@ -6,8 +6,9 @@
 #
 # Pattern: same client-mode setup as us1-observer.sh (coordinator +
 # _launch.sh + minimal.startscript), then runs ai_client.py as an AI-
-# role client that watches StreamState for the first UnitCreated, sends
-# a MoveUnit command on it via SubmitCommands, and asserts the
+# role client that watches StreamState for the first controllable unit
+# (from either UnitCreated deltas or snapshots), sends a MoveUnit
+# command on it via SubmitCommands, and asserts the
 # coordinator forwarded it (proxy log shows
 # `[proxy] SubmitCommands ... received 1 batches, forwarded`).
 #
@@ -123,7 +124,7 @@ if ! grep -q '\[hb-gateway\] startup' "$ENGINE_LOG"; then
 fi
 
 # Give the match a few more seconds so commanders are spawned and
-# UnitCreated deltas are pushed.
+# snapshot state is flowing before the AI-role client subscribes.
 sleep 8
 
 # ---- AI-role client run ---------------------------------------------------
@@ -138,8 +139,8 @@ if ! grep -q '^\[ai\] Hello OK' "$AI_LOG"; then
     tail -20 "$AI_LOG" >&2
     exit 1
 fi
-if ! grep -q '^\[ai\] saw UnitCreated id=' "$AI_LOG"; then
-    echo "us2-ai-coexist: ai_client did not observe UnitCreated — fail" >&2
+if ! grep -Eq '^\[ai\] (saw UnitCreated id=|selected own unit from snapshot id=)' "$AI_LOG"; then
+    echo "us2-ai-coexist: ai_client did not observe a controllable unit — fail" >&2
     tail -20 "$AI_LOG" >&2
     exit 1
 fi
@@ -149,7 +150,8 @@ if ! grep -q 'SubmitCommands ack: accepted=1' "$AI_LOG"; then
     exit 1
 fi
 # T065: ai_client.py emits 'damage_invalid=N' on its done line; >0 means
-# the OnUnitDamagedFull widening regressed.
+# the OnUnitDamagedFull widening regressed for a checkable damage event
+# (damage<=0, or zero direction with attacker_id present).
 invalid=$(grep -oE 'damage_invalid=[0-9]+' "$AI_LOG" | tail -1 | sed 's/.*=//')
 if [[ -n "$invalid" && "$invalid" -gt 0 ]]; then
     echo "us2-ai-coexist: $invalid UnitDamaged events with bad payload — fail" >&2
@@ -178,5 +180,5 @@ if [[ $fs -eq 2 ]]; then
     exit 1
 fi
 
-UID_OBSERVED=$(grep -oE 'UnitCreated id=[0-9]+' "$AI_LOG" | head -1 | sed 's/.*=//')
+UID_OBSERVED=$(grep -oE '(UnitCreated id|snapshot id)=[0-9]+' "$AI_LOG" | head -1 | sed 's/.*=//')
 echo "us2-ai-coexist: PASS uid=$UID_OBSERVED submit_ack=1"

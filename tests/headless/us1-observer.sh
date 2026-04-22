@@ -147,8 +147,9 @@ if [[ -z "$final_rx" || "$final_rx" -lt 30 ]]; then
     echo "us1-observer: only ${final_rx:-0} updates in 35s, expected ≥30 — fail" >&2
     exit 1
 fi
-# T065: any UnitDamaged event with damage<=0 or all-zero direction
-# means the widening regressed (contracts/unit-damaged-payload.md).
+# T065: any UnitDamaged event with damage<=0, or zero direction when
+# attacker_id is present, means the widening regressed
+# (contracts/unit-damaged-payload.md).
 if grep -q '^\[obs] WARN: .* UnitDamaged events had damage<=0' "$OBS_LOG"; then
     echo "us1-observer: UnitDamaged widening regression — fail" >&2
     grep '^\[obs]' "$OBS_LOG" | tail -5 >&2

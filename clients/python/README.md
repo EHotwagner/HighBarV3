@@ -62,7 +62,7 @@ stub = service_pb2_grpc.HighBarProxyStub(ch)
 hello = stub.Hello(service_pb2.HelloRequest(
     schema_version='1.0.0',
     role=service_pb2.Role.ROLE_OBSERVER,
-    client_name='my-tool/0.1.0',
+    client_id='my-tool/0.1.0',
 ))
 print('connected', hello.session_id, 'schema', hello.schema_version)
 
@@ -81,7 +81,7 @@ stub = service_pb2_grpc.HighBarProxyStub(ch)
 stub.Hello(service_pb2.HelloRequest(
     schema_version='1.0.0',
     role=service_pb2.Role.ROLE_AI,
-    client_name='my-ai/0.1.0',
+    client_id='my-ai/0.1.0',
 ))
 
 batch = commands_pb2.CommandBatch(batch_seq=1)

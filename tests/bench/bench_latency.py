@@ -82,8 +82,8 @@ def main() -> int:
 
     hello = service_pb2.HelloRequest(
         schema_version="1.0.0",
-        role=service_pb2.HelloRequest.ROLE_OBSERVER,
-        client_name="hb-latency-bench",
+        role=service_pb2.Role.ROLE_OBSERVER,
+        client_id="hb-latency-bench",
     )
     try:
         stub.Hello(hello, timeout=5.0)
@@ -92,7 +92,8 @@ def main() -> int:
         return 77
 
     samples_us = []
-    damaged_invalid = 0  # T065: UnitDamaged with damage<=0 or all-zero dir
+    damaged_invalid = 0
+    damaged_skipped_unattributed = 0
     damaged_total = 0
     stream = stub.StreamState(
         service_pb2.StreamStateRequest(resume_from_seq=0),
@@ -103,9 +104,11 @@ def main() -> int:
     try:
         for update in stream:
             # T065: opportunistic damage-payload validation. The
-            # widening (T058-T061) is feature-gated by C++ types so
-            # any incoming UnitDamaged with zero damage or all-zero
-            # direction means the engine plumbing regressed.
+            # widening (T058-T061) should produce positive damage for
+            # all real damage events and a non-zero direction when the
+            # engine supplies an attributable source. Live matches also
+            # emit attackerless zero-direction damage events; those are
+            # forwarded verbatim and are not treated as regressions.
             if update.WhichOneof("payload") == "delta":
                 for ev in update.delta.events:
                     if ev.WhichOneof("kind") == "unit_damaged":
@@ -114,8 +117,13 @@ def main() -> int:
                         dir_ok = (d.direction.x != 0.0
                                   or d.direction.y != 0.0
                                   or d.direction.z != 0.0)
-                        if d.damage <= 0.0 or not dir_ok:
+                        if d.damage <= 0.0:
                             damaged_invalid += 1
+                        elif not dir_ok:
+                            if d.HasField("attacker_id"):
+                                damaged_invalid += 1
+                            else:
+                                damaged_skipped_unattributed += 1
 
             if update.send_monotonic_ns == 0:
                 continue
@@ -135,8 +143,10 @@ def main() -> int:
 
     if damaged_invalid > 0:
         print(f"bench: FAIL — {damaged_invalid}/{damaged_total} UnitDamaged "
-              f"events had damage<=0 or all-zero direction (T065 widening "
-              f"regression)", file=sys.stderr)
+              f"events had damage<=0 or zero direction with attacker_id set "
+              f"(T065 widening regression); ignored "
+              f"{damaged_skipped_unattributed} unattributed zero-direction "
+              f"events", file=sys.stderr)
         return 1
 
     if len(samples_us) < 10:

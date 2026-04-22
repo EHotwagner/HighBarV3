@@ -2,6 +2,8 @@
 """Behavioral-coverage macro driver entrypoint.
 
 CLI surface (FR-013): `python -m highbar_client.behavioral_coverage`.
+Itertesting retry tuning surface:
+`python -m highbar_client.behavioral_coverage itertesting --retry-intensity ...`.
 
 Orchestrates Phase 1 (bootstrap plan) and Phase 2 (arm registry
 dispatch + verify + reset) and emits the CSV + digest artifacts.

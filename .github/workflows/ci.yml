@@ -107,6 +107,7 @@ jobs:
                    tests/headless/sc-disconnect-lifecycle.sh \
                    tests/headless/sc-symbol-visibility.sh \
                    tests/headless/sc006-soak.sh \
+                   tests/headless/malformed-payload.sh \
                    tests/headless/us3-external-only.sh \
                    tests/headless/us3-external-only-ai.sh \
                    tests/headless/us4-tcp.sh \
@@ -256,6 +257,8 @@ jobs:
         run: tests/headless/behavioral-move.sh
       - name: behavioral-build.sh (US2)
         run: tests/headless/behavioral-build.sh
+      - name: malformed-payload.sh (reject invalid input, stay healthy)
+        run: tests/headless/malformed-payload.sh
       - name: behavioral-attack.sh (US3, soft — accepts 77)
         run: |
           set +e

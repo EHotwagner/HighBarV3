@@ -35,8 +35,9 @@ four fields that are currently zero-valued.
   propagating the negative.
 - `weapon_def_id >= 0`. Unknown-weapon events (engine reports -1) are
   emitted verbatim — clients decide how to treat them.
-- `direction` is the normalized 3-vector the engine hands the
-  event, not recomputed.
+- `direction` is the 3-vector the engine hands the event, not
+  recomputed. A zero vector is legal when the engine reports
+  unattributed damage with no direction.
 
 **Source of truth**: The richer fields enter the gateway via the new
 `CGrpcGatewayModule::OnUnitDamagedFull` entry point, called from the

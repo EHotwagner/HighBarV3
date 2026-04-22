@@ -3,6 +3,8 @@
 
 Also accepts the 004 audit mode:
 `python -m highbar_client.behavioral_coverage audit [--audit-dir ...]`.
+Itertesting retry tuning mode:
+`python -m highbar_client.behavioral_coverage itertesting --retry-intensity ...`.
 """
 
 from __future__ import annotations

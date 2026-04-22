@@ -30,3 +30,11 @@ Expected bundle per run:
 - `reports/itertesting/instructions/cmd-*.json`
 
 Use `tests/headless/test_itertesting_campaign.sh` to validate that chained runs emit both artifacts.
+
+Malformed payload resilience can be checked directly with:
+
+```bash
+tests/headless/malformed-payload.sh
+```
+
+Expected result: `INVALID_ARGUMENT` for the bad batch, no gateway disable, continued heartbeats.

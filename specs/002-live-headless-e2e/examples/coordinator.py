@@ -28,11 +28,13 @@ import time
 import queue
 import threading
 import argparse
+import math
 
 sys.path.insert(0, "/tmp/hb-run/pyproto")
 
 import grpc
 from concurrent import futures
+from google.protobuf.descriptor import FieldDescriptor
 from highbar import coordinator_pb2, coordinator_pb2_grpc
 from highbar import commands_pb2, service_pb2, service_pb2_grpc
 from highbar import state_pb2
@@ -49,6 +51,8 @@ class Relay:
         # Command forward: SubmitCommands pushes here, OpenCommandChannel pulls.
         # One central queue for now (future: per-plugin-session).
         self.cmd_forward = queue.Queue()
+        self._cmd_channel_lock = threading.Lock()
+        self._active_cmd_channels = 0
         self.state_updates_received = 0
         self.max_seq_seen = 0
         self.commands_relayed = 0
@@ -77,9 +81,74 @@ class Relay:
                 except queue.Full:
                     pass  # slow subscriber; drop
 
+    def activate_command_channel(self):
+        with self._cmd_channel_lock:
+            self._active_cmd_channels += 1
+
+    def deactivate_command_channel(self):
+        with self._cmd_channel_lock:
+            if self._active_cmd_channels > 0:
+                self._active_cmd_channels -= 1
+        self.clear_forwarded_commands()
+
+    def has_active_command_channel(self):
+        with self._cmd_channel_lock:
+            return self._active_cmd_channels > 0
+
+    def clear_forwarded_commands(self):
+        while True:
+            try:
+                self.cmd_forward.get_nowait()
+            except queue.Empty:
+                return
+
     def forward_command(self, batch):
+        if not self.has_active_command_channel():
+            raise RuntimeError("plugin command channel is not connected")
         self.cmd_forward.put(batch)
         self.commands_relayed += 1
+
+
+def _validate_finite_fields(message, path):
+    for field, value in message.ListFields():
+        field_path = f"{path}.{field.name}" if path else field.name
+        if field.label == FieldDescriptor.LABEL_REPEATED:
+            if field.type == FieldDescriptor.TYPE_MESSAGE:
+                for idx, item in enumerate(value):
+                    err = _validate_finite_fields(item, f"{field_path}[{idx}]")
+                    if err is not None:
+                        return err
+            elif field.type in (FieldDescriptor.TYPE_FLOAT,
+                                FieldDescriptor.TYPE_DOUBLE):
+                for idx, item in enumerate(value):
+                    if not math.isfinite(item):
+                        return f"{field_path}[{idx}] must be finite"
+            continue
+
+        if field.type == FieldDescriptor.TYPE_MESSAGE:
+            err = _validate_finite_fields(value, field_path)
+            if err is not None:
+                return err
+        elif field.type in (FieldDescriptor.TYPE_FLOAT,
+                            FieldDescriptor.TYPE_DOUBLE):
+            if not math.isfinite(value):
+                return f"{field_path} must be finite"
+
+    return None
+
+
+def validate_command_batch(batch):
+    if batch.batch_seq <= 0:
+        return "batch_seq must be > 0"
+    if len(batch.commands) == 0:
+        return "commands must not be empty"
+    for idx, command in enumerate(batch.commands):
+        if command.WhichOneof("command") is None:
+            return f"commands[{idx}] command must be set"
+    err = _validate_finite_fields(batch, "batch")
+    if err is not None:
+        return err
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -119,6 +188,7 @@ class CoordSvc(coordinator_pb2_grpc.HighBarCoordinatorServicer):
     def OpenCommandChannel(self, request, context):
         print(f"[cmd-ch] plugin={request.plugin_id} subscribed "
               f"peer={context.peer()}", flush=True)
+        self.relay.activate_command_channel()
         # Serve forwarded commands from the central queue until the
         # plugin disconnects.
         try:
@@ -133,6 +203,8 @@ class CoordSvc(coordinator_pb2_grpc.HighBarCoordinatorServicer):
                     continue
         except grpc.RpcError:
             pass
+        finally:
+            self.relay.deactivate_command_channel()
         print(f"[cmd-ch] plugin={request.plugin_id} disconnected",
               flush=True)
 
@@ -184,7 +256,15 @@ class ProxySvc(service_pb2_grpc.HighBarProxyServicer):
     def SubmitCommands(self, request_iterator, context):
         n = 0
         for batch in request_iterator:
-            self.relay.forward_command(batch)
+            err = validate_command_batch(batch)
+            if err is not None:
+                print(f"[proxy] SubmitCommands invalid from {context.peer()}: "
+                      f"{err}", flush=True)
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, err)
+            try:
+                self.relay.forward_command(batch)
+            except RuntimeError as exc:
+                context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
             n += 1
         print(f"[proxy] SubmitCommands from {context.peer()}: "
               f"received {n} batches, forwarded", flush=True)

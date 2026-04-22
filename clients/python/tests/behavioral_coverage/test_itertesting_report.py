@@ -5,9 +5,59 @@ from highbar_client.behavioral_coverage.itertesting_report import render_run_rep
 from highbar_client.behavioral_coverage.itertesting_runner import run_campaign
 
 
-def test_report_renders_coverage_totals_and_unverified_sections(tmp_path):
+def test_report_renders_required_sections_and_direct_split(tmp_path):
+    campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="standard",
+        max_improvement_runs=2,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    rendered = render_run_report(runs[-1], stop_decision=campaign.stop_decision)
+
+    assert "## Run Metadata" in rendered
+    assert "## Coverage Summary" in rendered
+    assert "Directly verifiable total:" in rendered
+    assert "Non-observable tracked total:" in rendered
+    assert "## Intensity and Governance" in rendered
+
+
+def test_report_includes_stop_reason_and_runtime_metrics(tmp_path):
+    campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=5,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    rendered = render_run_report(runs[-1], stop_decision=campaign.stop_decision)
+
+    assert "## Stop Reason" in rendered
+    assert "Stop reason:" in rendered
+    assert "Runtime at stop (seconds):" in rendered
+
+
+def test_report_labels_natural_and_cheat_assisted_totals(tmp_path):
+    campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="deep",
+        max_improvement_runs=8,
+        allow_cheat_escalation=True,
+        natural_first=True,
+    )
+
+    rendered = render_run_report(runs[-1], stop_decision=campaign.stop_decision)
+
+    assert "Direct verified natural:" in rendered
+    assert "Direct verified cheat-assisted:" in rendered
+
+
+def test_report_lists_unverified_direct_commands_with_next_actions(tmp_path):
     _campaign, runs = run_campaign(
         reports_dir=tmp_path,
+        retry_intensity="quick",
         max_improvement_runs=0,
         allow_cheat_escalation=False,
         natural_first=True,
@@ -15,36 +65,6 @@ def test_report_renders_coverage_totals_and_unverified_sections(tmp_path):
 
     rendered = render_run_report(runs[0])
 
-    assert "## Coverage Summary" in rendered
-    assert "Tracked commands:" in rendered
-    assert "## Still Unverified" in rendered
-
-
-def test_report_renders_improvement_actions_and_deltas(tmp_path):
-    _campaign, runs = run_campaign(
-        reports_dir=tmp_path,
-        max_improvement_runs=1,
-        allow_cheat_escalation=False,
-        natural_first=True,
-    )
-
-    rendered = render_run_report(runs[1])
-
-    assert "## Compared With Previous Run" in rendered
-    assert "Coverage delta:" in rendered
-    assert "## Next Improvements" in rendered
-
-
-def test_report_labels_cheat_assisted_totals(tmp_path):
-    _campaign, runs = run_campaign(
-        reports_dir=tmp_path,
-        max_improvement_runs=2,
-        allow_cheat_escalation=True,
-        natural_first=True,
-    )
-
-    rendered = render_run_report(runs[-1])
-
-    assert "Verified cheat-assisted:" in rendered
-    assert "cheat-assisted" in rendered
-
+    assert "## Unverified Direct Commands" in rendered
+    assert "next action:" in rendered
+    assert "## Instruction Updates" in rendered

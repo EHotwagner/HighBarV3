@@ -40,7 +40,7 @@ The gateway populates `UnitDamagedEvent` as:
 | `unit_id` | `unit->GetId()` | Unchanged from 001. |
 | `attacker_id` | `attacker->GetId()` if `attacker != nullptr`; otherwise field is unset (optional). | Unchanged from 001. |
 | `damage` | `damage` parameter | Clamped to `[0, +inf)`. Negative damage is engine-side malformed; gateway logs a warning and sets field to 0. |
-| `direction.x` / `.y` / `.z` | `dir.x` / `dir.y` / `dir.z` | Not renormalized by the gateway. |
+| `direction.x` / `.y` / `.z` | `dir.x` / `dir.y` / `dir.z` | Not renormalized or synthesized by the gateway. If the engine emits `(0,0,0)`, the gateway forwards `(0,0,0)` verbatim. |
 | `weapon_def_id` | `weaponDefId` | Passed through verbatim, including `-1` (engine's sentinel for unknown). |
 | `is_paralyzer` | `paralyzer` | Passed through verbatim. |
 
@@ -67,12 +67,14 @@ becomes a no-op: the real work moved to `OnUnitDamagedFull`.
 ## Test assertions
 
 Every acceptance test in `tests/headless/` that exercises the damage
-path must assert non-zero values on at least `damage` and one
-component of `direction`. The latency bench
-(`tests/bench/latency-uds.sh`, `latency-tcp.sh`) additionally
-requires a frame-marker timestamp to be attached to the outgoing
-`UnitDamagedEvent` via existing delta-metadata fields (not the
-payload itself), which is how the F# client computes the true
+path must assert `damage > 0.0` for all observed `UnitDamaged`
+events. It must assert a non-zero `direction` only for checkable
+events where `attacker_id` is present; unattributed damage events may
+arrive with `direction == (0,0,0)` and are forwarded verbatim. The
+latency bench (`tests/bench/latency-uds.sh`, `latency-tcp.sh`)
+additionally requires a frame-marker timestamp to be attached to the
+outgoing `UnitDamagedEvent` via existing delta-metadata fields (not
+the payload itself), which is how the F# client computes the true
 round-trip.
 
 ## Compatibility

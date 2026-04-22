@@ -30,7 +30,8 @@ def main():
     n = 0
     last_seq = 0
     damaged_events = 0
-    damaged_invalid = 0  # T065: count UnitDamaged with 0 damage or all-zero dir
+    damaged_invalid = 0
+    damaged_skipped_unattributed = 0
     try:
         for update in stub.StreamState(req, timeout=300):
             n += 1
@@ -43,8 +44,13 @@ def main():
                         dir_ok = (d.direction.x != 0.0
                                   or d.direction.y != 0.0
                                   or d.direction.z != 0.0)
-                        if d.damage <= 0.0 or not dir_ok:
+                        if d.damage <= 0.0:
                             damaged_invalid += 1
+                        elif not dir_ok:
+                            if d.HasField("attacker_id"):
+                                damaged_invalid += 1
+                            else:
+                                damaged_skipped_unattributed += 1
             if n % 100 == 1 or n <= 3:
                 which = update.WhichOneof("payload")
                 ndelta = (len(update.delta.events)
@@ -56,13 +62,14 @@ def main():
     except grpc.RpcError as e:
         print(f"[obs] stream ended: code={e.code().name}", flush=True)
     print(f"[obs] final: rx={n} last_seq={last_seq} "
-          f"damaged={damaged_events} damaged_invalid={damaged_invalid}",
+          f"damaged={damaged_events} damaged_invalid={damaged_invalid} "
+          f"damaged_skipped_unattributed={damaged_skipped_unattributed}",
           flush=True)
     if damaged_invalid > 0:
         # Non-fatal for a pure observer, but flag loudly so the driver
-        # script can fail the test (contracts/unit-damaged-payload.md).
+        # script can fail the test when a checkable damage event is malformed.
         print(f"[obs] WARN: {damaged_invalid} UnitDamaged events had "
-              f"damage<=0 or all-zero direction", flush=True)
+              f"damage<=0 or zero direction with attacker_id set", flush=True)
         sys.exit(2)
 
 

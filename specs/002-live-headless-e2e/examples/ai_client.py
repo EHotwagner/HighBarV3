@@ -3,8 +3,8 @@
 
 Connects to the coordinator via HighBarProxy:
   1. Hello(ROLE_AI)
-  2. StreamState (server streaming) — watches for the first UnitCreated
-     delta event, records the unit_id.
+  2. StreamState (server streaming) — picks a controllable own unit
+     from either a fresh UnitCreated delta or the next snapshot.
   3. SubmitCommands (client streaming) — sends one MoveUnit command
      targeting that unit. Coordinator forwards to the plugin, which
      drains it in DrainCommandQueue and dispatches via CmdMoveTo.
@@ -26,38 +26,76 @@ from highbar import service_pb2, service_pb2_grpc
 from highbar import commands_pb2, common_pb2
 
 
+def _remember_unit(out, unit_id, source, detail):
+    if out.get("unit_id") is not None:
+        return
+    out["unit_id"] = unit_id
+    out["unit_id_at"] = time.time()
+    out["unit_source"] = source
+    print(detail, flush=True)
+
+
 def watch_state(stub, out):
-    """Background thread: stream state, pick the first UnitCreated
-    event's unit_id, then record subsequent position samples for that
-    unit. Writes to the shared `out` dict."""
+    """Background thread: stream state, pick the first controllable unit.
+
+    We prefer a live UnitCreated delta when it arrives after subscribe,
+    but also fall back to snapshot own-units so late subscribers do not
+    miss already-spawned commanders.
+    """
     req = service_pb2.StreamStateRequest(resume_from_seq=0)
     try:
         for update in stub.StreamState(req, timeout=120):
-            if update.WhichOneof("payload") != "delta":
+            payload = update.WhichOneof("payload")
+            if payload == "snapshot":
+                if out.get("unit_id") is None:
+                    for unit in update.snapshot.own_units:
+                        if unit.health > 0.0 and not unit.under_construction:
+                            _remember_unit(
+                                out,
+                                unit.unit_id,
+                                "snapshot",
+                                (
+                                    "[ai] selected own unit from snapshot "
+                                    f"id={unit.unit_id} health={unit.health:.1f}"
+                                ),
+                            )
+                            break
+                continue
+            if payload != "delta":
                 continue
             for ev in update.delta.events:
                 kind = ev.WhichOneof("kind")
                 if kind == "unit_created" and out.get("unit_id") is None:
-                    out["unit_id"] = ev.unit_created.unit_id
-                    out["unit_id_at"] = time.time()
-                    print(f"[ai] saw UnitCreated id={ev.unit_created.unit_id} "
-                          f"builder={ev.unit_created.builder_id}", flush=True)
+                    _remember_unit(
+                        out,
+                        ev.unit_created.unit_id,
+                        "unit_created",
+                        (
+                            "[ai] saw UnitCreated "
+                            f"id={ev.unit_created.unit_id} "
+                            f"builder={ev.unit_created.builder_id}"
+                        ),
+                    )
                 elif kind == "unit_damaged":
-                    # T065: opportunistic widening assertion. Any
-                    # UnitDamaged with damage<=0 or all-zero direction
-                    # means CGrpcGatewayModule::OnUnitDamagedFull
-                    # regressed.
+                    # T065: assert only on checkable damage events.
+                    # The gateway must forward the engine payload
+                    # verbatim, and live matches do emit legitimate
+                    # attackerless damage events with no direction.
+                    # Those do not prove the widening regressed.
                     d = ev.unit_damaged
                     dir_ok = (d.direction.x != 0.0
                               or d.direction.y != 0.0
                               or d.direction.z != 0.0)
-                    if d.damage <= 0.0 or not dir_ok:
+                    if d.damage <= 0.0:
                         out["damage_invalid"] = (
                             out.get("damage_invalid", 0) + 1)
-                # Snapshot doesn't arrive in deltas normally; we'd need
-                # to request one. We rely on the FAKE seq-based tracking
-                # instead: the plugin sends us back acknowledgement via
-                # the unit's subsequent events.
+                    elif not dir_ok:
+                        if d.HasField("attacker_id"):
+                            out["damage_invalid"] = (
+                                out.get("damage_invalid", 0) + 1)
+                        else:
+                            out["damage_skipped_unattributed"] = (
+                                out.get("damage_skipped_unattributed", 0) + 1)
     except grpc.RpcError as e:
         out["err"] = e.code().name
 
@@ -88,13 +126,16 @@ def main():
     t = threading.Thread(target=watch_state, args=(stub, shared), daemon=True)
     t.start()
 
-    # Wait for a unit id.
+    # Wait for a unit id from either a live creation delta or snapshot state.
     deadline = time.time() + args.wait
     while time.time() < deadline and shared.get("unit_id") is None:
         time.sleep(0.2)
     uid = shared.get("unit_id")
     if uid is None:
-        print(f"[ai] no UnitCreated in {args.wait}s — check state stream", flush=True)
+        print(
+            f"[ai] no controllable unit in {args.wait}s — check state stream",
+            flush=True,
+        )
         return 1
 
     # Submit a MoveUnit command.
@@ -121,7 +162,12 @@ def main():
     # Let the state stream run a few seconds to capture effect.
     time.sleep(5)
     invalid = shared.get("damage_invalid", 0)
-    print(f"[ai] done; unit_id={uid} damage_invalid={invalid}", flush=True)
+    skipped = shared.get("damage_skipped_unattributed", 0)
+    print(
+        f"[ai] done; unit_id={uid} damage_invalid={invalid} "
+        f"damage_skipped_unattributed={skipped}",
+        flush=True,
+    )
     if invalid > 0:
         return 2  # T065 widening regression — driver script flags as fail.
     return 0

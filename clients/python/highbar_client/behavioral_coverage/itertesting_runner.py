@@ -11,13 +11,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .audit_inventory import ENGINE_PIN, GAMETYPE_PIN, repo_root
+from .itertesting_campaign import (
+    apply_progress_metrics_to_run,
+    decide_stop,
+    final_status_for_decision,
+    progress_snapshot_for_run,
+    should_enable_cheat_escalation,
+    with_stall_flag,
+)
 from .itertesting_report import render_run_report
+from .itertesting_retry_policy import (
+    configured_vs_effective_runs,
+    disproportionate_intensity_warning,
+    normalize_retry_policy,
+)
 from .itertesting_types import (
+    CampaignStopDecision,
     CommandVerificationRecord,
     ImprovementAction,
     ImprovementInstruction,
     ItertestingCampaign,
     ItertestingRun,
+    RetryIntensityName,
+    RunProgressSnapshot,
     RunComparison,
     RunSummary,
     manifest_dict,
@@ -698,7 +714,7 @@ def write_run_bundle(
     run: ItertestingRun,
     reports_dir: Path,
     *,
-    stop_reason: str | None = None,
+    stop_decision: CampaignStopDecision | None = None,
 ) -> Path:
     bundle_dir = run_dir(reports_dir, run.run_id)
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -708,8 +724,37 @@ def write_run_bundle(
         encoding="utf-8",
     )
     report_path = bundle_dir / "run-report.md"
-    report_path.write_text(render_run_report(run, stop_reason=stop_reason), encoding="utf-8")
+    report_path.write_text(
+        render_run_report(
+            run,
+            stop_reason=(stop_decision.stop_reason if stop_decision else None),
+            stop_decision=stop_decision,
+        ),
+        encoding="utf-8",
+    )
+    if stop_decision is not None:
+        (bundle_dir / "stop-decision.json").write_text(
+            json.dumps(stop_decision.__dict__, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     return bundle_dir
+
+
+def campaign_dir(reports_dir: Path, campaign_id: str) -> Path:
+    return reports_dir / campaign_id
+
+
+def write_campaign_stop_decision(
+    reports_dir: Path, stop_decision: CampaignStopDecision
+) -> Path:
+    base = campaign_dir(reports_dir, stop_decision.campaign_id)
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / "campaign-stop-decision.json"
+    path.write_text(
+        json.dumps(stop_decision.__dict__, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def load_run_manifest(path: Path) -> ItertestingRun:
@@ -728,16 +773,6 @@ def latest_run_manifest(reports_dir: Path) -> Path | None:
     return manifests[-1] if manifests else None
 
 
-def campaign_stop_reason(run: ItertestingRun, budget_exhausted: bool) -> str:
-    if run.summary.verified_total == run.summary.tracked_commands:
-        return "all tracked commands reached direct verification"
-    if budget_exhausted:
-        return "retry budget exhausted"
-    if any(item.action_type != "skip-no-better-action" for item in run.improvement_actions):
-        return "further improvement actions remain"
-    return "no better action remains for the outstanding commands"
-
-
 def _next_instruction_revision(
     prior_instruction: ImprovementInstruction | None,
 ) -> int:
@@ -750,10 +785,11 @@ def update_instruction_store(
     reports_dir: Path,
     run: ItertestingRun,
     prior_instructions: dict[str, ImprovementInstruction],
-) -> dict[str, ImprovementInstruction]:
+) -> tuple[dict[str, ImprovementInstruction], tuple[ImprovementInstruction, ...]]:
     updated = dict(prior_instructions)
     action_map = {item.command_id: item for item in run.improvement_actions}
     timestamp = run.completed_at or run.started_at
+    updates_for_run: list[ImprovementInstruction] = []
     for record in run.command_records:
         prior = updated.get(record.command_id)
         action = action_map.get(record.command_id)
@@ -761,7 +797,7 @@ def update_instruction_store(
             continue
         if record.verified and record.improvement_state == "applied":
             action_type = action.action_type if action is not None else "timing-change"
-            status = "applied"
+            status = "superseded" if prior is not None else "retired"
             instruction = record.improvement_note or (
                 action.details if action is not None else "Applied a targeted retry change."
             )
@@ -779,14 +815,14 @@ def update_instruction_store(
             action_type = (
                 action.action_type if action is not None else "skip-no-better-action"
             )
-            status = "exhausted"
+            status = "retired"
             instruction = record.improvement_note or (
                 action.details if action is not None else "No better next action remains."
             )
             trigger_reason = record.blocking_reason or (
                 action.trigger_reason if action is not None else ""
             )
-        updated[record.command_id] = ImprovementInstruction(
+        instruction = ImprovementInstruction(
             command_id=record.command_id,
             revision=_next_instruction_revision(prior),
             action_type=action_type,
@@ -796,16 +832,21 @@ def update_instruction_store(
             source_run_id=run.run_id,
             trigger_reason=trigger_reason,
         )
+        updated[record.command_id] = instruction
+        updates_for_run.append(instruction)
     write_instruction_store(reports_dir, updated)
-    return updated
+    ordered_updates = tuple(sorted(updates_for_run, key=lambda item: item.command_id))
+    return updated, ordered_updates
 
 
 def run_campaign(
     *,
     reports_dir: Path,
-    max_improvement_runs: int,
+    max_improvement_runs: int | None,
+    retry_intensity: RetryIntensityName = "standard",
     allow_cheat_escalation: bool,
     natural_first: bool,
+    runtime_target_minutes: int = 15,
     endpoint: str | None = None,
     startscript: str = "tests/headless/scripts/minimal.startscript",
     cheat_startscript: str = "tests/headless/scripts/cheats.startscript",
@@ -814,16 +855,28 @@ def run_campaign(
     skip_live: bool = True,
 ) -> tuple[ItertestingCampaign, tuple[ItertestingRun, ...]]:
     ensure_reports_dir(reports_dir)
-    instruction_store = load_instruction_store(reports_dir)
     campaign_started = utc_now()
     campaign_id = campaign_started.strftime("itertesting-campaign-%Y%m%dT%H%M%SZ")
+    policy = normalize_retry_policy(
+        campaign_id=campaign_id,
+        retry_intensity=retry_intensity,
+        max_improvement_runs=max_improvement_runs,
+        allow_cheat_escalation=allow_cheat_escalation,
+        natural_first=natural_first,
+        runtime_target_minutes=runtime_target_minutes,
+    )
+    configured_runs, effective_runs = configured_vs_effective_runs(policy)
+    instruction_store = load_instruction_store(reports_dir)
     runs: list[ItertestingRun] = []
+    progress_snapshots: list[RunProgressSnapshot] = []
     previous_run: ItertestingRun | None = None
-    for sequence_index in range(max_improvement_runs + 1):
-        cheat_enabled = (
-            allow_cheat_escalation
-            and sequence_index >= 2
-            and (not natural_first or previous_run is not None)
+    stop_decision: CampaignStopDecision | None = None
+    final_status = "budget_exhausted"
+    for sequence_index in range(effective_runs + 1):
+        cheat_enabled = should_enable_cheat_escalation(
+            policy=policy,
+            snapshots=tuple(progress_snapshots),
+            sequence_index=sequence_index,
         )
         live_rows: list[dict] | None = None
         if not skip_live:
@@ -847,48 +900,86 @@ def run_campaign(
             prior_instructions=instruction_store,
             live_rows=live_rows,
         )
-        budget_exhausted = sequence_index >= max_improvement_runs
-        stop_reason = campaign_stop_reason(run, budget_exhausted)
-        write_run_bundle(run, reports_dir, stop_reason=stop_reason)
-        instruction_store = update_instruction_store(
+        elapsed_seconds = int((utc_now() - campaign_started).total_seconds())
+        snapshot = progress_snapshot_for_run(
+            run=run,
+            previous_snapshot=(
+                progress_snapshots[-1] if progress_snapshots else None
+            ),
+            runtime_elapsed_seconds=elapsed_seconds,
+        )
+        candidate_snapshots = tuple([*progress_snapshots, snapshot])
+        snapshot = with_stall_flag(snapshot, candidate_snapshots, policy)
+        candidate_snapshots = tuple([*progress_snapshots, snapshot])
+        warning = disproportionate_intensity_warning(policy, candidate_snapshots)
+        run = apply_progress_metrics_to_run(
+            run=run,
+            snapshot=snapshot,
+            configured_improvement_runs=configured_runs,
+            effective_improvement_runs=effective_runs,
+            retry_intensity_profile=policy.selected_profile.profile_name,
+            disproportionate_warning=warning,
+        )
+        budget_exhausted = sequence_index >= effective_runs
+        stop_decision = decide_stop(
+            policy=policy,
+            snapshots=candidate_snapshots,
+            final_run_id=run.run_id,
+            budget_exhausted=budget_exhausted,
+        )
+        if (
+            stop_decision is not None
+            and stop_decision.stop_reason == "stalled"
+            and not cheat_enabled
+            and sequence_index < effective_runs
+            and should_enable_cheat_escalation(
+                policy=policy,
+                snapshots=candidate_snapshots,
+                sequence_index=sequence_index + 1,
+            )
+        ):
+            stop_decision = None
+        instruction_store, instruction_updates = update_instruction_store(
             reports_dir,
             run,
             instruction_store,
         )
+        run = replace(run, instruction_updates=instruction_updates)
+        write_run_bundle(run, reports_dir, stop_decision=stop_decision)
         runs.append(run)
+        progress_snapshots.append(snapshot)
         previous_run = run
-        has_next_budget = sequence_index < max_improvement_runs
-        if run.summary.verified_total == run.summary.tracked_commands:
-            final_status = "improved"
+        if stop_decision is not None:
+            final_status = final_status_for_decision(stop_decision.stop_reason)
             break
-        if not has_next_budget:
-            final_status = "budget_exhausted"
-            break
-        if sequence_index == 0:
-            continue
-        outstanding = [item for item in run.command_records if not item.verified]
-        can_naturally_improve = any(
-            item.command_name in _NATURAL_IMPROVABLE and item.improvement_state != "exhausted"
-            for item in outstanding
+    if runs and stop_decision is None:
+        stop_decision = decide_stop(
+            policy=policy,
+            snapshots=tuple(progress_snapshots),
+            final_run_id=runs[-1].run_id,
+            budget_exhausted=True,
         )
-        can_cheat_improve = allow_cheat_escalation and any(
-            item.command_name in _CHEAT_ONLY for item in outstanding
-        )
-        if not can_naturally_improve and not can_cheat_improve:
-            final_status = "stalled"
-            break
-    else:
-        final_status = "budget_exhausted"
-    stop_reason = campaign_stop_reason(runs[-1], final_status == "budget_exhausted")
+        if stop_decision is not None:
+            final_status = final_status_for_decision(stop_decision.stop_reason)
+
+    if stop_decision is not None:
+        write_campaign_stop_decision(reports_dir, stop_decision)
+
     campaign = ItertestingCampaign(
         campaign_id=campaign_id,
         started_at=format_timestamp(campaign_started),
         completed_at=format_timestamp(utc_now()),
-        max_improvement_runs=max_improvement_runs,
+        max_improvement_runs=configured_runs,
         natural_first=natural_first,
         run_ids=tuple(run.run_id for run in runs),
-        final_status=final_status,
-        stop_reason=stop_reason,
+        final_status=final_status,  # type: ignore[arg-type]
+        stop_reason=stop_decision.stop_reason if stop_decision else "budget_exhausted",
+        retry_intensity=retry_intensity,
+        configured_improvement_runs=configured_runs,
+        effective_improvement_runs=effective_runs,
+        target_direct_verified=policy.direct_target_min,
+        runtime_target_minutes=policy.runtime_target_minutes,
+        stop_decision=stop_decision,
     )
     return campaign, tuple(runs)
 
@@ -913,8 +1004,14 @@ def parse_itertesting_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-improvement-runs",
         type=int,
-        default=0,
-        help="number of follow-up improvement runs after the initial run",
+        default=None,
+        help="requested follow-up improvement runs; defaults are profile-driven",
+    )
+    parser.add_argument(
+        "--retry-intensity",
+        choices=("quick", "standard", "deep"),
+        default="standard",
+        help="retry envelope profile for quick/standard/deep campaigns",
     )
     parser.add_argument(
         "--allow-cheat-escalation",
@@ -944,6 +1041,12 @@ def parse_itertesting_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="require natural attempts before cheat escalation",
     )
     parser.add_argument(
+        "--runtime-target-minutes",
+        type=int,
+        default=15,
+        help="runtime governance target for successful campaigns",
+    )
+    parser.add_argument(
         "--skip-live",
         action="store_true",
         help="skip the coordinator/gateway session and use the synthetic campaign model",
@@ -956,9 +1059,15 @@ def itertesting_main(argv: list[str] | None = None) -> int:
     reports_dir = ensure_reports_dir(Path(args.reports_dir))
     campaign, runs = run_campaign(
         reports_dir=reports_dir,
-        max_improvement_runs=max(args.max_improvement_runs, 0),
+        max_improvement_runs=(
+            max(args.max_improvement_runs, 0)
+            if args.max_improvement_runs is not None
+            else None
+        ),
+        retry_intensity=args.retry_intensity,
         allow_cheat_escalation=args.allow_cheat_escalation,
         natural_first=args.natural_first,
+        runtime_target_minutes=max(args.runtime_target_minutes, 1),
         endpoint=args.endpoint,
         startscript=args.startscript,
         cheat_startscript=args.cheat_startscript,
@@ -968,11 +1077,23 @@ def itertesting_main(argv: list[str] | None = None) -> int:
     )
     latest = runs[-1]
     print(
-        f"itertesting: run={latest.run_id} verified={latest.summary.verified_total}/"
-        f"{latest.summary.tracked_commands} natural={latest.summary.verified_natural} "
-        f"cheat={latest.summary.verified_cheat_assisted}"
+        f"itertesting: run={latest.run_id} direct_verified="
+        f"{latest.summary.direct_verified_total}/{latest.summary.directly_verifiable_total} "
+        f"natural={latest.summary.direct_verified_natural} "
+        f"cheat={latest.summary.direct_verified_cheat_assisted}"
     )
     print(f"itertesting: campaign={campaign.campaign_id} status={campaign.final_status}")
+    print(
+        "itertesting: retries "
+        f"configured={campaign.configured_improvement_runs} "
+        f"effective={campaign.effective_improvement_runs} "
+        f"profile={campaign.retry_intensity}"
+    )
+    if campaign.stop_decision is not None:
+        print(
+            f"itertesting: stop_reason={campaign.stop_decision.stop_reason} "
+            f"runtime_seconds={campaign.stop_decision.runtime_elapsed_seconds}"
+        )
     print(f"itertesting: reports={reports_dir}")
     if args.allow_cheat_escalation:
         print(f"itertesting: cheat-startscript={args.cheat_startscript}")

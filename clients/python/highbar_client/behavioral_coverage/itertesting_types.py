@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Structured manifest types for Itertesting campaign runs."""
+"""Structured manifest and policy types for Itertesting campaign runs."""
 
 from __future__ import annotations
 
@@ -20,9 +20,30 @@ ActionType = Literal[
     "skip-no-better-action",
 ]
 ActionStatus = Literal["planned", "applied", "superseded", "rejected"]
-InstructionStatus = Literal["active", "applied", "exhausted"]
+InstructionStatus = Literal[
+    "active",
+    "superseded",
+    "retired",
+    "applied",
+    "exhausted",
+]
 SetupMode = Literal["natural", "mixed", "cheat-assisted"]
-CampaignFinalStatus = Literal["improved", "stalled", "budget_exhausted", "aborted"]
+CampaignFinalStatus = Literal[
+    "improved",
+    "stalled",
+    "budget_exhausted",
+    "runtime_guardrail",
+    "aborted",
+    "interrupted",
+]
+RetryIntensityName = Literal["quick", "standard", "deep"]
+StopReason = Literal[
+    "target_reached",
+    "stalled",
+    "budget_exhausted",
+    "runtime_guardrail",
+    "interrupted",
+]
 
 
 @dataclass(frozen=True)
@@ -67,6 +88,56 @@ class ImprovementInstruction:
 
 
 @dataclass(frozen=True)
+class RetryIntensityProfile:
+    profile_name: RetryIntensityName
+    configured_improvement_runs: int
+    effective_improvement_runs: int
+    stall_window_runs: int
+    min_direct_gain_in_window: int
+    allow_cheat_escalation: bool
+    runtime_target_minutes: int
+
+
+@dataclass(frozen=True)
+class CampaignRetryPolicy:
+    campaign_id: str
+    selected_profile: RetryIntensityProfile
+    global_improvement_run_cap: int
+    direct_target_min: int
+    runtime_target_minutes: int
+    natural_first: bool
+    warning_threshold_runs_without_gain: int
+
+
+@dataclass(frozen=True)
+class RunProgressSnapshot:
+    run_id: str
+    sequence_index: int
+    duration_seconds: int
+    direct_verified_natural: int
+    direct_verified_cheat_assisted: int
+    direct_unverified_total: int
+    non_observable_tracked: int
+    direct_gain_vs_previous: int
+    stall_detected: bool
+    runtime_elapsed_seconds: int
+
+
+@dataclass(frozen=True)
+class CampaignStopDecision:
+    decision_id: str
+    campaign_id: str
+    final_run_id: str
+    stop_reason: StopReason
+    direct_verified_total: int
+    target_direct_verified: int
+    target_met: bool
+    runtime_elapsed_seconds: int
+    message: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class RunSummary:
     run_id: str
     tracked_commands: int
@@ -79,6 +150,17 @@ class RunSummary:
     newly_verified: tuple[str, ...] = ()
     regressed: tuple[str, ...] = ()
     stalled: tuple[str, ...] = ()
+    directly_verifiable_total: int = 0
+    direct_verified_total: int = 0
+    direct_verified_natural: int = 0
+    direct_verified_cheat_assisted: int = 0
+    direct_unverified_total: int = 0
+    non_observable_tracked_total: int = 0
+    runtime_elapsed_seconds: int = 0
+    disproportionate_intensity_warning: bool = False
+    configured_improvement_runs: int = 0
+    effective_improvement_runs: int = 0
+    retry_intensity_profile: RetryIntensityName = "standard"
 
 
 @dataclass(frozen=True)
@@ -106,6 +188,7 @@ class ItertestingRun:
     command_records: tuple[CommandVerificationRecord, ...]
     improvement_actions: tuple[ImprovementAction, ...]
     summary: RunSummary
+    instruction_updates: tuple[ImprovementInstruction, ...] = ()
     previous_run_comparison: Optional[RunComparison] = None
 
 
@@ -119,6 +202,12 @@ class ItertestingCampaign:
     run_ids: tuple[str, ...]
     final_status: CampaignFinalStatus
     stop_reason: str
+    retry_intensity: RetryIntensityName = "standard"
+    configured_improvement_runs: int = 0
+    effective_improvement_runs: int = 0
+    target_direct_verified: int = 20
+    runtime_target_minutes: int = 15
+    stop_decision: CampaignStopDecision | None = None
 
 
 def manifest_dict(run: ItertestingRun) -> dict[str, Any]:
@@ -169,6 +258,21 @@ def _summary_from_dict(payload: dict[str, Any]) -> RunSummary:
         newly_verified=tuple(payload.get("newly_verified", ())),
         regressed=tuple(payload.get("regressed", ())),
         stalled=tuple(payload.get("stalled", ())),
+        directly_verifiable_total=payload.get("directly_verifiable_total", 0),
+        direct_verified_total=payload.get("direct_verified_total", payload["verified_total"]),
+        direct_verified_natural=payload.get("direct_verified_natural", payload["verified_natural"]),
+        direct_verified_cheat_assisted=payload.get(
+            "direct_verified_cheat_assisted", payload["verified_cheat_assisted"]
+        ),
+        direct_unverified_total=payload.get("direct_unverified_total", 0),
+        non_observable_tracked_total=payload.get("non_observable_tracked_total", 0),
+        runtime_elapsed_seconds=payload.get("runtime_elapsed_seconds", 0),
+        disproportionate_intensity_warning=payload.get(
+            "disproportionate_intensity_warning", False
+        ),
+        configured_improvement_runs=payload.get("configured_improvement_runs", 0),
+        effective_improvement_runs=payload.get("effective_improvement_runs", 0),
+        retry_intensity_profile=payload.get("retry_intensity_profile", "standard"),
     )
 
 
@@ -202,6 +306,10 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
         improvement_actions=tuple(
             _improvement_action_from_dict(item)
             for item in payload.get("improvement_actions", ())
+        ),
+        instruction_updates=tuple(
+            ImprovementInstruction(**item)
+            for item in payload.get("instruction_updates", ())
         ),
         summary=_summary_from_dict(payload["summary"]),
         previous_run_comparison=(

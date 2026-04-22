@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from highbar_client.behavioral_coverage.itertesting_campaign import decide_stop
+from highbar_client.behavioral_coverage.itertesting_retry_policy import normalize_retry_policy
 from highbar_client.behavioral_coverage.itertesting_runner import (
     build_run,
+    campaign_dir,
     instruction_index_path,
     instruction_path,
     itertesting_main,
@@ -17,7 +21,10 @@ from highbar_client.behavioral_coverage.itertesting_runner import (
     parse_itertesting_args,
     run_campaign,
 )
-from highbar_client.behavioral_coverage.itertesting_types import manifest_dict
+from highbar_client.behavioral_coverage.itertesting_types import (
+    RunProgressSnapshot,
+    manifest_dict,
+)
 from highbar_client.behavioral_coverage.registry import REGISTRY
 
 
@@ -49,84 +56,199 @@ def test_run_id_collision_uses_deterministic_suffix(tmp_path):
     assert second.endswith("-02")
 
 
-def test_cli_argument_parsing_supports_cheat_flags():
+def test_cli_argument_parsing_supports_retry_intensity_and_governance_flags():
     args = parse_itertesting_args(
         [
             "--reports-dir",
             "reports/itertesting",
+            "--retry-intensity",
+            "deep",
             "--max-improvement-runs",
-            "3",
+            "12",
+            "--runtime-target-minutes",
+            "20",
             "--allow-cheat-escalation",
             "--cheat-startscript",
             "tests/headless/scripts/cheats.startscript",
         ]
     )
 
-    assert args.max_improvement_runs == 3
+    assert args.retry_intensity == "deep"
+    assert args.max_improvement_runs == 12
+    assert args.runtime_target_minutes == 20
     assert args.allow_cheat_escalation is True
     assert args.natural_first is True
 
 
-def test_manifest_shape_and_command_coverage(tmp_path):
+def test_hard_cap_clamps_high_requested_retry_budget(tmp_path):
     campaign, runs = run_campaign(
         reports_dir=tmp_path,
-        max_improvement_runs=0,
+        retry_intensity="deep",
+        max_improvement_runs=100,
         allow_cheat_escalation=False,
         natural_first=True,
     )
 
-    run = runs[0]
-
-    assert campaign.run_ids == (run.run_id,)
-    assert run.summary.tracked_commands == len(REGISTRY)
-    assert {item.command_id for item in run.command_records} == {
-        f"cmd-{name.replace('_', '-')}" for name in REGISTRY
-    }
+    assert campaign.configured_improvement_runs == 100
+    assert campaign.effective_improvement_runs == 10
+    assert len(runs) <= 11
 
 
-def test_dispatch_only_never_verifies():
-    run = build_run(
-        campaign_id="campaign-1",
-        sequence_index=0,
-        reports_dir=Path("."),
-    )
-    dispatch_only = [
-        item
-        for item in run.command_records
-        if item.evidence_kind == "dispatch-only"
-    ]
-
-    assert dispatch_only
-    assert all(not item.verified for item in dispatch_only)
-
-
-def test_retry_budget_and_previous_run_comparison(tmp_path):
+def test_stalled_campaign_stops_before_large_budget_is_consumed(tmp_path):
     campaign, runs = run_campaign(
         reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=100,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    assert campaign.stop_decision is not None
+    assert campaign.stop_decision.stop_reason == "stalled"
+    assert len(runs) <= 4
+
+
+def test_natural_first_defers_cheat_escalation_until_after_stall(tmp_path):
+    campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="deep",
+        max_improvement_runs=8,
+        allow_cheat_escalation=True,
+        natural_first=True,
+    )
+
+    assert runs
+    assert runs[0].summary.direct_verified_cheat_assisted == 0
+    assert any(run.summary.direct_verified_cheat_assisted > 0 for run in runs[1:])
+    assert campaign.stop_decision is not None
+
+
+def test_profile_defaults_apply_when_max_improvement_runs_not_provided(tmp_path):
+    campaign, _runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=None,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    assert campaign.configured_improvement_runs == 1
+    assert campaign.effective_improvement_runs == 1
+
+
+def test_runtime_guardrail_stop_decision_is_available():
+    policy = normalize_retry_policy(
+        campaign_id="campaign-test",
+        retry_intensity="standard",
+        max_improvement_runs=3,
+        allow_cheat_escalation=False,
+        natural_first=True,
+        runtime_target_minutes=1,
+    )
+    snapshots = (
+        RunProgressSnapshot(
+            run_id="run-1",
+            sequence_index=0,
+            duration_seconds=0,
+            direct_verified_natural=2,
+            direct_verified_cheat_assisted=0,
+            direct_unverified_total=10,
+            non_observable_tracked=5,
+            direct_gain_vs_previous=2,
+            stall_detected=False,
+            runtime_elapsed_seconds=61,
+        ),
+    )
+
+    decision = decide_stop(
+        policy=policy,
+        snapshots=snapshots,
+        final_run_id="run-1",
+        budget_exhausted=False,
+        now=datetime(2026, 4, 22, 10, 32, tzinfo=timezone.utc),
+    )
+
+    assert decision is not None
+    assert decision.stop_reason == "runtime_guardrail"
+
+
+def test_campaign_emits_stop_decision_artifact(tmp_path):
+    campaign, _runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="standard",
+        max_improvement_runs=3,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+
+    assert campaign.stop_decision is not None
+    decision_path = (
+        campaign_dir(tmp_path, campaign.campaign_id) / "campaign-stop-decision.json"
+    )
+    assert decision_path.exists()
+
+
+def test_instruction_store_reuse_updates_revisions_and_statuses(tmp_path):
+    run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="standard",
         max_improvement_runs=1,
         allow_cheat_escalation=False,
         natural_first=True,
     )
+    first = load_instruction_store(tmp_path)
 
-    assert len(runs) == 2
-    assert campaign.final_status == "budget_exhausted"
-    assert runs[1].previous_run_comparison is not None
-    assert runs[1].previous_run_comparison.coverage_delta > 0
-
-
-def test_natural_first_cheat_escalation(tmp_path):
-    campaign, runs = run_campaign(
+    run_campaign(
         reports_dir=tmp_path,
+        retry_intensity="standard",
+        max_improvement_runs=1,
+        allow_cheat_escalation=False,
+        natural_first=True,
+    )
+    second = load_instruction_store(tmp_path)
+
+    assert instruction_index_path(tmp_path).exists()
+    assert instruction_path(tmp_path, "cmd-move-unit").exists()
+    assert second["cmd-move-unit"].revision > first["cmd-move-unit"].revision
+    assert second["cmd-move-unit"].status in {"active", "superseded", "retired"}
+
+
+def test_summary_tracks_direct_and_non_observable_splits(tmp_path):
+    _campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="standard",
         max_improvement_runs=2,
         allow_cheat_escalation=True,
         natural_first=True,
     )
 
-    assert len(runs) == 3
-    assert runs[0].summary.verified_cheat_assisted == 0
-    assert runs[1].summary.verified_cheat_assisted == 0
-    assert runs[2].summary.verified_cheat_assisted > 0
-    assert campaign.final_status in {"stalled", "budget_exhausted"}
+    summary = runs[-1].summary
+    assert (
+        summary.directly_verifiable_total + summary.non_observable_tracked_total
+        == summary.tracked_commands
+    )
+    assert (
+        summary.direct_verified_natural + summary.direct_verified_cheat_assisted
+        == summary.direct_verified_total
+    )
+
+
+def test_cli_emits_run_bundle(tmp_path):
+    rc = itertesting_main(
+        [
+            "--reports-dir",
+            str(tmp_path),
+            "--retry-intensity",
+            "standard",
+            "--max-improvement-runs",
+            "1",
+        ]
+    )
+
+    bundles = list(tmp_path.glob("itertesting-*/manifest.json"))
+
+    assert rc == 0
+    assert bundles
 
 
 def test_malformed_prior_manifest_is_rejected(tmp_path):
@@ -153,63 +275,3 @@ def test_incomplete_run_bundle_is_rejected(tmp_path):
 
     with pytest.raises(ValueError):
         load_run_manifest(manifest)
-
-
-def test_cli_emits_run_bundle(tmp_path):
-    rc = itertesting_main(
-        [
-            "--reports-dir",
-            str(tmp_path),
-            "--max-improvement-runs",
-            "0",
-        ]
-    )
-
-    bundles = list(tmp_path.glob("itertesting-*/manifest.json"))
-
-    assert rc == 0
-    assert bundles
-
-
-def test_campaign_writes_reusable_instruction_files(tmp_path):
-    _campaign, runs = run_campaign(
-        reports_dir=tmp_path,
-        max_improvement_runs=0,
-        allow_cheat_escalation=False,
-        natural_first=True,
-    )
-
-    store = load_instruction_store(tmp_path)
-
-    assert instruction_index_path(tmp_path).exists()
-    assert instruction_path(tmp_path, "cmd-move-unit").exists()
-    assert store["cmd-move-unit"].revision == 1
-    assert store["cmd-move-unit"].status == "active"
-    assert store["cmd-move-unit"].action_type == "timing-change"
-    assert store["cmd-move-unit"].source_run_id == runs[0].run_id
-
-
-def test_future_campaign_reuses_saved_instructions(tmp_path):
-    run_campaign(
-        reports_dir=tmp_path,
-        max_improvement_runs=0,
-        allow_cheat_escalation=False,
-        natural_first=True,
-    )
-
-    _campaign, runs = run_campaign(
-        reports_dir=tmp_path,
-        max_improvement_runs=0,
-        allow_cheat_escalation=False,
-        natural_first=True,
-    )
-
-    move_unit = next(
-        item for item in runs[0].command_records if item.command_id == "cmd-move-unit"
-    )
-    store = load_instruction_store(tmp_path)
-
-    assert move_unit.verified is True
-    assert "saved instruction" in move_unit.evidence_summary
-    assert store["cmd-move-unit"].revision == 2
-    assert store["cmd-move-unit"].status == "applied"
