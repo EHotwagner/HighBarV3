@@ -43,6 +43,8 @@ command -v grpcurl >/dev/null || {
     exit 77
 }
 
+export HIGHBAR_ENABLE_BUILTIN="false"
+
 # -- Resolve UDS path from grpc.json ----------------------------------------
 
 : "${XDG_RUNTIME_DIR:=/tmp}"

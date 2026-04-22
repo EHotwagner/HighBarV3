@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
-Active feature plan: [specs/003-snapshot-arm-coverage/plan.md](specs/003-snapshot-arm-coverage/plan.md).
+Active feature plan: [specs/004-gateway-command-audit/plan.md](specs/004-gateway-command-audit/plan.md).
 See also the feature's research, data-model, contracts, and quickstart in the same
 directory.
 <!-- SPECKIT END -->

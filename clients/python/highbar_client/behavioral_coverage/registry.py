@@ -12,6 +12,7 @@ AICommand oneof MUST have an entry here (asserted at import time).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from .capabilities import CAPABILITY_TAGS
@@ -52,6 +53,13 @@ _CHANNEL_B_QUERY_ARMS = {
 }
 
 _CHEATS_ARMS = {"give_me", "give_me_new_unit"}
+_TEAM_GLOBAL = {"send_resources", "set_my_income_share_direct",
+                "set_share_level", "pause_team"}
+_DRAWER_ONLY_ARMS = {
+    "draw_add_point", "draw_add_line", "draw_remove_point",
+    "create_spline_figure", "create_line_figure", "set_figure_position",
+    "set_figure_color", "remove_figure", "draw_unit",
+}
 
 
 def _category(arm_name: str) -> str:
@@ -247,8 +255,6 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
         )
 
     # --- Team/global arms — not unit-state observable -------------------
-    _TEAM_GLOBAL = {"send_resources", "set_my_income_share_direct",
-                      "set_share_level", "pause_team"}
     for arm in sorted(_TEAM_GLOBAL):
         reg[arm] = BehavioralTestCase(
             arm_name=arm,
@@ -354,6 +360,34 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
     return reg
 
 
+def _annotate_audit_metadata(
+    registry: dict[str, BehavioralTestCase],
+) -> dict[str, BehavioralTestCase]:
+    annotated: dict[str, BehavioralTestCase] = {}
+    for arm_name, case in registry.items():
+        audit_channel = None
+        audit_observability = "snapshot_diff"
+        if arm_name in _TEAM_GLOBAL:
+            audit_channel = "team_global"
+            audit_observability = "not_wire_observable"
+        elif arm_name in _CHANNEL_B_QUERY_ARMS:
+            audit_channel = "channel_b_query"
+            audit_observability = "dispatch_ack_only"
+        elif arm_name in _DRAWER_ONLY_ARMS:
+            audit_channel = "drawer_only"
+            audit_observability = "not_wire_observable"
+        elif arm_name in _CHANNEL_C_LUA_ARMS:
+            audit_channel = "channel_c_lua"
+            audit_observability = "not_wire_observable"
+        annotated[arm_name] = replace(
+            case,
+            audit_channel=audit_channel,
+            audit_observability=audit_observability,
+            audit_phase_default="phase1",
+        )
+    return annotated
+
+
 # ---- import-time validation ---------------------------------------------
 
 
@@ -405,7 +439,7 @@ def validate_registry(registry: dict[str, BehavioralTestCase]) -> None:
             )
 
 
-REGISTRY: dict[str, BehavioralTestCase] = _build_registry()
+REGISTRY: dict[str, BehavioralTestCase] = _annotate_audit_metadata(_build_registry())
 validate_registry(REGISTRY)
 
 

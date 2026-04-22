@@ -31,6 +31,8 @@ PID_FILE=""
 COORDINATOR=""
 WRITEDIR="${HOME}/.local/state/Beyond All Reason"
 RUNTIME_DIR=""
+PHASE_MODE="1"
+ENABLE_BUILTIN=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -42,6 +44,8 @@ while [[ $# -gt 0 ]]; do
         --coordinator)  COORDINATOR="$2";  shift 2 ;;
         --writedir)     WRITEDIR="$2";     shift 2 ;;
         --runtime-dir)  RUNTIME_DIR="$2";  shift 2 ;;
+        --phase)        PHASE_MODE="$2";   shift 2 ;;
+        --enable-builtin) ENABLE_BUILTIN="$2"; shift 2 ;;
         -h|--help)
             sed -n '/^# Usage:/,/^$/p' "$0" >&2
             exit 0
@@ -118,6 +122,14 @@ if [[ -z "$PID_FILE" ]]; then PID_FILE="$RUNTIME_DIR/highbar-launch.pid"; fi
 export SPRING_DATADIR="$WRITEDIR"
 export XDG_RUNTIME_DIR="$RUNTIME_DIR"
 [[ -n "$COORDINATOR" ]] && export HIGHBAR_COORDINATOR="$COORDINATOR"
+export HIGHBAR_AUDIT_PHASE="$PHASE_MODE"
+if [[ -n "$ENABLE_BUILTIN" ]]; then
+    export HIGHBAR_ENABLE_BUILTIN="$ENABLE_BUILTIN"
+elif [[ "$PHASE_MODE" == "2" ]]; then
+    export HIGHBAR_ENABLE_BUILTIN="false"
+else
+    export HIGHBAR_ENABLE_BUILTIN="true"
+fi
 
 # Clear stale state files from prior runs.
 rm -f "$RUNTIME_DIR/highbar-0.sock" \

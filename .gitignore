@@ -46,8 +46,9 @@ clients/python/highbar_client.egg-info/
 clients/python/**/__pycache__/
 *.egg-info/
 __pycache__/
+build/reports/004-*.md
+build/reports/004-*.log
 
 # vcpkg manifest install dir + downloaded archives
 vcpkg_installed/
 .vcpkg-root
-

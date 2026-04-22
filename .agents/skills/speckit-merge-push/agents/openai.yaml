@@ -1,0 +1,4 @@
+interface:
+  display_name: "Speckit Merge Push"
+  short_description: "Squash-merge and clean branches."
+  default_prompt: "Use $speckit-merge-push to squash-merge the completed feature branch, push the target branch, and delete the feature branch locally and on origin."

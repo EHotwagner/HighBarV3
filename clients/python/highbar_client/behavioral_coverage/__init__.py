@@ -404,6 +404,10 @@ def run_live(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    if argv and argv[:1] == ["audit"]:
+        from .audit_report import main as audit_main
+
+        return audit_main(argv[1:])
     args = _parse_args(argv)
     output_dir = Path(args.output_dir)
     if args.run_index > 0:
