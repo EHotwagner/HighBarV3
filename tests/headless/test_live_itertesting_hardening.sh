@@ -5,6 +5,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HEADLESS_DIR="$REPO_ROOT/tests/headless"
+FEATURE_DIR="$REPO_ROOT/specs/011-contract-hardening-completion"
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "test_live_itertesting_hardening: uv missing — skip" >&2
@@ -63,6 +64,25 @@ for section in (
 ):
     assert section in report, section
 PY
+
+if ! grep -Fq "ctest --test-dir build --output-on-failure -R 'command_validation_perf_test'" \
+    "$FEATURE_DIR/quickstart.md"; then
+    echo "test_live_itertesting_hardening: quickstart is missing the validator-overhead entrypoint" >&2
+    exit 1
+fi
+
+if ! grep -Fq "build/reports/command-validation/" \
+    "$FEATURE_DIR/contracts/validator-performance-record.md"; then
+    echo "test_live_itertesting_hardening: validator artifact contract is missing the stable build path" >&2
+    exit 1
+fi
+
+for target in ai_move_flow_test command_validation_test command_validation_perf_test; do
+    if ! grep -Fq "$target" "$FEATURE_DIR/contracts/root-ctest-discovery.md"; then
+        echo "test_live_itertesting_hardening: missing root ctest discovery target $target" >&2
+        exit 1
+    fi
+done
 
 if ! grep -q 'channel_health' "$HEADLESS_DIR/itertesting.sh"; then
     echo "test_live_itertesting_hardening: wrapper is not keyed to manifest channel health" >&2

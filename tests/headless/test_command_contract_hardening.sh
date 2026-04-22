@@ -4,6 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+FEATURE_DIR="$REPO_ROOT/specs/011-contract-hardening-completion"
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "test_command_contract_hardening: uv missing — skip" >&2
@@ -72,3 +73,27 @@ assert "Ordinary improvement guidance is withheld" in rendered
 
 print(f"test_command_contract_hardening: PASS manifest={manifest_path} report={report_path}")
 PY
+
+if ! grep -Fq "command_validation_test|ai_move_flow_test|command_validation_perf_test" \
+    "$FEATURE_DIR/quickstart.md"; then
+    echo "test_command_contract_hardening: quickstart is missing the root ctest discovery command" >&2
+    exit 1
+fi
+
+if ! grep -Fq "A skipped required step leaves validation incomplete." \
+    "$FEATURE_DIR/quickstart.md"; then
+    echo "test_command_contract_hardening: quickstart no longer documents the no-skip completion rule" >&2
+    exit 1
+fi
+
+if ! grep -Fq "highbar-root-tests.cmake" "$REPO_ROOT/CMakeLists.txt"; then
+    echo "test_command_contract_hardening: root ctest bridge wiring is missing from CMakeLists.txt" >&2
+    exit 1
+fi
+
+for target in ai_move_flow_test command_validation_test command_validation_perf_test; do
+    if ! grep -Fq "$target" "$FEATURE_DIR/contracts/root-ctest-discovery.md"; then
+        echo "test_command_contract_hardening: missing root ctest contract target $target" >&2
+        exit 1
+    fi
+done

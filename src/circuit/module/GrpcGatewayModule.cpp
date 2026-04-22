@@ -62,35 +62,7 @@ std::uint64_t NowMicros() {
 }
 
 bool IsGameWideCommand(const ::highbar::v1::AICommand& cmd) {
-	using C = ::highbar::v1::AICommand;
-	switch (cmd.command_case()) {
-	case C::kSendTextMessage:
-	case C::kSetLastPosMessage:
-	case C::kPauseTeam:
-	case C::kInitPath:
-	case C::kGetApproxLength:
-	case C::kGetNextWaypoint:
-	case C::kFreePath:
-	case C::kCallLuaRules:
-	case C::kCallLuaUi:
-	case C::kSetMyIncomeShareDirect:
-	case C::kSetShareLevel:
-	case C::kDrawAddPoint:
-	case C::kDrawAddLine:
-	case C::kDrawRemovePoint:
-	case C::kCreateSplineFigure:
-	case C::kCreateLineFigure:
-	case C::kSetFigurePosition:
-	case C::kSetFigureColor:
-	case C::kRemoveFigure:
-	case C::kDrawUnit:
-	case C::kGiveMeNewUnit:
-	case C::kSendResources:
-	case C::kGiveMe:
-		return true;
-	default:
-		return false;
-	}
+	return grpc::IsGameWideCommand(cmd);
 }
 
 }  // namespace
@@ -745,17 +717,17 @@ void CGrpcGatewayModule::DrainCommandQueue() {
 		// The validator accepted a single authoritative batch target and
 		// that normalized target is preserved on the queue entry.
 		const auto& cmd = entry.command;
-		std::int32_t target_id = entry.authoritative_target_unit_id;
-		if (IsGameWideCommand(cmd)) target_id = -1;
-		if (target_id == 0) continue;  // arm not recognised by switch
+		const auto target_id = grpc::EffectiveDispatchTargetUnitId(
+			entry.authoritative_target_unit_id, cmd);
+		if (!target_id.has_value()) continue;  // arm not recognised by switch
 
 		// target_id == -1 marks game-wide arms (Game / Pathing / Lua /
 		// Cheats) that don't bind to any unit. Use any own unit as the
 		// dispatch context; the dispatcher case body ignores `unit` for
 		// these arms but DispatchCommand's guards still want non-null.
 		CCircuitUnit* unit_ctx = nullptr;
-		if (target_id > 0) {
-			unit_ctx = circuit->GetTeamUnit(target_id);
+		if (*target_id > 0) {
+			unit_ctx = circuit->GetTeamUnit(*target_id);
 			if (unit_ctx == nullptr || unit_ctx->IsDead()) continue;
 		} else {
 			const auto& own = circuit->GetTeamUnits();

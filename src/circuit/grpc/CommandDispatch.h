@@ -20,12 +20,59 @@
 
 #include "highbar/commands.pb.h"
 
+#include <cstdint>
+#include <optional>
+
 namespace circuit {
 class CCircuitAI;
 class CCircuitUnit;
 }  // namespace circuit
 
 namespace circuit::grpc {
+
+inline bool IsGameWideCommand(const ::highbar::v1::AICommand& cmd) {
+	using C = ::highbar::v1::AICommand;
+	switch (cmd.command_case()) {
+	case C::kSendTextMessage:
+	case C::kSetLastPosMessage:
+	case C::kPauseTeam:
+	case C::kInitPath:
+	case C::kGetApproxLength:
+	case C::kGetNextWaypoint:
+	case C::kFreePath:
+	case C::kCallLuaRules:
+	case C::kCallLuaUi:
+	case C::kSetMyIncomeShareDirect:
+	case C::kSetShareLevel:
+	case C::kDrawAddPoint:
+	case C::kDrawAddLine:
+	case C::kDrawRemovePoint:
+	case C::kCreateSplineFigure:
+	case C::kCreateLineFigure:
+	case C::kSetFigurePosition:
+	case C::kSetFigureColor:
+	case C::kRemoveFigure:
+	case C::kDrawUnit:
+	case C::kGiveMeNewUnit:
+	case C::kSendResources:
+	case C::kGiveMe:
+		return true;
+	default:
+		return false;
+	}
+}
+
+inline std::optional<std::int32_t> EffectiveDispatchTargetUnitId(
+		std::int32_t authoritative_target_unit_id,
+		const ::highbar::v1::AICommand& cmd) {
+	if (IsGameWideCommand(cmd)) {
+		return -1;
+	}
+	if (authoritative_target_unit_id == 0) {
+		return std::nullopt;
+	}
+	return authoritative_target_unit_id;
+}
 
 // Dispatch `cmd` for `unit` on the engine thread. `unit` is the live
 // CCircuitUnit resolved from the batch's target_unit_id — callers

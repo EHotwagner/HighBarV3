@@ -2,6 +2,18 @@
 
 `tests/headless/itertesting.sh` is the maintainer entrypoint for the Itertesting CLI from the repo root.
 
+The command-contract completion suite also depends on the standard
+build-root CTest entrypoints:
+
+```bash
+ctest --test-dir build -N -R 'command_validation_test|ai_move_flow_test|command_validation_perf_test'
+ctest --test-dir build --output-on-failure -R 'command_validation_test|ai_move_flow_test'
+ctest --test-dir build --output-on-failure -R 'command_validation_perf_test'
+```
+
+Every command in that suite is required for feature completion; a skipped
+required step leaves validation incomplete.
+
 Use the default single-run path:
 
 ```bash
@@ -60,3 +72,7 @@ tests/headless/test_command_contract_hardening.sh
 
 Expected result: a manifest and report containing `Contract Health` and
 `Foundational Blockers` sections, with ordinary improvement guidance withheld.
+
+The validator-overhead target writes its machine-readable artifact to:
+
+- `build/reports/command-validation/validator-overhead.json`
