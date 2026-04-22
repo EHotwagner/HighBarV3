@@ -125,8 +125,14 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 		return true;
 
 	case C::kBuildUnit: {
+		const auto def_id = cmd.build_unit().to_build_unit_def_id();
+		if (def_id <= 0) {
+			LogError(ai, "CommandDispatch",
+			         "build: invalid def_id <= 0");
+			return false;
+		}
 		auto* def = ai->GetCircuitDefSafe(
-			static_cast<CCircuitDef::Id>(cmd.build_unit().to_build_unit_def_id()));
+			static_cast<CCircuitDef::Id>(def_id));
 		if (def == nullptr) {
 			LogError(ai, "CommandDispatch",
 			         "build: unknown def_id (validated away — should not happen)");
@@ -643,8 +649,14 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 	case C::kGiveMeNewUnit: {
 		auto* c = ai->GetCheats();
 		if (c == nullptr) return false;
+		const auto def_id = cmd.give_me_new_unit().unit_def_id();
+		if (def_id <= 0) {
+			LogError(ai, "CommandDispatch",
+			         "give_me_new_unit: invalid def_id <= 0");
+			return false;
+		}
 		auto* def = ai->GetCircuitDefSafe(
-			static_cast<CCircuitDef::Id>(cmd.give_me_new_unit().unit_def_id()));
+			static_cast<CCircuitDef::Id>(def_id));
 		if (def == nullptr || def->GetDef() == nullptr) return false;
 		(void)c->GiveMeUnit(def->GetDef(),
 		                    ToFloat3(cmd.give_me_new_unit().position()));
@@ -672,6 +684,11 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 	case C::kGiveMe: {
 		auto* c = ai->GetCheats();
 		if (c == nullptr) return false;
+		if (cmd.give_me().amount() <= 0.0f) {
+			LogError(ai, "CommandDispatch",
+			         "give_me: invalid amount <= 0");
+			return false;
+		}
 		auto* cb = ai->GetCallback();
 		if (cb == nullptr) return false;
 		const char* name = cmd.give_me().resource_id() == 0

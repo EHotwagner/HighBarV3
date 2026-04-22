@@ -109,6 +109,10 @@ def main():
                    help="x offset in elmos")
     p.add_argument("--dz", type=float, default=0.0,
                    help="z offset in elmos")
+    p.add_argument("--count", type=int, default=1,
+                   help="number of MoveUnit batches to submit")
+    p.add_argument("--delay-ms", type=float, default=150.0,
+                   help="delay between SubmitCommands calls")
     args = p.parse_args()
 
     ch = grpc.insecure_channel(args.endpoint)
@@ -138,26 +142,32 @@ def main():
         )
         return 1
 
-    # Submit a MoveUnit command.
-    def gen():
-        batch = commands_pb2.CommandBatch()
-        batch.batch_seq = 1
-        batch.target_unit_id = uid
-        cmd = batch.commands.add()
-        cmd.move_unit.unit_id = uid
-        cmd.move_unit.to_position.x = args.dx
-        cmd.move_unit.to_position.y = 0.0
-        cmd.move_unit.to_position.z = args.dz
-        cmd.move_unit.options = 0
-        cmd.move_unit.timeout = 0
-        print(f"[ai] sending MoveUnit unit_id={uid} "
-              f"to=({args.dx},0,{args.dz})", flush=True)
-        yield batch
+    # Submit one or more MoveUnit commands.
+    for batch_seq in range(1, args.count + 1):
+        target_x = args.dx * batch_seq
+        target_z = args.dz * batch_seq
 
-    ack = stub.SubmitCommands(gen(), timeout=10)
-    print(f"[ai] SubmitCommands ack: accepted={ack.batches_accepted} "
-          f"rejected_invalid={ack.batches_rejected_invalid} "
-          f"rejected_full={ack.batches_rejected_full}", flush=True)
+        def gen():
+            batch = commands_pb2.CommandBatch()
+            batch.batch_seq = batch_seq
+            batch.target_unit_id = uid
+            cmd = batch.commands.add()
+            cmd.move_unit.unit_id = uid
+            cmd.move_unit.to_position.x = target_x
+            cmd.move_unit.to_position.y = 0.0
+            cmd.move_unit.to_position.z = target_z
+            cmd.move_unit.options = 0
+            cmd.move_unit.timeout = 0
+            print(f"[ai] sending MoveUnit batch_seq={batch_seq} unit_id={uid} "
+                  f"to=({target_x},0,{target_z})", flush=True)
+            yield batch
+
+        ack = stub.SubmitCommands(gen(), timeout=10)
+        print(f"[ai] SubmitCommands ack: batch_seq={batch_seq} "
+              f"accepted={ack.batches_accepted} "
+              f"rejected_invalid={ack.batches_rejected_invalid} "
+              f"rejected_full={ack.batches_rejected_full}", flush=True)
+        time.sleep(args.delay_ms / 1000.0)
 
     # Let the state stream run a few seconds to capture effect.
     time.sleep(5)

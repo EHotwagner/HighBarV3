@@ -185,6 +185,7 @@ private:
 	// specs/.../investigations/hello-rpc-deadline-exceeded.md for why
 	// client-mode exists alongside the server-mode HighBarService.
 	std::unique_ptr<grpc::CoordinatorClient> coordinator_client_;
+	bool coordinator_command_channel_started_ = false;
 	static constexpr std::uint32_t kHeartbeatEveryNFrames = 30;
 	std::uint32_t frame_counter_ = 0;
 

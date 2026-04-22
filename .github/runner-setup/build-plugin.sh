@@ -39,7 +39,7 @@ fi
 
 cmake --build "$build_dir" --target BARb --parallel "$(nproc)"
 
-lib="$build_dir/AI/Skirmish/BARb/libSkirmishAI.so"
+lib="$build_dir/AI/Skirmish/BARb/data/libSkirmishAI.so"
 [ -f "$lib" ] || {
     echo "build-plugin: expected $lib after build but it's missing" >&2
     exit 1

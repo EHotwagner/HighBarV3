@@ -189,15 +189,22 @@ class CoordSvc(coordinator_pb2_grpc.HighBarCoordinatorServicer):
         print(f"[cmd-ch] plugin={request.plugin_id} subscribed "
               f"peer={context.peer()}", flush=True)
         self.relay.activate_command_channel()
+        disconnected = threading.Event()
+        context.add_callback(disconnected.set)
         # Serve forwarded commands from the central queue until the
         # plugin disconnects.
         try:
-            while context.is_active():
+            while not disconnected.is_set():
                 try:
                     batch = self.relay.cmd_forward.get(timeout=0.5)
+                    command_kinds = [
+                        command.WhichOneof("command") or "unset"
+                        for command in batch.commands
+                    ]
                     print(f"[cmd-ch] forwarding batch "
                           f"seq={batch.batch_seq} "
-                          f"ncmds={len(batch.commands)}", flush=True)
+                          f"ncmds={len(batch.commands)} "
+                          f"kinds={command_kinds}", flush=True)
                     yield batch
                 except queue.Empty:
                     continue

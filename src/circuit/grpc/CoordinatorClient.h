@@ -73,6 +73,8 @@ private:
 	std::string engine_sha256_;
 	std::shared_ptr<::grpc::Channel> channel_;
 	std::unique_ptr<::highbar::v1::HighBarCoordinator::Stub> stub_;
+	std::shared_ptr<::grpc::Channel> cmd_channel_;
+	std::unique_ptr<::highbar::v1::HighBarCoordinator::Stub> cmd_stub_;
 	std::atomic<bool> connected_{false};
 	std::atomic<std::uint64_t> ok_count_{0};
 	std::atomic<std::uint64_t> err_count_{0};

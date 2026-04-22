@@ -28,10 +28,13 @@
 #include "util/FileSystem.h"
 
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -39,6 +42,28 @@
 namespace circuit {
 
 namespace {
+
+std::mutex& CoordinatorTraceMutex() {
+	static std::mutex m;
+	return m;
+}
+
+void AppendCoordinatorTrace(const std::string& message) {
+	const char* path = std::getenv("HIGHBAR_COORDINATOR_TRACE");
+	if (path == nullptr || path[0] == '\0') return;
+
+	std::lock_guard<std::mutex> lock(CoordinatorTraceMutex());
+	FILE* f = std::fopen(path, "a");
+	if (f == nullptr) return;
+
+	const auto now = std::chrono::system_clock::now();
+	const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+		now.time_since_epoch()).count();
+	std::fprintf(f, "%lld plugin=module %s\n",
+	             static_cast<long long>(micros),
+	             message.c_str());
+	std::fclose(f);
+}
 
 std::string ResolveTokenPath(CCircuitAI* ai, const std::string& template_path) {
 	constexpr const char* kMarker = "$writeDir/";
@@ -63,6 +88,33 @@ std::uint64_t NowMicros() {
 
 bool IsGameWideCommand(const ::highbar::v1::AICommand& cmd) {
 	return grpc::IsGameWideCommand(cmd);
+}
+
+int CoordinatorOwnerSkirmishAiId() {
+	if (const char* configured = std::getenv("HIGHBAR_COORDINATOR_OWNER_SKIRMISH_AI_ID")) {
+		return std::atoi(configured);
+	}
+	return 0;
+}
+
+const char* CommandKind(const ::highbar::v1::AICommand& cmd) {
+	using C = ::highbar::v1::AICommand;
+	switch (cmd.command_case()) {
+	case C::kAttack:
+		return "attack";
+	case C::kBuildUnit:
+		return "build_unit";
+	case C::kMoveUnit:
+		return "move_unit";
+	case C::kPatrol:
+		return "patrol";
+	case C::kFight:
+		return "fight";
+	case C::kStop:
+		return "stop";
+	default:
+		return "other";
+	}
 }
 
 }  // namespace
@@ -148,13 +200,20 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 		// inside spring; see investigations/hello-rpc-deadline-exceeded.md).
 		if (const char* coord_env = std::getenv("HIGHBAR_COORDINATOR")) {
 			const std::string coord_endpoint = coord_env;
-			coordinator_client_ = std::make_unique<grpc::CoordinatorClient>(
-				ai, coord_endpoint,
-				/*plugin_id=*/std::string("highbar-") + short_sha,
-				/*engine_sha256=*/grpc::kEngineSha256);
-			// Phase C — spawn the background command reader now that
-			// the engine-thread CommandQueue is alive.
-			coordinator_client_->StartCommandChannel(command_queue_.get());
+			const int owner_skirmish_ai_id = CoordinatorOwnerSkirmishAiId();
+			if (ai->GetSkirmishAIId() == owner_skirmish_ai_id) {
+				coordinator_client_ = std::make_unique<grpc::CoordinatorClient>(
+					ai, coord_endpoint,
+					/*plugin_id=*/std::string("highbar-") + short_sha,
+					/*engine_sha256=*/grpc::kEngineSha256);
+			} else {
+				grpc::LogError(
+					ai,
+					"GrpcGatewayModule",
+					"skipping coordinator client-mode for non-owner skirmishAIId="
+					+ std::to_string(ai->GetSkirmishAIId())
+					+ " owner=" + std::to_string(owner_skirmish_ai_id));
+			}
 		}
 
 		ai->GetScheduler()->RunJobEvery(
@@ -502,6 +561,13 @@ void CGrpcGatewayModule::OnFrameTick() {
 		// Client-mode heartbeat. Engine-thread; CoordinatorClient's
 		// SendHeartbeat has a 250ms deadline so stalls are bounded.
 		++frame_counter_;
+		if (coordinator_client_ && !coordinator_command_channel_started_) {
+			const auto live_frame = circuit != nullptr ? circuit->GetLastFrame() : -1;
+			if (live_frame >= 0) {
+				coordinator_client_->StartCommandChannel(command_queue_.get());
+				coordinator_command_channel_started_ = true;
+			}
+		}
 		if (coordinator_client_ && (frame_counter_ % kHeartbeatEveryNFrames) == 0) {
 			coordinator_client_->SendHeartbeat(frame_counter_);
 		}
@@ -739,7 +805,13 @@ void CGrpcGatewayModule::DrainCommandQueue() {
 		// T015 — dispatch hot path guard. Engine-thread only; direct
 		// TransitionToDisabled is safe.
 		try {
+			AppendCoordinatorTrace(
+				"dispatch begin kind=" + std::string(CommandKind(cmd))
+				+ " target=" + std::to_string(*target_id));
 			grpc::DispatchCommand(circuit, unit_ctx, cmd);
+			AppendCoordinatorTrace(
+				"dispatch end kind=" + std::string(CommandKind(cmd))
+				+ " target=" + std::to_string(*target_id));
 		} catch (...) {
 			TransitionToDisabled("dispatch",
 				grpc::ReasonCodeFor(std::current_exception()),
