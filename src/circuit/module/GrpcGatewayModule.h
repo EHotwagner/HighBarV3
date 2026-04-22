@@ -24,14 +24,18 @@
 
 #include "module/Module.h"
 
+#include <chrono>
 #include <atomic>
 #include <cstdint>
+#include <deque>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
 
+#include "highbar/callbacks.pb.h"
 #include "highbar/state.pb.h"
 #include "grpc/SnapshotTick.h"
 
@@ -121,6 +125,29 @@ public:
 	::circuit::grpc::CommandQueue*    GetCommandQueue()    { return command_queue_.get(); }
 	std::shared_mutex&                StateMutex()         { return state_mutex_; }
 	std::uint64_t                     HeadSeq() const;
+
+	enum class CallbackRpcStatus : std::uint8_t {
+		Ok = 0,
+		Unavailable = 1,
+		FailedPrecondition = 2,
+		Internal = 3,
+	};
+
+	struct CallbackInvocationResult {
+		CallbackRpcStatus status = CallbackRpcStatus::Internal;
+		std::string error_detail;
+		::highbar::v1::CallbackResponse response;
+	};
+
+	// Worker-thread entry point for InvokeCallback. The request is queued
+	// for engine-thread execution and this call blocks up to `timeout`
+	// waiting for the result. The returned response is only meaningful
+	// when the status is Ok.
+	CallbackRpcStatus InvokeCallback(
+		const ::highbar::v1::CallbackRequest& request,
+		::highbar::v1::CallbackResponse* response,
+		std::chrono::milliseconds timeout,
+		std::string* error_detail);
 
 	// T011 — queue a fault transition from any thread. Worker-thread
 	// callers (gRPC handlers, snapshot serializer) use this; the actual
@@ -222,6 +249,10 @@ private:
 	// T057 helper: drain CommandQueue, dispatch each via
 	// CCircuitUnit::Cmd*. Engine-thread only.
 	void DrainCommandQueue();
+	// Minimal InvokeCallback bridge. Worker threads enqueue callback
+	// requests here; the engine thread resolves them at the top of the
+	// frame before command dispatch.
+	void DrainCallbackQueue();
 	// Pull a deferred fault (if any) and run TransitionToDisabled on
 	// the engine thread. Called at the top of OnFrameTick.
 	void DrainPendingFault();
@@ -243,6 +274,14 @@ private:
 	// RequestSnapshot only uses it for the scheduled_frame return
 	// value, which is an advisory correlation hint.
 	std::atomic<std::uint32_t> current_frame_{0};
+
+	struct PendingCallbackInvocation {
+		::highbar::v1::CallbackRequest request;
+		std::promise<CallbackInvocationResult> completion;
+	};
+
+	std::mutex pending_callbacks_mutex_;
+	std::deque<std::shared_ptr<PendingCallbackInvocation>> pending_callbacks_;
 };
 
 }  // namespace circuit

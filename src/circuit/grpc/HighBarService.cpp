@@ -676,19 +676,73 @@ private:
 	std::uint64_t batches_rejected_full_ = 0;
 };
 
-// --- InvokeCallback / Save / Load (unary, implemented — T060/T061) --------
+// --- InvokeCallback / Save / Load (unary) ----------------------------------
 //
-// All three share a trivial no-op default: the auth interceptor has
-// already enforced AI-role (observers rejected with PERMISSION_DENIED
-// before reaching here), so the handler just returns an empty/default
-// response synchronously. The engine-side "forward this callback" path
-// — wired from upstream CircuitAI callback points into these RPCs —
-// lands as a separate upstream-shared edit (Constitution I); for US2
-// we ship the server-side scaffolding so AI clients can exercise the
-// RPCs round-trip without touching the engine callback graph.
-//
-// All three share an identical skeleton; template-ish macro keeps the
-// boilerplate bounded.
+// InvokeCallback now has a minimal worker->engine bridge for the small
+// callback subset needed by fixture bootstrap/runtime def-id resolution.
+// Save/Load remain the no-op scaffolding from T061 until the engine-side
+// persistence bridge is wired.
+
+class HighBarService::InvokeCallbackCallData final : public CallDataBase {
+public:
+	InvokeCallbackCallData(HighBarService* svc,
+	                       ::grpc::ServerCompletionQueue* cq)
+		: svc_(svc), cq_(cq), responder_(&ctx_) {
+		svc_->RequestInvokeCallback(&ctx_, &request_, &responder_, cq_, cq_, this);
+	}
+
+	void Proceed(bool ok) override {
+		switch (stage_) {
+		case Stage::kCreated: {
+			new InvokeCallbackCallData(svc_, cq_);
+			if (!ok) { delete this; return; }
+			if (svc_->gateway_module_ == nullptr) {
+				Finish(::grpc::Status(::grpc::StatusCode::UNAVAILABLE,
+				                      "InvokeCallback handle not yet wired"));
+				return;
+			}
+
+			std::string error_detail;
+			switch (svc_->gateway_module_->InvokeCallback(
+				request_, &response_, std::chrono::milliseconds(500), &error_detail)) {
+			case ::circuit::CGrpcGatewayModule::CallbackRpcStatus::Ok:
+				Finish(::grpc::Status::OK);
+				return;
+			case ::circuit::CGrpcGatewayModule::CallbackRpcStatus::Unavailable:
+				Finish(::grpc::Status(::grpc::StatusCode::UNAVAILABLE, error_detail));
+				return;
+			case ::circuit::CGrpcGatewayModule::CallbackRpcStatus::FailedPrecondition:
+				Finish(::grpc::Status(::grpc::StatusCode::FAILED_PRECONDITION, error_detail));
+				return;
+			case ::circuit::CGrpcGatewayModule::CallbackRpcStatus::Internal:
+			default:
+				Finish(::grpc::Status(::grpc::StatusCode::INTERNAL, error_detail));
+				return;
+			}
+		}
+		case Stage::kFinishing:
+		default:
+			delete this;
+			return;
+		}
+	}
+
+private:
+	enum class Stage { kCreated, kFinishing };
+
+	void Finish(const ::grpc::Status& status) {
+		stage_ = Stage::kFinishing;
+		responder_.Finish(response_, status, this);
+	}
+
+	HighBarService* svc_;
+	::grpc::ServerCompletionQueue* cq_;
+	::grpc::ServerContext ctx_;
+	::highbar::v1::CallbackRequest request_;
+	::highbar::v1::CallbackResponse response_;
+	::grpc::ServerAsyncResponseWriter<::highbar::v1::CallbackResponse> responder_;
+	Stage stage_ = Stage::kCreated;
+};
 
 #define HIGHBAR_NOOP_UNARY_CALLDATA(NAME, REQ_T, RESP_T, REQUEST_FN)               \
 class HighBarService::NAME##CallData final : public CallDataBase {                 \
@@ -717,12 +771,6 @@ private:                                                                        
 	::grpc::ServerAsyncResponseWriter<RESP_T> responder_;                          \
 	Stage stage_ = Stage::kCreated;                                                \
 }
-
-HIGHBAR_NOOP_UNARY_CALLDATA(
-	InvokeCallback,
-	::highbar::v1::CallbackRequest,
-	::highbar::v1::CallbackResponse,
-	RequestInvokeCallback);
 
 HIGHBAR_NOOP_UNARY_CALLDATA(
 	Save,

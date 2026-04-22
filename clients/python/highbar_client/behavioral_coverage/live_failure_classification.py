@@ -6,6 +6,8 @@ from __future__ import annotations
 from .bootstrap import (
     DEFAULT_LIVE_FIXTURE_CLASSES,
     OPTIONAL_LIVE_FIXTURE_CLASSES,
+    affected_commands_for_fixture_classes,
+    command_fixture_dependency,
     fixture_classes_for_command,
 )
 from .itertesting_types import (
@@ -17,6 +19,7 @@ from .itertesting_types import (
     FixtureProvisioningResult,
     LiveFixtureProfile,
 )
+from .predicates import semantic_gate_metadata
 from .registry import REGISTRY
 
 
@@ -51,6 +54,12 @@ _CHANNEL_FAILURE_SIGNALS = (
     "plugin command channel is not connected",
     "cmd-ch disconnected",
     "command channel disconnected",
+)
+_INERT_DISPATCH_SIGNALS = (
+    "inert dispatch",
+    "effective no-op",
+    "no meaningful engine effect",
+    "maps to no meaningful engine effect",
 )
 _INTENTIONALLY_EFFECT_FREE = {
     "cmd-stop",
@@ -129,6 +138,53 @@ def missing_fixture_classes_for_command(
     command_id: str,
     provisioned_fixture_classes: tuple[str, ...],
 ) -> tuple[str, ...]:
+    return unavailable_fixture_classes_for_command(
+        command_id,
+        class_statuses=(),
+        provisioned_fixture_classes=provisioned_fixture_classes,
+    )
+
+
+def unavailable_fixture_classes_for_command(
+    command_id: str,
+    *,
+    class_statuses,
+    provisioned_fixture_classes: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    if command_id == "cmd-self-destruct":
+        disposable_fixture_classes = (
+            "builder",
+            "cloakable",
+            "payload_unit",
+            "damaged_friendly",
+        )
+        if class_statuses:
+            status_by_class = {
+                item.fixture_class: item.status for item in class_statuses
+            }
+            if any(
+                status_by_class.get(fixture_class) == "provisioned"
+                for fixture_class in disposable_fixture_classes
+            ):
+                return ()
+            return tuple(
+                fixture_class
+                for fixture_class in ("builder", "cloakable")
+                if status_by_class.get(fixture_class) in {"missing", "unusable"}
+            )
+        provisioned = set(provisioned_fixture_classes)
+        if set(disposable_fixture_classes).intersection(provisioned):
+            return ()
+        return ("builder", "cloakable")
+    if class_statuses:
+        status_by_class = {
+            item.fixture_class: item.status for item in class_statuses
+        }
+        return tuple(
+            fixture_class
+            for fixture_class in fixture_classes_for_command(command_id)
+            if status_by_class.get(fixture_class) in {"missing", "unusable"}
+        )
     provisioned = set(provisioned_fixture_classes)
     return tuple(
         fixture
@@ -137,16 +193,34 @@ def missing_fixture_classes_for_command(
     )
 
 
+def precise_missing_fixture_classes_from_detail(
+    detail: str | None,
+) -> tuple[str, ...]:
+    lowered = (detail or "").strip()
+    marker = "live fixture dependency unavailable for this arm ("
+    start = lowered.find(marker)
+    if start == -1:
+        return ()
+    start += len(marker)
+    end = lowered.find(")", start)
+    if end == -1:
+        return ()
+    inside = lowered[start:end]
+    parts = tuple(
+        token.strip()
+        for token in inside.split(",")
+        if token.strip()
+    )
+    return parts
+
+
 def affected_commands_for_missing_fixtures(
     missing_fixture_classes: tuple[str, ...],
 ) -> tuple[str, ...]:
-    missing = set(missing_fixture_classes)
-    affected = [
-        command_id
-        for command_id in default_live_fixture_profile().supported_command_ids
-        if missing.intersection(fixture_classes_for_command(command_id))
-    ]
-    return tuple(sorted(affected))
+    return affected_commands_for_fixture_classes(
+        missing_fixture_classes,
+        supported_command_ids=default_live_fixture_profile().supported_command_ids,
+    )
 
 
 def is_channel_failure_signal(detail: str | None) -> bool:
@@ -156,6 +230,11 @@ def is_channel_failure_signal(detail: str | None) -> bool:
 
 def is_intentionally_effect_free(command_id: str) -> bool:
     return command_id in _INTENTIONALLY_EFFECT_FREE
+
+
+def has_explicit_inert_dispatch_signal(detail: str | None) -> bool:
+    lowered = (detail or "").lower()
+    return any(signal in lowered for signal in _INERT_DISPATCH_SIGNALS)
 
 
 def _issue_source_scope(issue_class: str) -> str:
@@ -224,12 +303,7 @@ def classify_foundational_issue(
     ):
         return "validation_gap", detail or "dispatcher rejected a command the validator did not reject"
 
-    if live_row is not None and (
-        (live_row or {}).get("error") == "effect_not_observed"
-        or "effect_not_observed" in lowered
-        or "inert dispatch" in lowered
-        or "no-op" in lowered
-    ):
+    if has_explicit_inert_dispatch_signal(detail):
         return "inert_dispatch", detail or "dispatch accepted the command without a durable effect"
 
     return None
@@ -296,6 +370,7 @@ def classify_failure_cause(
     verification_rule: ArmVerificationRule,
 ) -> FailureCauseClassification:
     detail = record.blocking_reason or record.evidence_summary or "no detail recorded"
+    dependency = command_fixture_dependency(record.command_id)
 
     if (
         channel_health.status != "healthy"
@@ -312,18 +387,48 @@ def classify_failure_cause(
             source_scope="channel_health",
         )
 
-    missing_fixture_classes = missing_fixture_classes_for_command(
+    unavailable_fixture_classes = unavailable_fixture_classes_for_command(
         record.command_id,
-        fixture_provisioning.provisioned_fixture_classes,
+        class_statuses=fixture_provisioning.class_statuses,
+        provisioned_fixture_classes=fixture_provisioning.provisioned_fixture_classes,
     )
-    if record.command_id in fixture_provisioning.affected_command_ids or missing_fixture_classes:
-        joined = ", ".join(missing_fixture_classes) or detail
+    precise_unavailable_fixture_classes = precise_missing_fixture_classes_from_detail(
+        detail
+    )
+    if precise_unavailable_fixture_classes:
+        unavailable_fixture_classes = precise_unavailable_fixture_classes
+    if (
+        record.command_id in fixture_provisioning.affected_command_ids
+        or unavailable_fixture_classes
+        or dependency.blocking_fallback == "missing_fixture"
+        and any(
+            fixture_class in fixture_provisioning.missing_fixture_classes
+            for fixture_class in dependency.required_fixture_classes
+        )
+    ):
+        joined = ", ".join(unavailable_fixture_classes) or detail
         return FailureCauseClassification(
             command_id=record.command_id,
             run_id=record.source_run_id,
             primary_cause="missing_fixture",
             supporting_detail=f"missing fixture classes: {joined}",
             source_scope="bootstrap",
+        )
+
+    semantic_gate = semantic_gate_metadata(record.command_id, detail)
+    if semantic_gate is not None:
+        gate_kind, gate_detail, _custom_command_id = semantic_gate
+        gate_label = (
+            "helper-parity gap"
+            if gate_kind == "helper-parity"
+            else f"{gate_kind.replace('-', ' ')} gate"
+        )
+        return FailureCauseClassification(
+            command_id=record.command_id,
+            run_id=record.source_run_id,
+            primary_cause="predicate_or_evidence_gap",
+            supporting_detail=f"semantic gate ({gate_label}): {gate_detail}",
+            source_scope="verification_rule",
         )
 
     if record.attempt_status == "inconclusive" or verification_rule.fallback_classification == "predicate_or_evidence_gap":

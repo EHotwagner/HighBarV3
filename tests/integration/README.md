@@ -32,3 +32,10 @@ Each `*_test.cc` file in this directory currently `GTEST_SKIP()`s
 with a pointer back to this README. Once the harness lands, the body
 of each test is spelled out in the tasks.md entry (T051–T054) that
 introduced it.
+
+For 014 fixture-bootstrap simplification, the same placeholder policy
+now also covers semantic-surface transport checks for:
+
+- wanted-speed dispatch parity and `emprework`-gated expectations
+- commander DGun versus non-commander `MANUAL_LAUNCH` substitution
+- attack and set-target rewrite parity for BAR's target-shape gadgets

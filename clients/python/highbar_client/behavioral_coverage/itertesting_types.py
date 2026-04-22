@@ -26,6 +26,37 @@ FailureCause = Literal[
     "predicate_or_evidence_gap",
     "behavioral_failure",
 ]
+SemanticGateKind = Literal[
+    "helper-parity",
+    "lua-rewrite",
+    "unit-shape",
+    "mod-option",
+]
+FixtureProvisioningStrategy = Literal[
+    "baseline",
+    "shared-instance",
+    "refreshable-shared-instance",
+]
+FixtureBlockingFallback = Literal[
+    "missing_fixture",
+    "transport_interruption_only_if_session_unhealthy",
+]
+FixtureClassState = Literal[
+    "planned",
+    "provisioned",
+    "refreshed",
+    "missing",
+    "unusable",
+]
+SharedFixtureBackingKind = Literal["unit", "feature", "area", "target-handle"]
+SharedFixtureUsabilityState = Literal[
+    "ready",
+    "consumed",
+    "destroyed",
+    "out_of_range",
+    "stale",
+    "refresh_failed",
+]
 FailureSourceScope = Literal[
     "bootstrap",
     "channel_health",
@@ -128,6 +159,37 @@ class LiveFixtureProfile:
 
 
 @dataclass(frozen=True)
+class CommandFixtureDependency:
+    command_id: str
+    required_fixture_classes: tuple[str, ...]
+    provisioning_strategy: FixtureProvisioningStrategy
+    blocking_fallback: FixtureBlockingFallback
+
+
+@dataclass(frozen=True)
+class SharedFixtureInstance:
+    instance_id: str
+    fixture_class: str
+    backing_kind: SharedFixtureBackingKind
+    backing_id: str
+    usability_state: SharedFixtureUsabilityState
+    refresh_count: int
+    last_ready_at: str | None
+    replacement_of: str | None = None
+
+
+@dataclass(frozen=True)
+class FixtureClassStatus:
+    fixture_class: str
+    status: FixtureClassState
+    planned_command_ids: tuple[str, ...]
+    ready_instance_ids: tuple[str, ...]
+    last_transition_reason: str
+    affected_command_ids: tuple[str, ...]
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class FixtureProvisioningResult:
     run_id: str
     profile_id: str
@@ -135,6 +197,8 @@ class FixtureProvisioningResult:
     missing_fixture_classes: tuple[str, ...]
     affected_command_ids: tuple[str, ...]
     completed_at: str
+    class_statuses: tuple[FixtureClassStatus, ...] = ()
+    shared_fixture_instances: tuple[SharedFixtureInstance, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,6 +229,16 @@ class FailureCauseClassification:
     primary_cause: FailureCause
     supporting_detail: str
     source_scope: FailureSourceScope
+
+
+@dataclass(frozen=True)
+class CommandSemanticGate:
+    command_id: str
+    run_id: str
+    gate_kind: SemanticGateKind
+    detail: str
+    source_scope: FailureSourceScope
+    custom_command_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -357,6 +431,7 @@ class ItertestingRun:
     channel_health: ChannelHealthOutcome | None = None
     verification_rules: tuple[ArmVerificationRule, ...] = ()
     failure_classifications: tuple[FailureCauseClassification, ...] = ()
+    semantic_gates: tuple[CommandSemanticGate, ...] = ()
     contract_issues: tuple[CommandContractIssue, ...] = ()
     deterministic_repros: tuple[DeterministicRepro, ...] = ()
     contract_health_decision: ContractHealthDecision | None = None
@@ -417,6 +492,33 @@ def _fixture_profile_from_dict(payload: dict[str, Any]) -> LiveFixtureProfile:
     )
 
 
+def _fixture_class_status_from_dict(payload: dict[str, Any]) -> FixtureClassStatus:
+    return FixtureClassStatus(
+        fixture_class=payload["fixture_class"],
+        status=payload.get("status", "planned"),
+        planned_command_ids=tuple(payload.get("planned_command_ids", ())),
+        ready_instance_ids=tuple(payload.get("ready_instance_ids", ())),
+        last_transition_reason=payload.get("last_transition_reason", ""),
+        affected_command_ids=tuple(payload.get("affected_command_ids", ())),
+        updated_at=payload["updated_at"],
+    )
+
+
+def _shared_fixture_instance_from_dict(
+    payload: dict[str, Any],
+) -> SharedFixtureInstance:
+    return SharedFixtureInstance(
+        instance_id=payload["instance_id"],
+        fixture_class=payload["fixture_class"],
+        backing_kind=payload.get("backing_kind", "target-handle"),
+        backing_id=payload.get("backing_id", ""),
+        usability_state=payload.get("usability_state", "ready"),
+        refresh_count=payload.get("refresh_count", 0),
+        last_ready_at=payload.get("last_ready_at"),
+        replacement_of=payload.get("replacement_of"),
+    )
+
+
 def _fixture_provisioning_from_dict(
     payload: dict[str, Any],
 ) -> FixtureProvisioningResult:
@@ -427,6 +529,14 @@ def _fixture_provisioning_from_dict(
         missing_fixture_classes=tuple(payload.get("missing_fixture_classes", ())),
         affected_command_ids=tuple(payload.get("affected_command_ids", ())),
         completed_at=payload["completed_at"],
+        class_statuses=tuple(
+            _fixture_class_status_from_dict(item)
+            for item in payload.get("class_statuses", ())
+        ),
+        shared_fixture_instances=tuple(
+            _shared_fixture_instance_from_dict(item)
+            for item in payload.get("shared_fixture_instances", ())
+        ),
     )
 
 
@@ -466,6 +576,17 @@ def _failure_classification_from_dict(
         primary_cause=payload["primary_cause"],
         supporting_detail=payload.get("supporting_detail", ""),
         source_scope=payload.get("source_scope", "command_outcome"),
+    )
+
+
+def _semantic_gate_from_dict(payload: dict[str, Any]) -> CommandSemanticGate:
+    return CommandSemanticGate(
+        command_id=payload["command_id"],
+        run_id=payload["run_id"],
+        gate_kind=payload["gate_kind"],
+        detail=payload.get("detail", ""),
+        source_scope=payload.get("source_scope", "verification_rule"),
+        custom_command_id=payload.get("custom_command_id"),
     )
 
 
@@ -646,6 +767,10 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
         failure_classifications=tuple(
             _failure_classification_from_dict(item)
             for item in payload.get("failure_classifications", ())
+        ),
+        semantic_gates=tuple(
+            _semantic_gate_from_dict(item)
+            for item in payload.get("semantic_gates", ())
         ),
         contract_issues=tuple(
             _contract_issue_from_dict(item)

@@ -35,6 +35,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <future>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -115,6 +116,60 @@ const char* CommandKind(const ::highbar::v1::AICommand& cmd) {
 	default:
 		return "other";
 	}
+}
+
+using CallbackRequest = ::highbar::v1::CallbackRequest;
+using CallbackResponse = ::highbar::v1::CallbackResponse;
+using CallbackParam = ::highbar::v1::CallbackParam;
+using CallbackRpcStatus = CGrpcGatewayModule::CallbackRpcStatus;
+using CallbackInvocationResult = CGrpcGatewayModule::CallbackInvocationResult;
+
+CallbackInvocationResult MakeCallbackRpcError(
+	const CallbackRequest& request,
+	CallbackRpcStatus status,
+	std::string detail) {
+	CallbackInvocationResult result;
+	result.status = status;
+	result.error_detail = std::move(detail);
+	result.response.set_request_id(request.request_id());
+	return result;
+}
+
+CallbackInvocationResult MakeCallbackFailure(
+	const CallbackRequest& request,
+	std::string detail) {
+	CallbackInvocationResult result;
+	result.status = CallbackRpcStatus::Ok;
+	result.response.set_request_id(request.request_id());
+	result.response.set_success(false);
+	result.response.set_error_message(std::move(detail));
+	return result;
+}
+
+CallbackInvocationResult MakeCallbackSuccess(const CallbackRequest& request) {
+	CallbackInvocationResult result;
+	result.status = CallbackRpcStatus::Ok;
+	result.response.set_request_id(request.request_id());
+	result.response.set_success(true);
+	return result;
+}
+
+std::optional<std::int32_t> ExtractSingleIntParam(const CallbackRequest& request,
+                                                  std::string* error) {
+	if (request.params_size() != 1) {
+		if (error != nullptr) {
+			*error = "expected exactly 1 int param";
+		}
+		return std::nullopt;
+	}
+	const auto& param = request.params(0);
+	if (param.value_case() != CallbackParam::kIntValue) {
+		if (error != nullptr) {
+			*error = "expected int param";
+		}
+		return std::nullopt;
+	}
+	return param.int_value();
 }
 
 }  // namespace
@@ -572,6 +627,11 @@ void CGrpcGatewayModule::OnFrameTick() {
 			coordinator_client_->SendHeartbeat(frame_counter_);
 		}
 
+		// Minimal InvokeCallback bridge: resolve queued synchronous
+		// callback requests on the engine thread before any command
+		// dispatch so callers waiting on def metadata wake promptly.
+		DrainCallbackQueue();
+
 		// T057: drain external-AI commands at the top of the frame so
 		// they land in the engine this tick. Engine-thread only.
 		DrainCommandQueue();
@@ -763,6 +823,49 @@ std::uint64_t CGrpcGatewayModule::HeadSeq() const {
 	return ring_ ? ring_->HeadSeq() : 0;
 }
 
+CGrpcGatewayModule::CallbackRpcStatus CGrpcGatewayModule::InvokeCallback(
+	const ::highbar::v1::CallbackRequest& request,
+	::highbar::v1::CallbackResponse* response,
+	std::chrono::milliseconds timeout,
+	std::string* error_detail) {
+	if (response == nullptr) {
+		if (error_detail != nullptr) {
+			*error_detail = "null InvokeCallback response sink";
+		}
+		return CallbackRpcStatus::Internal;
+	}
+	if (state_.load(std::memory_order_acquire) != GatewayState::Healthy) {
+		if (error_detail != nullptr) {
+			*error_detail = "gateway is not healthy";
+		}
+		return CallbackRpcStatus::FailedPrecondition;
+	}
+
+	auto pending = std::make_shared<PendingCallbackInvocation>();
+	pending->request = request;
+	auto future = pending->completion.get_future();
+	{
+		std::lock_guard<std::mutex> lock(pending_callbacks_mutex_);
+		pending_callbacks_.push_back(pending);
+	}
+
+	if (future.wait_for(timeout) != std::future_status::ready) {
+		if (error_detail != nullptr) {
+			*error_detail = "InvokeCallback timed out waiting for engine-thread response";
+		}
+		return CallbackRpcStatus::Internal;
+	}
+
+	auto result = future.get();
+	if (error_detail != nullptr) {
+		*error_detail = result.error_detail;
+	}
+	if (result.status == CallbackRpcStatus::Ok) {
+		*response = std::move(result.response);
+	}
+	return result.status;
+}
+
 // ============================================================================
 // Command drain (T057)
 // ============================================================================
@@ -772,6 +875,72 @@ std::uint64_t CGrpcGatewayModule::HeadSeq() const {
 // matching CCircuitUnit::Cmd*. Re-resolves the target unit here
 // rather than trusting the worker-thread validation result — a unit
 // can die between validate-at-submission and drain-at-frame.
+void CGrpcGatewayModule::DrainCallbackQueue() {
+	if (circuit == nullptr) return;
+
+	std::deque<std::shared_ptr<PendingCallbackInvocation>> pending;
+	{
+		std::lock_guard<std::mutex> lock(pending_callbacks_mutex_);
+		if (pending_callbacks_.empty()) return;
+		pending.swap(pending_callbacks_);
+	}
+
+	for (auto& entry : pending) {
+		CallbackInvocationResult result;
+		try {
+			switch (entry->request.callback_id()) {
+			case ::highbar::v1::CALLBACK_GET_UNIT_DEFS: {
+				if (entry->request.params_size() != 0) {
+					result = MakeCallbackFailure(entry->request,
+					                             "CALLBACK_GET_UNIT_DEFS does not take params");
+					break;
+				}
+				result = MakeCallbackSuccess(entry->request);
+				auto* values = result.response.mutable_result()->mutable_int_array_value();
+				for (const auto& cdef : circuit->GetCircuitDefs()) {
+					values->add_values(static_cast<std::int32_t>(cdef.GetId()));
+				}
+				break;
+			}
+			case ::highbar::v1::CALLBACK_UNITDEF_GET_NAME: {
+				std::string param_error;
+				const auto def_id = ExtractSingleIntParam(entry->request, &param_error);
+				if (!def_id.has_value()) {
+					result = MakeCallbackFailure(entry->request, std::move(param_error));
+					break;
+				}
+				auto* cdef = circuit->GetCircuitDefSafe(
+					static_cast<CCircuitDef::Id>(*def_id));
+				if (cdef == nullptr || cdef->GetDef() == nullptr) {
+					result = MakeCallbackFailure(
+						entry->request,
+						"unknown unit_def_id=" + std::to_string(*def_id));
+					break;
+				}
+				result = MakeCallbackSuccess(entry->request);
+				result.response.mutable_result()->set_string_value(
+					cdef->GetDef()->GetName());
+				break;
+			}
+			default:
+				result = MakeCallbackFailure(
+					entry->request,
+					"unsupported callback_id=" + std::to_string(entry->request.callback_id()));
+				break;
+			}
+		} catch (const std::exception& e) {
+			result = MakeCallbackRpcError(entry->request,
+			                              CallbackRpcStatus::Internal,
+			                              e.what());
+		} catch (...) {
+			result = MakeCallbackRpcError(entry->request,
+			                              CallbackRpcStatus::Internal,
+			                              "unknown exception in DrainCallbackQueue");
+		}
+		entry->completion.set_value(std::move(result));
+	}
+}
+
 void CGrpcGatewayModule::DrainCommandQueue() {
 	if (command_queue_ == nullptr || circuit == nullptr) return;
 

@@ -5,10 +5,12 @@
 // Wraps the generated HighBarProxy::AsyncService with a Bind() entry
 // point, a completion-queue worker pool, and CallData state machines
 // for the 7 RPCs. Hello (T025) and GetRuntimeCounters (T029) are
-// functionally implemented; StreamState, SubmitCommands,
-// InvokeCallback, Save, Load return UNIMPLEMENTED until US1/US2 fill
-// them. AuthInterceptorFactory is installed at Bind time so the
-// AI-token gate applies even to UNIMPLEMENTED stubs.
+// functionally implemented; StreamState / SubmitCommands are live, the
+// minimal InvokeCallback bridge is live for callback subset handling,
+// and Save / Load still use their no-op scaffolding until the engine
+// persistence bridge lands. AuthInterceptorFactory is installed at
+// Bind time so the AI-token gate applies consistently to the AI-only
+// RPCs.
 
 #pragma once
 

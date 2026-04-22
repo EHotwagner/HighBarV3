@@ -32,6 +32,7 @@ namespace circuit {
 #define CMD_RETREAT_ZONE			10001
 #define CMD_ORBIT					13923
 #define CMD_ORBIT_DRAW				13924
+#define CMD_MANUAL_LAUNCH			32102
 #define CMD_CLOAK_SHIELD			31101
 #define CMD_RAW_MOVE				31109
 #define CMD_MORPH_UPGRADE_INTERNAL	31207

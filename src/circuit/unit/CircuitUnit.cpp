@@ -316,9 +316,7 @@ void CCircuitUnit::CmdAttackGround(const AIFloat3& pos, short options, int timeo
 
 void CCircuitUnit::CmdWantedSpeed(float speed)
 {
-//	unit->SetWantedMaxSpeed(speed / FRAMES_PER_SEC, true);
-//	unit->SetWantedMaxSpeed(0.5f, true);
-//	unit->ExecuteCustomCommand(CMD_WANTED_SPEED, {speed});
+	unit->ExecuteCustomCommand(CMD_WANTED_SPEED, {speed});
 }
 
 void CCircuitUnit::CmdStop(short options, int timeout)
@@ -340,7 +338,7 @@ void CCircuitUnit::CmdCloak(bool state)
 
 void CCircuitUnit::CmdFireAtRadar(bool state)
 {
-//	unit->ExecuteCustomCommand(CMD_DONT_FIRE_AT_RADAR, {state ? 0.f : 1.f});
+	unit->ExecuteCustomCommand(CMD_DONT_FIRE_AT_RADAR, {state ? 0.f : 1.f});
 }
 
 void CCircuitUnit::CmdFindPad(int timeout)
@@ -351,7 +349,10 @@ void CCircuitUnit::CmdFindPad(int timeout)
 
 void CCircuitUnit::CmdManualFire(short options, int timeout)
 {
-//	unit->ExecuteCustomCommand(CMD_ONECLICK_WEAPON, {}, options, timeout);
+	const int commandId = circuitDef->IsRoleComm()
+		? CMD_ONECLICK_WEAPON
+		: CMD_MANUAL_LAUNCH;
+	unit->ExecuteCustomCommand(commandId, {}, options, timeout);
 }
 
 void CCircuitUnit::CmdAirManualFire(const AIFloat3& pos, short options, int timeout)
@@ -361,17 +362,17 @@ void CCircuitUnit::CmdAirManualFire(const AIFloat3& pos, short options, int time
 
 void CCircuitUnit::CmdPriority(float value)
 {
-//	unit->ExecuteCustomCommand(CMD_PRIORITY, {value});
+	CmdBARPriority(value);
 }
 
 void CCircuitUnit::CmdMiscPriority(float value)
 {
-//	unit->ExecuteCustomCommand(CMD_MISC_PRIORITY, {value});
+	unit->ExecuteCustomCommand(CMD_MISC_PRIORITY, {value});
 }
 
 void CCircuitUnit::CmdAirStrafe(float value)
 {
-//	unit->ExecuteCustomCommand(CMD_AIR_STRAFE, {value});
+	unit->ExecuteCustomCommand(CMD_AIR_STRAFE, {value});
 }
 
 void CCircuitUnit::CmdBARPriority(float value)

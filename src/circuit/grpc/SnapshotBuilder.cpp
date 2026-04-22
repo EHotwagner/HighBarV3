@@ -13,12 +13,15 @@
 
 #include "CircuitAI.h"
 #include "module/EconomyManager.h"
+#include "spring/SpringCallback.h"
 #include "resource/MetalManager.h"
 #include "terrain/TerrainManager.h"
 #include "unit/CircuitUnit.h"
 #include "unit/enemy/EnemyInfo.h"
 #include "unit/enemy/EnemyManager.h"
 
+#include "Feature.h"
+#include "FeatureDef.h"
 #include "Unit.h"  // springai::Unit — for GetHealth() on the wrapper
 
 namespace circuit::grpc {
@@ -125,12 +128,29 @@ void SnapshotBuilder::FillEnemies(::highbar::v1::StateSnapshot* out) const {
 	}
 }
 
-void SnapshotBuilder::FillFeatures(::highbar::v1::StateSnapshot* /*out*/) const {
-	// Feature enumeration is accessed through the engine via CMap /
-	// CGameMap. The planning data-model names GetFeatures(), but the
-	// specific accessor on BARb's GameMap wasn't confirmed during the
-	// header scan. Leave empty at Phase 2; US1 fills this once the
-	// accessor is verified.
+void SnapshotBuilder::FillFeatures(::highbar::v1::StateSnapshot* out) const {
+	if (ai_ == nullptr || out == nullptr) return;
+	auto* callback = ai_->GetCallback();
+	auto* economy = ai_->GetEconomyManager();
+	if (callback == nullptr || economy == nullptr) return;
+	auto* metal = economy->GetMetalRes();
+	auto* energy = economy->GetEnergyRes();
+	for (springai::Feature* feature : callback->GetFeatures()) {
+		if (feature == nullptr) continue;
+		auto* feat = out->add_map_features();
+		feat->set_feature_id(static_cast<std::uint32_t>(feature->GetFeatureId()));
+		SetVec3(feat->mutable_position(), feature->GetPosition());
+		auto* def = feature->GetDef();
+		if (def != nullptr) {
+			feat->set_def_id(static_cast<std::uint32_t>(def->GetFeatureDefId()));
+			if (metal != nullptr) {
+				feat->set_reclaim_value_metal(def->GetContainedResource(metal));
+			}
+			if (energy != nullptr) {
+				feat->set_reclaim_value_energy(def->GetContainedResource(energy));
+			}
+		}
+	}
 }
 
 void SnapshotBuilder::FillEconomy(::highbar::v1::StateSnapshot* out) const {

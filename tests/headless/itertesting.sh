@@ -136,6 +136,72 @@ for repro in manifest.get("deterministic_repros", ()):
 PY
 }
 
+emit_fixture_provisioning_notice() {
+    local manifest_path="$1"
+    if [[ -z "$manifest_path" || ! -f "$manifest_path" ]]; then
+        return 1
+    fi
+    python3 - "$manifest_path" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+manifest_path = sys.argv[1]
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+fixture = manifest.get("fixture_provisioning") or {}
+class_statuses = fixture.get("class_statuses") or []
+if not class_statuses:
+    raise SystemExit(1)
+
+affected = fixture.get("affected_command_ids") or []
+print(
+    "itertesting: fixture_statuses="
+    + ",".join(
+        f"{item.get('fixture_class')}:{item.get('status')}"
+        for item in class_statuses
+    )
+)
+print(
+    "itertesting: fixture_affected_commands="
+    + (",".join(affected) if affected else "none")
+)
+report_path = Path(manifest_path).with_name("run-report.md")
+semantic_inventory = []
+if report_path.exists():
+    in_section = False
+    for line in report_path.read_text(encoding="utf-8").splitlines():
+        if line == "## Command Semantic Inventory":
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if not in_section:
+            continue
+        match = re.match(r"- `(\d+)` `([^`]+)` .*`([^`]+)`", line)
+        if match:
+            semantic_inventory.append(
+                f"{match.group(1)}:{match.group(2)}@{match.group(3)}"
+            )
+print(
+    "itertesting: semantic_inventory="
+    + (",".join(semantic_inventory) if semantic_inventory else "none")
+)
+semantic_gates = [
+    item.get("command_id")
+    + ":"
+    + item.get("gate_kind", "")
+    for item in manifest.get("semantic_gates", ())
+]
+print(
+    "itertesting: semantic_gates="
+    + (",".join(semantic_gates) if semantic_gates else "none")
+)
+PY
+}
+
 should_retry_live_session() {
     local manifest_path="$1"
     local decision_path="$2"
@@ -263,6 +329,7 @@ run_live_campaign() {
     after_stop="$(latest_stop_decision_path)"
     after_manifest="$(latest_run_manifest_path)"
     emit_contract_health_notice "$after_manifest" || true
+    emit_fixture_provisioning_notice "$after_manifest" || true
     if should_retry_live_session "$after_manifest" "$after_stop" "$command_output"; then
         if [[ "$after_stop" != "$before_stop" && -n "$after_stop" ]]; then
             echo "itertesting: live session degraded; latest stop decision=$(basename "$(dirname "$after_stop")")/$(basename "$after_stop")" >&2
@@ -305,6 +372,7 @@ if [[ "$SKIP_LIVE" == "true" ]]; then
     uv run --project "$REPO_ROOT/clients/python" python -m highbar_client.behavioral_coverage "${ARGS[@]}" "$@"
     rc=$?
     emit_contract_health_notice "$(latest_run_manifest_path)" || true
+    emit_fixture_provisioning_notice "$(latest_run_manifest_path)" || true
     exit $rc
 fi
 

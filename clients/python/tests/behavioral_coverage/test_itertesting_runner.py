@@ -47,6 +47,10 @@ def test_manifest_validation_and_round_trip(tmp_path):
     assert loaded.run_id == run.run_id
     assert len(loaded.command_records) == len(REGISTRY)
     assert loaded.contract_health_decision is not None
+    assert loaded.fixture_provisioning is not None
+    assert loaded.fixture_provisioning.class_statuses
+    assert loaded.fixture_provisioning.shared_fixture_instances
+    assert loaded.semantic_gates == run.semantic_gates
 
 
 def test_run_id_collision_uses_deterministic_suffix(tmp_path):
@@ -264,8 +268,102 @@ def test_synthetic_run_records_fixture_provisioning_and_missing_fixture_causes(t
     assert run.fixture_profile is not None
     assert run.fixture_provisioning is not None
     assert "cmd-load-units" in run.fixture_provisioning.affected_command_ids
+    class_statuses = {
+        item.fixture_class: item for item in run.fixture_provisioning.class_statuses
+    }
+    assert class_statuses["transport_unit"].status == "missing"
+    assert "cmd-load-units" in class_statuses["transport_unit"].affected_command_ids
+    assert class_statuses["commander"].status == "provisioned"
+    assert any(
+        item.fixture_class == "commander"
+        for item in run.fixture_provisioning.shared_fixture_instances
+    )
     causes = {item.command_id: item for item in run.failure_classifications}
     assert causes["cmd-load-units"].primary_cause == "missing_fixture"
+
+
+def test_live_rows_can_unblock_shared_fixture_commands_when_fixture_is_available(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "true",
+                "verified": "false",
+                "evidence": "transport fixture prepared and payload fixture prepared for load validation",
+                "error": "effect_not_observed",
+            }
+        ],
+    )
+
+    assert run.fixture_provisioning is not None
+    class_statuses = {
+        item.fixture_class: item for item in run.fixture_provisioning.class_statuses
+    }
+    assert class_statuses["transport_unit"].status == "provisioned"
+    assert class_statuses["payload_unit"].status == "provisioned"
+    assert "cmd-load-units" not in class_statuses["transport_unit"].affected_command_ids
+    causes = {item.command_id: item for item in run.failure_classifications}
+    assert causes["cmd-load-units"].primary_cause == "predicate_or_evidence_gap"
+
+
+def test_precise_missing_transport_detail_keeps_payload_provisioned(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "false",
+                "verified": "na",
+                "evidence": "live fixture dependency unavailable for this arm (transport_unit)",
+                "error": "precondition_unmet",
+            }
+        ],
+    )
+
+    assert run.fixture_provisioning is not None
+    class_statuses = {
+        item.fixture_class: item for item in run.fixture_provisioning.class_statuses
+    }
+    assert class_statuses["transport_unit"].status == "missing"
+    assert class_statuses["payload_unit"].status == "provisioned"
+
+
+def test_refresh_failure_only_blocks_commands_that_depend_on_the_failed_fixture(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "transport fixture refresh_failed after payload stale event",
+                "error": "precondition_unmet",
+            }
+        ],
+    )
+
+    assert run.fixture_provisioning is not None
+    class_statuses = {
+        item.fixture_class: item for item in run.fixture_provisioning.class_statuses
+    }
+    assert class_statuses["transport_unit"].status == "unusable"
+    assert "cmd-load-units" in class_statuses["transport_unit"].affected_command_ids
+    assert "cmd-capture" not in class_statuses["transport_unit"].affected_command_ids
+    assert any(
+        item.fixture_class == "transport_unit"
+        and item.usability_state == "refresh_failed"
+        for item in run.fixture_provisioning.shared_fixture_instances
+    )
 
 
 def test_live_rows_block_contract_health_when_fixtures_are_missing(tmp_path):
@@ -376,6 +474,81 @@ def test_pattern_review_blockers_have_no_normal_guidance_or_repro(tmp_path):
     assert run.improvement_eligibility is not None
     assert run.improvement_eligibility.guidance_mode == "withheld"
     assert not run.deterministic_repros
+
+
+def test_effect_not_observed_without_runtime_contract_signal_stays_secondary(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "patrol",
+                "category": REGISTRY["patrol"].category,
+                "dispatched": "true",
+                "verified": "false",
+                "evidence": "snapshot-diff predicate not yet implemented for this arm",
+                "error": "effect_not_observed",
+            }
+        ],
+    )
+
+    assert run.channel_health is not None
+    assert run.channel_health.status == "healthy"
+    assert not run.contract_issues
+    assert run.contract_health_decision is not None
+    assert run.contract_health_decision.decision_status == "ready_for_itertesting"
+    assert "downstream evidence" in run.contract_health_decision.summary_message.lower()
+    causes = {item.command_id: item for item in run.failure_classifications}
+    assert causes["cmd-patrol"].primary_cause == "predicate_or_evidence_gap"
+
+
+def test_semantic_gate_rows_stay_channel_healthy_and_ready_for_itertesting(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "set_wanted_max_speed",
+                "category": REGISTRY["set_wanted_max_speed"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "emprework mod option disabled for wanted-speed validation",
+                "error": "precondition_unmet",
+            }
+        ],
+    )
+
+    assert run.channel_health is not None
+    assert run.channel_health.status == "healthy"
+    assert run.contract_health_decision is not None
+    assert run.contract_health_decision.decision_status == "ready_for_itertesting"
+    assert run.semantic_gates
+    assert run.semantic_gates[0].gate_kind == "mod-option"
+
+
+def test_manual_launch_substitution_creates_unit_shape_semantic_gate(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "dgun",
+                "category": REGISTRY["dgun"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "non-commander manual launch substitution (32102) means this unit does not receive the command descriptor",
+                "error": "precondition_unmet",
+            }
+        ],
+    )
+
+    assert run.semantic_gates
+    gate = {item.command_id: item for item in run.semantic_gates}["cmd-dgun"]
+    assert gate.gate_kind == "unit-shape"
+    assert gate.custom_command_id == 32102
 
 
 def test_resolved_contract_issues_are_visible_in_later_run(tmp_path):

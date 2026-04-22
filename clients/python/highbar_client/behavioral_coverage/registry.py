@@ -27,6 +27,7 @@ from .predicates import (
     position_delta_predicate,
     unit_count_delta_predicate,
 )
+from .upstream_fixture_intelligence import all_custom_command_inventory
 from .types import (
     BehavioralTestCase,
     NotWireObservable,
@@ -73,6 +74,12 @@ def _category(arm_name: str) -> str:
     return "channel_a_command"
 
 
+def exact_custom_command_ids_for_arm(arm_name: str) -> tuple[int, ...]:
+    if arm_name != "custom":
+        return ()
+    return tuple(item.command_id for item in all_custom_command_inventory())
+
+
 # ---- lightweight input-builders -----------------------------------------
 
 # Input-builders are pure functions of BootstrapContext that return a
@@ -84,6 +91,51 @@ def _category(arm_name: str) -> str:
 def _import_proto():
     from ..highbar import commands_pb2, common_pb2  # noqa: E402
     return commands_pb2, common_pb2
+
+
+def _fixture_unit_id(ctx: Any, fixture_class: str, fallback: int = 0) -> int:
+    fixture_units = getattr(ctx, "fixture_unit_ids", {}) or {}
+    capability_units = getattr(ctx, "capability_units", {}) or {}
+    return (
+        fixture_units.get(fixture_class)
+        or capability_units.get(fixture_class)
+        or fallback
+    )
+
+
+def _fixture_feature_id(ctx: Any, fixture_class: str, fallback: int = 0) -> int:
+    fixture_features = getattr(ctx, "fixture_feature_ids", {}) or {}
+    return fixture_features.get(fixture_class, fallback)
+
+
+def _fixture_position(ctx: Any, fixture_class: str):
+    fixture_positions = getattr(ctx, "fixture_positions", {}) or {}
+    return fixture_positions.get(fixture_class) or ctx.commander_position
+
+
+def _payload_unit_id(ctx: Any) -> int:
+    return _fixture_unit_id(ctx, "payload_unit", ctx.commander_unit_id)
+
+
+def _transport_unit_id(ctx: Any) -> int:
+    return _fixture_unit_id(ctx, "transport_unit", ctx.commander_unit_id)
+
+
+def _preferred_custom_command(ctx: Any) -> tuple[int, int, tuple[float, ...]] | None:
+    cloakable = _fixture_unit_id(ctx, "cloakable")
+    if cloakable:
+        return (cloakable, 37382, (1.0,))
+    builder = _fixture_unit_id(ctx, "builder")
+    if builder:
+        return (builder, 34571, (1.0,))
+    hostile_target = _fixture_unit_id(
+        ctx,
+        "custom_target",
+        _fixture_unit_id(ctx, "hostile_target", getattr(ctx, "enemy_seed_id", 0) or 0),
+    )
+    if hostile_target:
+        return (ctx.commander_unit_id, 34923, (float(hostile_target),))
+    return None
 
 
 def _noop_batch_factory(arm_name: str):
@@ -184,13 +236,312 @@ def _self_destruct_builder(ctx: Any):
     commands_pb2, common_pb2 = _import_proto()
     batch = commands_pb2.CommandBatch()
     batch.batch_seq = 1
-    # Target the cloakable — we don't want to lose the commander
-    # (that's a fatal run-abort per bootstrap contract). The cloakable
-    # unit is disposable and the bootstrap reset reissues it.
-    uid = ctx.capability_units.get("cloakable") or ctx.commander_unit_id
+    # Prefer a disposable ground unit so the live run survives and can
+    # still yield a corpse fixture for resurrect coverage.
+    uid = (
+        ctx.capability_units.get("builder")
+        or _fixture_unit_id(ctx, "damaged_friendly")
+        or _fixture_unit_id(ctx, "payload_unit")
+        or ctx.capability_units.get("cloakable")
+        or ctx.commander_unit_id
+    )
     batch.target_unit_id = uid
     cmd = batch.commands.add()
     cmd.self_destruct.unit_id = uid
+    return batch
+
+
+def _attack_area_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    pos = _fixture_position(ctx, "hostile_target")
+    cmd = batch.commands.add()
+    cmd.attack_area.unit_id = uid
+    cmd.attack_area.attack_position.x = pos.x
+    cmd.attack_area.attack_position.y = pos.y
+    cmd.attack_area.attack_position.z = pos.z
+    cmd.attack_area.radius = 96.0
+    return batch
+
+
+def _dgun_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    cmd = batch.commands.add()
+    cmd.dgun.unit_id = uid
+    cmd.dgun.target_unit_id = _fixture_unit_id(
+        ctx, "hostile_target", ctx.enemy_seed_id or 0
+    )
+    return batch
+
+
+def _guard_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    cmd = batch.commands.add()
+    cmd.guard.unit_id = uid
+    cmd.guard.guard_unit_id = _fixture_unit_id(ctx, "damaged_friendly")
+    return batch
+
+
+def _repair_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    cmd = batch.commands.add()
+    cmd.repair.unit_id = uid
+    cmd.repair.repair_unit_id = _fixture_unit_id(ctx, "damaged_friendly")
+    return batch
+
+
+def _reclaim_unit_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    cmd = batch.commands.add()
+    cmd.reclaim_unit.unit_id = uid
+    cmd.reclaim_unit.reclaim_unit_id = _fixture_unit_id(
+        ctx,
+        "reclaim_target",
+        _fixture_unit_id(ctx, "hostile_target", ctx.enemy_seed_id or 0),
+    )
+    return batch
+
+
+def _reclaim_area_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    pos = _fixture_position(ctx, "reclaim_target")
+    cmd = batch.commands.add()
+    cmd.reclaim_area.unit_id = uid
+    cmd.reclaim_area.position.x = pos.x
+    cmd.reclaim_area.position.y = pos.y
+    cmd.reclaim_area.position.z = pos.z
+    cmd.reclaim_area.radius = 96.0
+    return batch
+
+
+def _reclaim_in_area_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    pos = _fixture_position(ctx, "reclaim_target")
+    cmd = batch.commands.add()
+    cmd.reclaim_in_area.unit_id = uid
+    cmd.reclaim_in_area.position.x = pos.x
+    cmd.reclaim_in_area.position.y = pos.y
+    cmd.reclaim_in_area.position.z = pos.z
+    cmd.reclaim_in_area.radius = 96.0
+    return batch
+
+
+def _reclaim_feature_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    cmd = batch.commands.add()
+    cmd.reclaim_feature.unit_id = uid
+    cmd.reclaim_feature.feature_id = _fixture_feature_id(ctx, "reclaim_target")
+    return batch
+
+
+def _restore_area_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    pos = _fixture_position(ctx, "restore_target")
+    cmd = batch.commands.add()
+    cmd.restore_area.unit_id = uid
+    cmd.restore_area.position.x = pos.x
+    cmd.restore_area.position.y = pos.y
+    cmd.restore_area.position.z = pos.z
+    cmd.restore_area.radius = 96.0
+    return batch
+
+
+def _resurrect_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    cmd = batch.commands.add()
+    cmd.resurrect.unit_id = uid
+    cmd.resurrect.feature_id = _fixture_feature_id(ctx, "wreck_target")
+    return batch
+
+
+def _resurrect_in_area_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    pos = _fixture_position(ctx, "wreck_target")
+    cmd = batch.commands.add()
+    cmd.resurrect_in_area.unit_id = uid
+    cmd.resurrect_in_area.position.x = pos.x
+    cmd.resurrect_in_area.position.y = pos.y
+    cmd.resurrect_in_area.position.z = pos.z
+    cmd.resurrect_in_area.radius = 96.0
+    return batch
+
+
+def _capture_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    cmd = batch.commands.add()
+    cmd.capture.unit_id = uid
+    cmd.capture.target_unit_id = _fixture_unit_id(
+        ctx,
+        "capturable_target",
+        _fixture_unit_id(ctx, "hostile_target", ctx.enemy_seed_id or 0),
+    )
+    return batch
+
+
+def _capture_area_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    pos = _fixture_position(ctx, "capturable_target")
+    cmd = batch.commands.add()
+    cmd.capture_area.unit_id = uid
+    cmd.capture_area.position.x = pos.x
+    cmd.capture_area.position.y = pos.y
+    cmd.capture_area.position.z = pos.z
+    cmd.capture_area.radius = 96.0
+    return batch
+
+
+def _set_base_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    uid = ctx.commander_unit_id
+    batch.target_unit_id = uid
+    pos = _fixture_position(ctx, "restore_target")
+    cmd = batch.commands.add()
+    cmd.set_base.unit_id = uid
+    cmd.set_base.base_position.x = pos.x
+    cmd.set_base.base_position.y = pos.y
+    cmd.set_base.base_position.z = pos.z
+    return batch
+
+
+def _load_units_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    transport_id = _transport_unit_id(ctx)
+    batch.target_unit_id = transport_id
+    cmd = batch.commands.add()
+    cmd.load_units.unit_id = transport_id
+    cmd.load_units.to_load_unit_ids.append(_payload_unit_id(ctx))
+    return batch
+
+
+def _load_units_area_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    transport_id = _transport_unit_id(ctx)
+    batch.target_unit_id = transport_id
+    pos = _fixture_position(ctx, "payload_unit")
+    cmd = batch.commands.add()
+    cmd.load_units_area.unit_id = transport_id
+    cmd.load_units_area.position.x = pos.x
+    cmd.load_units_area.position.y = pos.y
+    cmd.load_units_area.position.z = pos.z
+    cmd.load_units_area.radius = 96.0
+    return batch
+
+
+def _load_onto_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    payload_id = _payload_unit_id(ctx)
+    batch.target_unit_id = payload_id
+    cmd = batch.commands.add()
+    cmd.load_onto.unit_id = payload_id
+    cmd.load_onto.transport_unit_id = _transport_unit_id(ctx)
+    return batch
+
+
+def _unload_unit_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    transport_id = _transport_unit_id(ctx)
+    batch.target_unit_id = transport_id
+    pos = _fixture_position(ctx, "restore_target")
+    cmd = batch.commands.add()
+    cmd.unload_unit.unit_id = transport_id
+    cmd.unload_unit.to_position.x = pos.x
+    cmd.unload_unit.to_position.y = pos.y
+    cmd.unload_unit.to_position.z = pos.z
+    cmd.unload_unit.to_unload_unit_id = _payload_unit_id(ctx)
+    return batch
+
+
+def _unload_units_area_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    transport_id = _transport_unit_id(ctx)
+    batch.target_unit_id = transport_id
+    pos = _fixture_position(ctx, "restore_target")
+    cmd = batch.commands.add()
+    cmd.unload_units_area.unit_id = transport_id
+    cmd.unload_units_area.to_position.x = pos.x
+    cmd.unload_units_area.to_position.y = pos.y
+    cmd.unload_units_area.to_position.z = pos.z
+    cmd.unload_units_area.radius = 96.0
+    return batch
+
+
+def _custom_builder(ctx: Any):
+    commands_pb2, common_pb2 = _import_proto()
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    unit_id, command_id, params = _preferred_custom_command(ctx) or (
+        ctx.commander_unit_id,
+        34923,
+        (float(ctx.enemy_seed_id or 0),),
+    )
+    batch.target_unit_id = unit_id
+    cmd = batch.commands.add()
+    cmd.custom.unit_id = unit_id
+    cmd.custom.command_id = command_id
+    cmd.custom.params.extend(params)
     return batch
 
 
@@ -201,6 +552,16 @@ def _always_na(error_code: str, rationale: str):
     def predicate(_pair: SnapshotPair, _deltas: list) -> VerificationOutcome:
         return VerificationOutcome(verified="na", evidence=rationale,
                                      error=error_code)
+    return predicate
+
+
+def _effect_not_observed_predicate():
+    def predicate(_pair: SnapshotPair, _deltas: list) -> VerificationOutcome:
+        return VerificationOutcome(
+            verified="false",
+            evidence="snapshot-diff predicate not yet implemented for this arm",
+            error="effect_not_observed",
+        )
     return predicate
 
 
@@ -345,9 +706,41 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
         rationale="enemy health dropped or target destroyed",
     )
 
+    for arm_name, builder in (
+        ("attack_area", _attack_area_builder),
+        ("guard", _guard_builder),
+        ("repair", _repair_builder),
+        ("reclaim_unit", _reclaim_unit_builder),
+        ("reclaim_area", _reclaim_area_builder),
+        ("reclaim_in_area", _reclaim_in_area_builder),
+        ("reclaim_feature", _reclaim_feature_builder),
+        ("restore_area", _restore_area_builder),
+        ("resurrect", _resurrect_builder),
+        ("resurrect_in_area", _resurrect_in_area_builder),
+        ("capture", _capture_builder),
+        ("capture_area", _capture_area_builder),
+        ("set_base", _set_base_builder),
+        ("load_units", _load_units_builder),
+        ("load_units_area", _load_units_area_builder),
+        ("load_onto", _load_onto_builder),
+        ("unload_unit", _unload_unit_builder),
+        ("unload_units_area", _unload_units_area_builder),
+        ("dgun", _dgun_builder),
+        ("custom", _custom_builder),
+    ):
+        reg[arm_name] = BehavioralTestCase(
+            arm_name=arm_name,
+            category="channel_a_command",
+            required_capability="commander",
+            input_builder=builder,
+            verify_predicate=_effect_not_observed_predicate(),
+            verify_window_frames=120,
+            rationale=f"{arm_name}: dispatch sanity with fixture-aware arguments, no snapshot verifier wired",
+        )
+
     reg["self_destruct"] = BehavioralTestCase(
         arm_name="self_destruct", category="channel_a_command",
-        required_capability="cloakable",
+        required_capability="none",
         input_builder=_self_destruct_builder,
         verify_predicate=unit_count_delta_predicate(expected_delta=-1),
         verify_window_frames=180,  # SelfDestruct has a countdown
@@ -373,15 +766,6 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
         "set_trajectory", "set_auto_repair_level", "set_idle_mode",
     }
 
-    def _unverified_predicate():
-        def predicate(_pair: SnapshotPair, _deltas: list) -> VerificationOutcome:
-            return VerificationOutcome(
-                verified="false",
-                evidence="snapshot-diff predicate not yet implemented for this arm",
-                error="effect_not_observed",
-            )
-        return predicate
-
     for arm in sorted(_UNVERIFIED_UNIT_ARMS):
         if arm in reg:
             continue
@@ -389,7 +773,7 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
             arm_name=arm, category="channel_a_command",
             required_capability="commander",
             input_builder=_noop_batch_factory(arm),
-            verify_predicate=_unverified_predicate(),
+            verify_predicate=_effect_not_observed_predicate(),
             verify_window_frames=120,
             rationale=f"{arm}: dispatch sanity, no snapshot verifier wired",
         )

@@ -59,6 +59,17 @@ class UpstreamFixtureIntelligence:
     recommendation: str
 
 
+@dataclass(frozen=True)
+class CustomCommandInventoryEntry:
+    command_id: int
+    command_name: str
+    owner_gadget: str
+    eligible_unit_rule: str
+    target_shape: str
+    expected_evidence_channel: ObservabilityClass
+    notes: str
+
+
 PROTO_COMMAND_INTELLIGENCE: dict[str, UpstreamFixtureIntelligence] = {
     "cmd-set-wanted-max-speed": UpstreamFixtureIntelligence(
         kind="proto-command",
@@ -82,9 +93,8 @@ PROTO_COMMAND_INTELLIGENCE: dict[str, UpstreamFixtureIntelligence] = {
         ),
         observability="movectrl-or-engine-state",
         repo_gap=(
-            "The local fork dispatches `set_wanted_max_speed`, but "
-            "`CCircuitUnit::CmdWantedSpeed` is a no-op here. Upstream CircuitAI "
-            "still issues `CMD_WANTED_SPEED`."
+            "The local fork now emits `CMD_WANTED_SPEED`, but BAR still "
+            "gates the effect behind `emprework` and compatible movetypes."
         ),
         citations=(
             "/tmp/CircuitAI-upstream/src/circuit/unit/CircuitUnit.cpp:248-251",
@@ -95,9 +105,9 @@ PROTO_COMMAND_INTELLIGENCE: dict[str, UpstreamFixtureIntelligence] = {
         ),
         recommendation=(
             "Classify this command as both fixture-sensitive and "
-            "implementation-sensitive. Itertesting should only attempt it when "
-            "the run records `emprework=true`, and local dispatch should be "
-            "repaired before repeated coverage retries are trusted."
+            "semantic-gate-sensitive. Itertesting should only attempt it when "
+            "the run records `emprework=true` and the chosen unit uses a "
+            "supported movetype."
         ),
     ),
     "cmd-attack": UpstreamFixtureIntelligence(
@@ -223,7 +233,9 @@ UPSTREAM_SURFACE_GAPS: dict[str, UpstreamFixtureIntelligence] = {
         summary=(
             "BAR exposes builder priority as a real Lua command for qualifying "
             "builder units, and upstream CircuitAI issues `CMD_PRIORITY`. The "
-            "local fork still has `CCircuitUnit::CmdPriority` stubbed out."
+            "local fork now routes priority through BAR's active priority "
+            "surface, so remaining failures are more likely to be unit-eligibility "
+            "or evidence-channel issues than helper parity drift."
         ),
         unit_constraints=(
             "Requires a unit that can assist or has build options.",
@@ -233,8 +245,8 @@ UPSTREAM_SURFACE_GAPS: dict[str, UpstreamFixtureIntelligence] = {
         ),
         observability="rules-param-or-cmddesc",
         repo_gap=(
-            "Local `CmdPriority` is commented out, while upstream CircuitAI and BAR "
-            "both support the command."
+            "Local priority dispatch now emits BAR's supported priority "
+            "command path instead of silently dropping the helper call."
         ),
         citations=(
             "/tmp/CircuitAI-upstream/src/circuit/unit/CircuitUnit.cpp:280-283",
@@ -244,8 +256,8 @@ UPSTREAM_SURFACE_GAPS: dict[str, UpstreamFixtureIntelligence] = {
             "/tmp/BAR-game-sparse/luarules/gadgets/unit_builder_priority.lua:206-233",
         ),
         recommendation=(
-            "Treat builder priority as a candidate protocol extension or direct "
-            "local repair, not as an Itertesting fixture shortcoming."
+            "Treat remaining priority issues as semantic-gate or evidence-path "
+            "problems, not as missing fixtures."
         ),
     ),
     "gap-cmd-cloak-support": UpstreamFixtureIntelligence(
@@ -290,8 +302,9 @@ UPSTREAM_SURFACE_GAPS: dict[str, UpstreamFixtureIntelligence] = {
         availability="unit-conditional",
         summary=(
             "Upstream CircuitAI supports `CMD_FIND_PAD` and `CMD_ONECLICK_WEAPON`, "
-            "but the local fork substitutes `CMD_LAND_AT_AIRBASE` for pad finding "
-            "and leaves manual-fire helpers commented out."
+            "but the local fork still substitutes `CMD_LAND_AT_AIRBASE` for pad "
+            "finding while now distinguishing commander manual fire from BAR's "
+            "`MANUAL_LAUNCH` replacement surface."
         ),
         unit_constraints=(
             "Requires aircraft or manual-fire-capable units depending on the command.",
@@ -301,8 +314,8 @@ UPSTREAM_SURFACE_GAPS: dict[str, UpstreamFixtureIntelligence] = {
         ),
         observability="command-specific",
         repo_gap=(
-            "The fork diverges from upstream command ids and leaves some helper "
-            "paths inert."
+            "Manual-fire parity is repaired, but find-pad still diverges from "
+            "upstream command ids."
         ),
         citations=(
             "/tmp/CircuitAI-upstream/src/circuit/unit/CircuitUnit.cpp:270-277",
@@ -320,7 +333,9 @@ UPSTREAM_SURFACE_GAPS: dict[str, UpstreamFixtureIntelligence] = {
         availability="unit-conditional",
         summary=(
             "Upstream CircuitAI emits custom commands for radar-fire and air-strafe "
-            "controls, but the local fork leaves those helpers commented out."
+            "controls, and the local fork now emits the same raw command ids. "
+            "Remaining failures should be interpreted through unit eligibility "
+            "and evidence-path constraints."
         ),
         unit_constraints=(
             "Requires units that actually expose the underlying behavior.",
@@ -330,7 +345,9 @@ UPSTREAM_SURFACE_GAPS: dict[str, UpstreamFixtureIntelligence] = {
         ),
         observability="command-specific",
         repo_gap=(
-            "Local helper methods are stubs while upstream still issues the raw custom commands."
+            "The local helper parity gap for radar-fire, misc priority, and "
+            "air-strafe is repaired; remaining issues are semantic rather than "
+            "dispatch omission."
         ),
         citations=(
             "/tmp/CircuitAI-upstream/src/circuit/unit/CircuitUnit.cpp:265-268",
@@ -339,8 +356,96 @@ UPSTREAM_SURFACE_GAPS: dict[str, UpstreamFixtureIntelligence] = {
             "/home/developer/projects/HighBarV3/src/circuit/unit/CircuitUnit.cpp:367-375",
         ),
         recommendation=(
-            "Mark these as upstream parity gaps first. Itertesting retries will not "
-            "recover behavior that the local helper never issues."
+            "Treat remaining failures on these surfaces as semantic-gate or "
+            "unit-eligibility problems before blaming fixture provisioning."
+        ),
+    ),
+}
+
+
+BAR_CUSTOM_COMMAND_INVENTORY: dict[int, CustomCommandInventoryEntry] = {
+    32102: CustomCommandInventoryEntry(
+        command_id=32102,
+        command_name="MANUAL_LAUNCH",
+        owner_gadget="cmd_manual_launch.lua",
+        eligible_unit_rule="manual-fire units that are not commanders",
+        target_shape="unit-or-map targeting after BAR replaces MANUALFIRE",
+        expected_evidence_channel="command-specific",
+        notes=(
+            "BAR replaces non-commander manual fire with a distinct manual-launch "
+            "surface."
+        ),
+    ),
+    34571: CustomCommandInventoryEntry(
+        command_id=34571,
+        command_name="PRIORITY",
+        owner_gadget="unit_builder_priority.lua",
+        eligible_unit_rule="builders that can assist or have build options",
+        target_shape="mode toggle without a target payload",
+        expected_evidence_channel="rules-param-or-cmddesc",
+        notes=(
+            "BAR surfaces builder priority through a gadget-owned command "
+            "descriptor instead of a generic cmd-custom bucket."
+        ),
+    ),
+    34922: CustomCommandInventoryEntry(
+        command_id=34922,
+        command_name="UNIT_SET_TARGET_NO_GROUND",
+        owner_gadget="unit_target_on_the_move.lua",
+        eligible_unit_rule="weapon-bearing units that BAR gives set-target commands",
+        target_shape="unit-or-area target without ground fallback",
+        expected_evidence_channel="command-specific",
+        notes=(
+            "This BAR-owned set-target variant should stay distinct from the "
+            "generic custom command family."
+        ),
+    ),
+    34923: CustomCommandInventoryEntry(
+        command_id=34923,
+        command_name="UNIT_SET_TARGET",
+        owner_gadget="unit_target_on_the_move.lua",
+        eligible_unit_rule="weapon-bearing units that BAR gives set-target commands",
+        target_shape="unit-or-area target with Lua rewrite risk",
+        expected_evidence_channel="command-specific",
+        notes=(
+            "Units with place-target-on-ground weapons can have this command "
+            "rewritten to map-coordinate targeting."
+        ),
+    ),
+    34924: CustomCommandInventoryEntry(
+        command_id=34924,
+        command_name="UNIT_CANCEL_TARGET",
+        owner_gadget="unit_target_on_the_move.lua",
+        eligible_unit_rule="units that currently expose the set-target family",
+        target_shape="no target payload; clears BAR-managed target state",
+        expected_evidence_channel="command-specific",
+        notes=(
+            "Cancel-target belongs to the same BAR-managed semantic surface as "
+            "the set-target commands."
+        ),
+    ),
+    34925: CustomCommandInventoryEntry(
+        command_id=34925,
+        command_name="UNIT_SET_TARGET_RECTANGLE",
+        owner_gadget="unit_target_on_the_move.lua",
+        eligible_unit_rule="units that expose rectangle set-target behavior",
+        target_shape="rectangle or area target selection",
+        expected_evidence_channel="command-specific",
+        notes=(
+            "Rectangle targeting is a distinct BAR command id with its own "
+            "target-shape semantics."
+        ),
+    ),
+    37382: CustomCommandInventoryEntry(
+        command_id=37382,
+        command_name="WANT_CLOAK",
+        owner_gadget="unit_cloak.lua",
+        eligible_unit_rule="cloak-capable units",
+        target_shape="mode toggle without a target payload",
+        expected_evidence_channel="rules-param-or-cmddesc",
+        notes=(
+            "BAR manages cloak through a Lua-owned want-cloak command rather "
+            "than a plain stock engine toggle."
         ),
     ),
 }
@@ -365,14 +470,31 @@ def all_upstream_fixture_intelligence() -> tuple[UpstreamFixtureIntelligence, ..
     )
 
 
+def custom_command_inventory_for(
+    command_id: int,
+) -> CustomCommandInventoryEntry | None:
+    return BAR_CUSTOM_COMMAND_INVENTORY.get(command_id)
+
+
+def all_custom_command_inventory() -> tuple[CustomCommandInventoryEntry, ...]:
+    return tuple(
+        BAR_CUSTOM_COMMAND_INVENTORY[command_id]
+        for command_id in sorted(BAR_CUSTOM_COMMAND_INVENTORY)
+    )
+
+
 __all__ = [
+    "BAR_CUSTOM_COMMAND_INVENTORY",
     "AvailabilityClass",
     "CommandSurface",
+    "CustomCommandInventoryEntry",
     "IntelligenceKind",
     "ObservabilityClass",
     "PROTO_COMMAND_INTELLIGENCE",
     "UPSTREAM_SURFACE_GAPS",
     "UpstreamFixtureIntelligence",
+    "all_custom_command_inventory",
     "all_upstream_fixture_intelligence",
+    "custom_command_inventory_for",
     "upstream_fixture_intelligence_for",
 ]

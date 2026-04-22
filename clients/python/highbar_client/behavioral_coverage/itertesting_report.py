@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from .bootstrap import fixture_classes_for_custom_command_id
 from .itertesting_types import CampaignStopDecision, ItertestingRun
+from .upstream_fixture_intelligence import all_custom_command_inventory
 
 
 _NON_OBSERVABLE_CATEGORIES = {"channel_b_query", "channel_c_lua"}
@@ -130,14 +132,39 @@ def render_run_report(
         lines.append("")
 
     if run.fixture_profile is not None and run.fixture_provisioning is not None:
+        refreshed = [
+            item.fixture_class
+            for item in run.fixture_provisioning.class_statuses
+            if item.status == "refreshed"
+        ]
+        unusable = [
+            item.fixture_class
+            for item in run.fixture_provisioning.class_statuses
+            if item.status == "unusable"
+        ]
         lines.extend(
             [
                 "## Fixture Provisioning",
                 "",
                 f"- Profile id: `{run.fixture_profile.profile_id}`",
                 (
+                    "- Planned fixtures: "
+                    + ", ".join(
+                        sorted(
+                            {
+                                *run.fixture_profile.fixture_classes,
+                                *run.fixture_profile.optional_fixture_classes,
+                            }
+                        )
+                    )
+                ),
+                (
                     "- Provisioned fixtures: "
                     + ", ".join(run.fixture_provisioning.provisioned_fixture_classes)
+                ),
+                (
+                    "- Refreshed fixtures: "
+                    + (", ".join(refreshed) if refreshed else "none")
                 ),
                 (
                     "- Missing fixtures: "
@@ -148,12 +175,69 @@ def render_run_report(
                     )
                 ),
                 (
+                    "- Unusable fixtures: "
+                    + (", ".join(unusable) if unusable else "none")
+                ),
+                (
+                    "- Affected commands: "
+                    + (
+                        ", ".join(run.fixture_provisioning.affected_command_ids)
+                        if run.fixture_provisioning.affected_command_ids
+                        else "none"
+                    )
+                ),
+                (
                     "- Commands blocked by fixture: "
                     f"{run.summary.direct_commands_blocked_by_fixture}"
                 ),
                 "",
             ]
         )
+        if run.fixture_provisioning.class_statuses:
+            lines.extend(["### Fixture Class Statuses", ""])
+            for status in run.fixture_provisioning.class_statuses:
+                planned = ", ".join(status.planned_command_ids) or "none"
+                affected = ", ".join(status.affected_command_ids) or "none"
+                ready = ", ".join(status.ready_instance_ids) or "none"
+                lines.extend(
+                    [
+                        (
+                            f"- `{status.fixture_class}` — {status.status} — "
+                            f"ready instances: {ready}"
+                        ),
+                        f"  planned commands: {planned}",
+                        f"  affected commands: {affected}",
+                        f"  reason: {status.last_transition_reason}",
+                    ]
+                )
+            lines.append("")
+        if run.fixture_provisioning.shared_fixture_instances:
+            lines.extend(["### Shared Fixture Instances", ""])
+            for instance in run.fixture_provisioning.shared_fixture_instances:
+                lines.append(
+                    (
+                        f"- `{instance.instance_id}` — {instance.fixture_class} — "
+                        f"{instance.usability_state} — {instance.backing_kind}:{instance.backing_id}"
+                    )
+                )
+            lines.append("")
+
+    inventory = all_custom_command_inventory()
+    if inventory:
+        lines.extend(["## Command Semantic Inventory", ""])
+        for item in inventory:
+            fixture_classes = ", ".join(
+                fixture_classes_for_custom_command_id(item.command_id)
+            )
+            lines.append(
+                (
+                    f"- `{item.command_id}` `{item.command_name}` — "
+                    f"`{item.owner_gadget}` — units: {item.eligible_unit_rule} — "
+                    f"evidence: {item.expected_evidence_channel} — "
+                    f"fixtures: {fixture_classes}"
+                )
+            )
+        lines.append("")
 
     if run.channel_health is not None:
         lines.extend(
@@ -199,6 +283,29 @@ def render_run_report(
                 "",
             ]
         )
+        if (
+            run.contract_health_decision is not None
+            and run.contract_health_decision.decision_status == "ready_for_itertesting"
+        ):
+            lines.extend(
+                [
+                    "- Interpretation: remaining unverified rows are secondary evidence or behavior follow-up, not foundational blockers.",
+                    "",
+                ]
+            )
+
+    if run.semantic_gates:
+        lines.extend(["## Semantic Gates", ""])
+        for item in run.semantic_gates:
+            custom_command = (
+                f" — custom command id: {item.custom_command_id}"
+                if item.custom_command_id is not None
+                else ""
+            )
+            lines.append(
+                f"- `{item.command_id}` — {item.gate_kind} — {item.detail}{custom_command}"
+            )
+        lines.append("")
 
     if run.contract_health_decision is not None:
         lines.extend(

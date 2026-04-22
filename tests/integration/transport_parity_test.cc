@@ -27,4 +27,16 @@ TEST(TransportParity, NonLoopbackTcpBindRejectedAtStartup) {
 	GTEST_SKIP() << "requires gRPC-linked ServerBuilder fixture";
 }
 
+TEST(TransportParity, WantedSpeedDispatchParityAndSemanticGateExpectations) {
+	GTEST_SKIP() << "requires dlopen mock-engine harness";
+}
+
+TEST(TransportParity, ManualLaunchAndDgunDispatchStayDistinct) {
+	GTEST_SKIP() << "requires dlopen mock-engine harness";
+}
+
+TEST(TransportParity, AttackAndSetTargetRewriteSurfacesStayTransportEquivalent) {
+	GTEST_SKIP() << "requires dlopen mock-engine harness";
+}
+
 }  // namespace

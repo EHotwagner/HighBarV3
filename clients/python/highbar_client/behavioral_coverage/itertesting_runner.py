@@ -9,9 +9,17 @@ import os
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .audit_inventory import ENGINE_PIN, GAMETYPE_PIN, repo_root
 from .audit_runner import deterministic_repros_for_issues
+from .bootstrap import (
+    DEFAULT_LIVE_FIXTURE_CLASSES,
+    OPTIONAL_LIVE_FIXTURE_CLASSES,
+    build_fixture_class_statuses,
+    build_shared_fixture_instance,
+    fixture_classes_for_command,
+)
 from .itertesting_campaign import (
     apply_progress_metrics_to_run,
     decide_stop,
@@ -30,6 +38,7 @@ from .itertesting_types import (
     ArmVerificationRule,
     CampaignStopDecision,
     ChannelHealthOutcome,
+    CommandSemanticGate,
     CommandContractIssue,
     CommandVerificationRecord,
     ContractHealthDecision,
@@ -50,13 +59,13 @@ from .itertesting_types import (
     run_from_dict,
 )
 from .live_failure_classification import (
-    affected_commands_for_missing_fixtures,
     classify_failure_cause,
     default_live_fixture_profile,
     default_verification_rules,
     is_channel_failure_signal,
     normalize_contract_issues,
 )
+from .predicates import semantic_gate_metadata
 from .registry import REGISTRY
 
 
@@ -64,24 +73,6 @@ _ALWAYS_NATURAL = {"attack", "build_unit", "self_destruct"}
 _NATURAL_IMPROVABLE = {"fight", "move_unit", "patrol"}
 _CHEAT_ONLY = {"give_me", "give_me_new_unit"}
 _SAVED_INSTRUCTION_PREFIX = "Build on saved instruction r"
-_DEFAULT_PROVISIONED_FIXTURES = (
-    "commander",
-    "builder",
-    "hostile_target",
-    "movement_lane",
-    "resource_baseline",
-    "cloakable",
-)
-_OPTIONAL_FIXTURE_GAPS = (
-    "damaged_friendly",
-    "reclaim_target",
-    "transport_unit",
-    "payload_unit",
-    "capturable_target",
-    "restore_target",
-    "wreck_target",
-    "custom_target",
-)
 
 
 def utc_now() -> datetime:
@@ -210,36 +201,274 @@ def _fixture_profile() -> LiveFixtureProfile:
     return default_live_fixture_profile()
 
 
+_FIXTURE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "damaged_friendly": ("damaged", "repair"),
+    "reclaim_target": ("reclaim",),
+    "transport_unit": ("transport", "load", "unload"),
+    "payload_unit": ("payload", "load", "unload"),
+    "capturable_target": ("capture", "capturable"),
+    "restore_target": ("restore",),
+    "wreck_target": ("wreck", "resurrect"),
+    "custom_target": ("custom",),
+}
+_UNUSABLE_FIXTURE_TOKENS = (
+    "refresh_failed",
+    "refresh failed",
+    "stale",
+    "destroyed",
+    "out_of_range",
+    "out of range",
+    "consumed",
+    "unusable",
+)
+_REFRESHED_FIXTURE_TOKENS = ("refreshed", "replacement", "replaced")
+_MISSING_FIXTURE_TOKENS = (
+    "live fixture dependency unavailable",
+    "fixture missing",
+    "missing fixture",
+    "not provisioned by the live bootstrap context",
+)
+
+
+def _precise_missing_fixture_classes(detail: str) -> tuple[str, ...]:
+    marker = "live fixture dependency unavailable for this arm ("
+    start = detail.find(marker)
+    if start == -1:
+        return ()
+    start += len(marker)
+    end = detail.find(")", start)
+    if end == -1:
+        return ()
+    return tuple(
+        token.strip()
+        for token in detail[start:end].split(",")
+        if token.strip()
+    )
+
+
+def _infer_fixture_observations(
+    live_rows: list[dict] | None,
+    *,
+    cheat_enabled: bool,
+) -> tuple[set[str], set[str], set[str], set[str], dict[str, str]]:
+    provisioned = set(DEFAULT_LIVE_FIXTURE_CLASSES)
+    missing = set(OPTIONAL_LIVE_FIXTURE_CLASSES)
+    refreshed: set[str] = set()
+    unusable: set[str] = set()
+    reasons: dict[str, str] = {
+        fixture_class: "baseline fixture dependency was available for the run"
+        for fixture_class in DEFAULT_LIVE_FIXTURE_CLASSES
+    }
+
+    if cheat_enabled:
+        provisioned.update(OPTIONAL_LIVE_FIXTURE_CLASSES)
+        missing.clear()
+        for fixture_class in OPTIONAL_LIVE_FIXTURE_CLASSES:
+            reasons[fixture_class] = "fixture was provisioned through cheat-assisted live setup"
+
+    for row in live_rows or ():
+        if row.get("category") != "channel_a_command":
+            continue
+        arm_name = row.get("arm_name", "")
+        command_id = _command_id(arm_name)
+        detail = " ".join(
+            str(part or "")
+            for part in (
+                row.get("evidence", ""),
+                row.get("error", ""),
+                row.get("fixture_status", ""),
+            )
+        ).lower()
+        required_fixture_classes = fixture_classes_for_command(command_id)
+        if row.get("error") == "precondition_unmet" and any(
+            token in detail for token in _MISSING_FIXTURE_TOKENS
+        ):
+            precise_missing = _precise_missing_fixture_classes(detail)
+            missing_fixture_classes = precise_missing or required_fixture_classes
+            for fixture_class in missing_fixture_classes:
+                provisioned.discard(fixture_class)
+                refreshed.discard(fixture_class)
+                unusable.discard(fixture_class)
+                missing.add(fixture_class)
+                reasons[fixture_class] = (
+                    f"{fixture_class} was still unavailable when {command_id} was attempted"
+                )
+            for fixture_class in required_fixture_classes:
+                if fixture_class in missing_fixture_classes:
+                    continue
+                provisioned.add(fixture_class)
+                missing.discard(fixture_class)
+                reasons.setdefault(
+                    fixture_class,
+                    f"{fixture_class} remained available while {command_id} was blocked on another prerequisite",
+                )
+            continue
+        if row.get("dispatched") == "true" or row.get("verified") == "true":
+            for fixture_class in required_fixture_classes:
+                provisioned.add(fixture_class)
+                missing.discard(fixture_class)
+                reasons.setdefault(
+                    fixture_class,
+                    f"{command_id} reached live evaluation with the fixture available",
+                )
+        for fixture_class, keywords in _FIXTURE_KEYWORDS.items():
+            if any(keyword in detail for keyword in keywords):
+                if any(token in detail for token in _UNUSABLE_FIXTURE_TOKENS):
+                    provisioned.discard(fixture_class)
+                    missing.discard(fixture_class)
+                    refreshed.discard(fixture_class)
+                    unusable.add(fixture_class)
+                    reasons[fixture_class] = (
+                        f"{fixture_class} became unusable before dependent commands could run"
+                    )
+                    continue
+                provisioned.add(fixture_class)
+                missing.discard(fixture_class)
+                if any(token in detail for token in _REFRESHED_FIXTURE_TOKENS):
+                    refreshed.add(fixture_class)
+                    reasons[fixture_class] = (
+                        f"{fixture_class} was refreshed after a stale or consumed instance"
+                    )
+                else:
+                    reasons.setdefault(
+                        fixture_class,
+                        f"{fixture_class} was provisioned from live setup evidence",
+                    )
+
+    missing.difference_update(provisioned)
+    missing.difference_update(unusable)
+    provisioned.difference_update(unusable)
+    return provisioned, missing, refreshed, unusable, reasons
+
+
+def _shared_fixture_instances_for_run(
+    *,
+    class_statuses,
+    completed_at: str,
+) -> tuple[tuple[Any, ...], dict[str, tuple[str, ...]]]:
+    instances: list[Any] = []
+    for status in class_statuses:
+        if status.status == "provisioned":
+            instance_id = f"{status.fixture_class}-instance-01"
+            instances.append(
+                build_shared_fixture_instance(
+                    fixture_class=status.fixture_class,
+                    instance_id=instance_id,
+                    backing_id=f"{status.fixture_class}-backing-01",
+                    last_ready_at=completed_at,
+                )
+            )
+        elif status.status == "refreshed":
+            previous_id = f"{status.fixture_class}-instance-00"
+            instance_id = f"{status.fixture_class}-instance-01"
+            instances.append(
+                build_shared_fixture_instance(
+                    fixture_class=status.fixture_class,
+                    instance_id=previous_id,
+                    backing_id=f"{status.fixture_class}-backing-00",
+                    usability_state="stale",
+                    refresh_count=0,
+                    last_ready_at=None,
+                )
+            )
+            instances.append(
+                build_shared_fixture_instance(
+                    fixture_class=status.fixture_class,
+                    instance_id=instance_id,
+                    backing_id=f"{status.fixture_class}-backing-01",
+                    usability_state="ready",
+                    refresh_count=1,
+                    last_ready_at=completed_at,
+                    replacement_of=previous_id,
+                )
+            )
+        elif status.status == "unusable":
+            instances.append(
+                build_shared_fixture_instance(
+                    fixture_class=status.fixture_class,
+                    instance_id=f"{status.fixture_class}-instance-00",
+                    backing_id=f"{status.fixture_class}-backing-00",
+                    usability_state="refresh_failed",
+                    refresh_count=0,
+                    last_ready_at=None,
+                )
+            )
+    if not instances:
+        return (), {}
+    ready_map = {
+        status.fixture_class: tuple(
+            instance.instance_id
+            for instance in instances
+            if instance.fixture_class == status.fixture_class
+            and instance.usability_state == "ready"
+        )
+        for status in class_statuses
+    }
+    return tuple(instances), ready_map
+
+
 def _fixture_provisioning_for_run(
     run_id: str,
     *,
     cheat_enabled: bool,
     live_rows: list[dict] | None,
 ) -> FixtureProvisioningResult:
-    provisioned = set(_DEFAULT_PROVISIONED_FIXTURES)
-    missing = set(_OPTIONAL_FIXTURE_GAPS)
-    if cheat_enabled:
-        provisioned.update(_OPTIONAL_FIXTURE_GAPS)
-        missing.clear()
-    if live_rows:
-        live_text = " ".join(
-            f"{item.get('evidence', '')} {item.get('error', '')}" for item in live_rows
-        ).lower()
-        if "reclaim" in live_text:
-            provisioned.add("reclaim_target")
-            missing.discard("reclaim_target")
-        if "damaged" in live_text or "repair" in live_text:
-            provisioned.add("damaged_friendly")
-            missing.discard("damaged_friendly")
+    completed_at = format_timestamp(utc_now())
+    provisioned, missing, refreshed, unusable, reasons = _infer_fixture_observations(
+        live_rows,
+        cheat_enabled=cheat_enabled,
+    )
+    class_statuses = build_fixture_class_statuses(
+        updated_at=completed_at,
+        provisioned_fixture_classes=tuple(sorted(provisioned)),
+        missing_fixture_classes=tuple(sorted(missing)),
+        refreshed_fixture_classes=tuple(sorted(refreshed)),
+        unusable_fixture_classes=tuple(sorted(unusable)),
+        transition_reason_by_class=reasons,
+        supported_command_ids=_fixture_profile().supported_command_ids,
+    )
+    shared_fixture_instances, ready_ids_by_class = _shared_fixture_instances_for_run(
+        class_statuses=class_statuses,
+        completed_at=completed_at,
+    )
+    class_statuses = build_fixture_class_statuses(
+        updated_at=completed_at,
+        provisioned_fixture_classes=tuple(sorted(provisioned)),
+        missing_fixture_classes=tuple(sorted(missing)),
+        refreshed_fixture_classes=tuple(sorted(refreshed)),
+        unusable_fixture_classes=tuple(sorted(unusable)),
+        ready_instance_ids_by_class=ready_ids_by_class,
+        transition_reason_by_class=reasons,
+        supported_command_ids=_fixture_profile().supported_command_ids,
+    )
+    affected_command_ids = tuple(
+        sorted(
+            {
+                command_id
+                for status in class_statuses
+                for command_id in status.affected_command_ids
+            }
+        )
+    )
+    missing_fixture_classes = tuple(
+        status.fixture_class
+        for status in class_statuses
+        if status.status in {"missing", "unusable"}
+    )
+    provisioned_fixture_classes = tuple(
+        status.fixture_class
+        for status in class_statuses
+        if status.status in {"provisioned", "refreshed"}
+    )
     return FixtureProvisioningResult(
         run_id=run_id,
         profile_id=_fixture_profile().profile_id,
-        provisioned_fixture_classes=tuple(sorted(provisioned)),
-        missing_fixture_classes=tuple(sorted(missing)),
-        affected_command_ids=affected_commands_for_missing_fixtures(
-            tuple(sorted(missing))
-        ),
-        completed_at=format_timestamp(utc_now()),
+        provisioned_fixture_classes=provisioned_fixture_classes,
+        missing_fixture_classes=missing_fixture_classes,
+        affected_command_ids=affected_command_ids,
+        completed_at=completed_at,
+        class_statuses=class_statuses,
+        shared_fixture_instances=shared_fixture_instances,
     )
 
 
@@ -310,6 +539,36 @@ def _failure_classifications_for_run(
             )
         )
     return tuple(out)
+
+
+def _semantic_gates_for_run(
+    records: tuple[CommandVerificationRecord, ...],
+    failure_classifications: tuple[FailureCauseClassification, ...],
+) -> tuple[CommandSemanticGate, ...]:
+    classification_by_command = {
+        item.command_id: item for item in failure_classifications
+    }
+    gates: list[CommandSemanticGate] = []
+    for record in records:
+        classification = classification_by_command.get(record.command_id)
+        if classification is None:
+            continue
+        detail = record.blocking_reason or record.evidence_summary or ""
+        gate = semantic_gate_metadata(record.command_id, detail)
+        if gate is None:
+            continue
+        gate_kind, gate_detail, custom_command_id = gate
+        gates.append(
+            CommandSemanticGate(
+                command_id=record.command_id,
+                run_id=record.source_run_id,
+                gate_kind=gate_kind,  # type: ignore[arg-type]
+                detail=gate_detail,
+                source_scope=classification.source_scope,
+                custom_command_id=custom_command_id,
+            )
+        )
+    return tuple(gates)
 
 
 def _improvement_defaults(
@@ -832,6 +1091,7 @@ def _contract_health_for_run(
     deterministic_repros: tuple[DeterministicRepro, ...],
     previous_run: ItertestingRun | None,
     failure_classifications: tuple[FailureCauseClassification, ...],
+    semantic_gates: tuple[CommandSemanticGate, ...],
     actions: tuple[ImprovementAction, ...],
     enforce_live_closeout_gate: bool,
 ) -> tuple[ContractHealthDecision, ImprovementEligibility]:
@@ -863,8 +1123,14 @@ def _contract_health_for_run(
         for item in blocking
     )
     recorded_at = format_timestamp(utc_now())
+    semantic_gate_map = {item.command_id: item.gate_kind for item in semantic_gates}
     visible_downstream_findings = tuple(
-        f"{item.command_id}:{item.primary_cause}" for item in failure_classifications
+        (
+            f"{item.command_id}:semantic-gate:{semantic_gate_map[item.command_id]}"
+            if item.command_id in semantic_gate_map
+            else f"{item.command_id}:{item.primary_cause}"
+        )
+        for item in failure_classifications
     )
     if needs_pattern_review and blocking:
         decision = ContractHealthDecision(
@@ -938,7 +1204,12 @@ def _contract_health_for_run(
         run_id=run_id,
         decision_status="ready_for_itertesting",
         blocking_issue_ids=(),
-        summary_message="No foundational command-contract blockers were detected.",
+        summary_message=(
+            "No foundational command-contract blockers were detected; remaining "
+            "unverified rows are downstream evidence or behavior follow-up."
+            if failure_classifications
+            else "No foundational command-contract blockers were detected."
+        ),
         stop_or_proceed="proceed_with_improvement",
         recorded_at=recorded_at,
         resolved_issue_ids=resolved_issue_ids,
@@ -1055,6 +1326,10 @@ def build_run(
         channel_health,
         verification_rules,
     )
+    semantic_gates = _semantic_gates_for_run(
+        command_records,
+        failure_classifications,
+    )
     provisional_actions = _build_actions(
         command_records,
         current_run_id=run_id,
@@ -1076,6 +1351,7 @@ def build_run(
         deterministic_repros=deterministic_repros,
         previous_run=previous_run,
         failure_classifications=failure_classifications,
+        semantic_gates=semantic_gates,
         actions=provisional_actions,
         enforce_live_closeout_gate=live_rows is not None,
     )
@@ -1118,6 +1394,7 @@ def build_run(
         channel_health=channel_health,
         verification_rules=verification_rules,
         failure_classifications=failure_classifications,
+        semantic_gates=semantic_gates,
         contract_issues=contract_issues,
         deterministic_repros=deterministic_repros,
         contract_health_decision=contract_health_decision,

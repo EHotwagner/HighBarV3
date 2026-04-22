@@ -16,6 +16,7 @@ Per spec §Edge Cases:
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Callable, Optional
 
 from .types import (
@@ -45,6 +46,86 @@ def _distance(p1: Any, p2: Any) -> float:
     return math.sqrt(
         (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2 + (p1.z - p2.z) ** 2
     )
+
+
+_HELPER_PARITY_TOKENS = (
+    "helper parity",
+    "local helper",
+    "stubbed",
+    "commented out",
+    "cmdwantedspeed",
+    "cmdpriority",
+    "cmdmiscpriority",
+    "cmdmanualfire",
+    "cmdfireatradar",
+    "cmdairstrafe",
+)
+_LUA_REWRITE_TOKENS = (
+    "place_target_on_ground",
+    "lua rewrite",
+    "rewritten to map",
+    "set-target rewrite",
+    "target contract rewrote",
+)
+_UNIT_SHAPE_TOKENS = (
+    "fixed-wing",
+    "fixed wing",
+    "non-commander",
+    "non commander",
+    "manual launch substitution",
+    "does not receive the relevant bar command shape",
+    "does not receive the command descriptor",
+    "unit-shape",
+)
+_MOD_OPTION_TOKENS = (
+    "emprework",
+    "mod option",
+    "mod-option",
+    "modoption",
+)
+_CUSTOM_COMMAND_ID_PATTERN = re.compile(r"\b(32102|34571|34922|34923|34924|34925|37382)\b")
+
+
+def semantic_gate_metadata(
+    command_id: str,
+    detail: str | None,
+) -> tuple[str, str, int | None] | None:
+    lowered = (detail or "").lower()
+    if not lowered:
+        return None
+    custom_command_id = _extract_custom_command_id(lowered)
+    if any(token in lowered for token in _MOD_OPTION_TOKENS):
+        return (
+            "mod-option",
+            detail or f"{command_id} is blocked by a required BAR mod option",
+            custom_command_id,
+        )
+    if any(token in lowered for token in _LUA_REWRITE_TOKENS):
+        return (
+            "lua-rewrite",
+            detail or f"{command_id} is blocked by BAR Lua command-shape rewriting",
+            custom_command_id,
+        )
+    if any(token in lowered for token in _UNIT_SHAPE_TOKENS):
+        return (
+            "unit-shape",
+            detail or f"{command_id} is blocked by unit eligibility or command-shape constraints",
+            custom_command_id,
+        )
+    if any(token in lowered for token in _HELPER_PARITY_TOKENS):
+        return (
+            "helper-parity",
+            detail or f"{command_id} is blocked by a local helper parity gap",
+            custom_command_id,
+        )
+    return None
+
+
+def _extract_custom_command_id(detail: str) -> int | None:
+    match = _CUSTOM_COMMAND_ID_PATTERN.search(detail)
+    if match is None:
+        return None
+    return int(match.group(1))
 
 
 # ---- factory functions ---------------------------------------------------
@@ -361,6 +442,7 @@ __all__ = [
     "unit_count_delta_predicate",
     "health_delta_predicate",
     "build_progress_monotonic_predicate",
+    "semantic_gate_metadata",
     "commander_selector",
     "capability_selector",
     "NotWireObservable",

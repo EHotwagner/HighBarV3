@@ -70,6 +70,105 @@ print(payload["summary"]["effective_improvement_runs"])
 PY
 }
 
+assert_wrapper_semantic_inventory() {
+    local reports_dir="$1"
+    local output
+    output="$(run_wrapper "$reports_dir" HIGHBAR_ITERTESTING_RETRY_INTENSITY=quick)"
+    if [[ "$output" != *"semantic_inventory=32102:MANUAL_LAUNCH@cmd_manual_launch.lua"* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit semantic inventory" >&2
+        exit 1
+    fi
+    if [[ "$output" != *"semantic_gates="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit semantic gate summary" >&2
+        exit 1
+    fi
+}
+
+assert_semantic_gate_bundle() {
+    local reports_dir="$1"
+    uv run --project "$REPO_ROOT/clients/python" python - "$reports_dir" <<'PY'
+import sys
+from pathlib import Path
+
+from highbar_client.behavioral_coverage.itertesting_runner import build_run, write_run_bundle
+from highbar_client.behavioral_coverage.registry import REGISTRY
+
+reports_dir = Path(sys.argv[1]) / "semantic-gates"
+reports_dir.mkdir(parents=True, exist_ok=True)
+run = build_run(
+    campaign_id="semantic-campaign",
+    sequence_index=0,
+    reports_dir=reports_dir,
+    live_rows=[
+        {
+            "arm_name": "set_wanted_max_speed",
+            "category": REGISTRY["set_wanted_max_speed"].category,
+            "dispatched": "false",
+            "verified": "false",
+            "evidence": "emprework mod option disabled for wanted-speed validation",
+            "error": "precondition_unmet",
+        },
+        {
+            "arm_name": "dgun",
+            "category": REGISTRY["dgun"].category,
+            "dispatched": "false",
+            "verified": "false",
+            "evidence": "non-commander manual launch substitution (32102) means this unit does not receive the command descriptor",
+            "error": "precondition_unmet",
+        },
+        {
+            "arm_name": "attack",
+            "category": REGISTRY["attack"].category,
+            "dispatched": "true",
+            "verified": "false",
+            "evidence": "place_target_on_ground Lua rewrite converted the unit target into map coordinates",
+            "error": "effect_not_observed",
+        },
+    ],
+)
+write_run_bundle(run, reports_dir)
+PY
+
+    local manifest
+    manifest="$(find "$reports_dir/semantic-gates" -path '*/manifest.json' | sort | tail -n1)"
+    python3 - "$manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    payload = json.load(f)
+
+semantic_gates = {item["command_id"]: item for item in payload.get("semantic_gates", [])}
+assert semantic_gates["cmd-set-wanted-max-speed"]["gate_kind"] == "mod-option"
+assert semantic_gates["cmd-dgun"]["gate_kind"] == "unit-shape"
+assert semantic_gates["cmd-attack"]["gate_kind"] == "lua-rewrite"
+summary = payload.get("summary") or {}
+assert not summary.get("transport_interrupted")
+decision = payload.get("contract_health_decision") or {}
+assert decision.get("decision_status") == "ready_for_itertesting"
+PY
+}
+
+assert_fixture_bundle_shape() {
+    local reports_dir="$1"
+    local manifest
+    manifest="$(latest_manifest "$reports_dir")"
+    python3 - "$manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    payload = json.load(f)
+
+fixture = payload.get("fixture_provisioning") or {}
+class_statuses = fixture.get("class_statuses") or []
+assert class_statuses, "fixture class statuses missing from manifest"
+status_by_class = {item["fixture_class"]: item["status"] for item in class_statuses}
+assert status_by_class["transport_unit"] in {"missing", "provisioned", "refreshed", "unusable"}
+assert "affected_command_ids" in fixture
+PY
+}
+
 QUICK_DIR="$REPORTS_ROOT/quick"
 STANDARD_DIR="$REPORTS_ROOT/standard"
 DEEP_DIR="$REPORTS_ROOT/deep"
@@ -87,6 +186,11 @@ if [[ "$quick_effective" -ge "$standard_effective" || "$standard_effective" -ge 
     echo "test_itertesting_campaign: retry profile envelopes not ordered (quick=$quick_effective standard=$standard_effective deep=$deep_effective)" >&2
     exit 1
 fi
+assert_fixture_bundle_shape "$QUICK_DIR"
+assert_fixture_bundle_shape "$STANDARD_DIR"
+assert_fixture_bundle_shape "$DEEP_DIR"
+assert_wrapper_semantic_inventory "$QUICK_DIR"
+assert_semantic_gate_bundle "$QUICK_DIR"
 
 # Scenario 3 (US3): back-to-back campaigns should reuse and revise instruction files.
 REUSE_DIR="$REPORTS_ROOT/reuse"

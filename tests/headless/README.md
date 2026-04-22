@@ -56,6 +56,16 @@ tests/headless/test_live_itertesting_hardening.sh
 
 The script validates fixture provisioning, channel-health reporting, failure-cause summaries, and tuned repro coverage for `cmd-move-unit`, `cmd-fight`, and `cmd-build-unit`.
 
+For 014, maintainers should also review the semantic surfaces emitted by
+the run bundle:
+
+- `## Command Semantic Inventory` in `run-report.md` for exact BAR ids such as
+  `32102`, `34571`, `34922`-`34925`, and `37382`
+- `## Semantic Gates` in `run-report.md` for helper-parity, Lua rewrite,
+  unit-shape, and mod-option blockers that are not missing-fixture outcomes
+- `itertesting: semantic_inventory=...` and `itertesting: semantic_gates=...`
+  lines from `tests/headless/itertesting.sh` for quick terminal review
+
 Use `tests/headless/test_itertesting_campaign.sh` to validate that chained runs emit both artifacts.
 
 Malformed payload resilience can be checked directly with:

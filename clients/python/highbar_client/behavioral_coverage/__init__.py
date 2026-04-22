@@ -25,6 +25,7 @@ from typing import Any, Optional
 from .bootstrap import (
     BootstrapContext,
     DEFAULT_BOOTSTRAP_PLAN,
+    Vector3,
     compute_manifest,
     fixture_classes_for_command,
     manifest_shortages,
@@ -47,35 +48,6 @@ from .types import (
     SnapshotPair,
     VerificationOutcome,
 )
-
-
-# These arms need richer live fixtures than the simplified bootstrap
-# provisions (damaged friendlies, in-range capturable units, transports,
-# reclaimable features, etc.). Blindly dispatching them from Itertesting's
-# minimal live loop has proven able to stall the session before later arms
-# run, so we report them as blocked until a dedicated setup path exists.
-_SIMPLIFIED_BOOTSTRAP_TARGET_MISSING_ARMS = {
-    "attack_area",
-    "capture",
-    "capture_area",
-    "custom",
-    "dgun",
-    "guard",
-    "load_onto",
-    "load_units",
-    "load_units_area",
-    "reclaim_area",
-    "reclaim_feature",
-    "reclaim_in_area",
-    "reclaim_unit",
-    "repair",
-    "restore_area",
-    "resurrect",
-    "resurrect_in_area",
-    "unload_unit",
-    "unload_units_area",
-}
-
 
 # ---- argparse -----------------------------------------------------------
 
@@ -251,6 +223,281 @@ def _row_for_outcome(case: BehavioralTestCase,
     }
 
 
+_FIXTURE_HEALTH_HINTS = {
+    "builder": 690.0,
+    "cloakable": 89.0,
+    "transport_unit": 265.0,
+}
+
+
+def _vector3_from_position(position: Any) -> Vector3:
+    return Vector3(
+        x=float(getattr(position, "x", 0.0)),
+        y=float(getattr(position, "y", 0.0)),
+        z=float(getattr(position, "z", 0.0)),
+    )
+
+
+def _find_commander(snapshot: Any) -> Any | None:
+    commander = None
+    for unit in getattr(snapshot, "own_units", ()):
+        if unit.max_health > 3000.0 and (
+            commander is None or unit.max_health > commander.max_health
+        ):
+            commander = unit
+    return commander
+
+
+def _matches_health(unit: Any, expected: float) -> bool:
+    return abs(float(getattr(unit, "max_health", 0.0)) - expected) <= 1.0
+
+
+def _refresh_bootstrap_context(shared: dict, ctx: BootstrapContext) -> BootstrapContext:
+    snapshot = shared["snapshots"][-1] if shared.get("snapshots") else None
+    if snapshot is None:
+        return ctx
+
+    commander = _find_commander(snapshot)
+    if commander is not None:
+        ctx.commander_unit_id = commander.unit_id
+        ctx.commander_position = _vector3_from_position(commander.position)
+        ctx.capability_units["commander"] = commander.unit_id
+
+    own_units = [
+        unit
+        for unit in getattr(snapshot, "own_units", ())
+        if unit.unit_id != ctx.commander_unit_id
+    ]
+
+    for fixture_class, expected_health in _FIXTURE_HEALTH_HINTS.items():
+        for unit in own_units:
+            if _matches_health(unit, expected_health):
+                ctx.fixture_unit_ids[fixture_class] = unit.unit_id
+                if fixture_class in {"builder", "cloakable"}:
+                    ctx.capability_units[fixture_class] = unit.unit_id
+                ctx.fixture_positions[fixture_class] = _vector3_from_position(unit.position)
+                break
+
+    payload_candidate = next(
+        (
+            unit
+            for unit in own_units
+            if unit.unit_id != ctx.fixture_unit_ids.get("transport_unit")
+        ),
+        None,
+    )
+    if payload_candidate is not None:
+        ctx.fixture_unit_ids.setdefault("payload_unit", payload_candidate.unit_id)
+        ctx.fixture_positions.setdefault(
+            "payload_unit",
+            _vector3_from_position(payload_candidate.position),
+        )
+
+    damaged_friendly = next(
+        (
+            unit
+            for unit in own_units
+            if unit.health > 0.0 and unit.health < unit.max_health
+        ),
+        None,
+    )
+    if damaged_friendly is not None:
+        ctx.fixture_unit_ids["damaged_friendly"] = damaged_friendly.unit_id
+        ctx.fixture_positions["damaged_friendly"] = _vector3_from_position(
+            damaged_friendly.position
+        )
+
+    enemy = next(iter(getattr(snapshot, "visible_enemies", ())), None)
+    if enemy is not None:
+        ctx.enemy_seed_id = enemy.unit_id
+        enemy_position = _vector3_from_position(enemy.position)
+        for fixture_class in (
+            "hostile_target",
+            "capturable_target",
+            "custom_target",
+        ):
+            ctx.fixture_unit_ids[fixture_class] = enemy.unit_id
+            ctx.fixture_positions[fixture_class] = enemy_position
+
+    reclaimable_features = [
+        feature
+        for feature in getattr(snapshot, "map_features", ())
+        if feature.reclaim_value_metal > 0.0 or feature.reclaim_value_energy > 0.0
+    ]
+    if reclaimable_features:
+        feature = reclaimable_features[0]
+        ctx.fixture_feature_ids["reclaim_target"] = feature.feature_id
+        ctx.fixture_positions["reclaim_target"] = _vector3_from_position(feature.position)
+
+    current_feature_ids = {feature.feature_id for feature in getattr(snapshot, "map_features", ())}
+    for event in reversed(shared.get("deltas", ())):
+        if event.WhichOneof("kind") != "feature_created":
+            continue
+        feature_id = event.feature_created.feature_id
+        if feature_id not in current_feature_ids:
+            continue
+        ctx.fixture_feature_ids["wreck_target"] = feature_id
+        ctx.fixture_positions["wreck_target"] = _vector3_from_position(
+            event.feature_created.position
+        )
+        break
+    else:
+        reclaim_target_id = ctx.fixture_feature_ids.get("reclaim_target")
+        wreck_candidate = next(
+            (
+                feature
+                for feature in sorted(
+                    reclaimable_features,
+                    key=lambda item: item.feature_id,
+                    reverse=True,
+                )
+                if feature.feature_id != reclaim_target_id
+            ),
+            None,
+        )
+        if wreck_candidate is not None:
+            ctx.fixture_feature_ids["wreck_target"] = wreck_candidate.feature_id
+            ctx.fixture_positions["wreck_target"] = _vector3_from_position(
+                wreck_candidate.position
+            )
+
+    ctx.fixture_positions.setdefault(
+        "restore_target",
+        Vector3(
+            x=ctx.commander_position.x + 96.0,
+            y=ctx.commander_position.y,
+            z=ctx.commander_position.z,
+        ),
+    )
+    ctx.fixture_positions.setdefault(
+        "movement_lane",
+        Vector3(
+            x=ctx.commander_position.x + 500.0,
+            y=ctx.commander_position.y,
+            z=ctx.commander_position.z,
+        ),
+    )
+    ctx.fixture_positions.setdefault("resource_baseline", ctx.commander_position)
+    return ctx
+
+
+def _has_fixture_unit(ctx: BootstrapContext, fixture_class: str) -> bool:
+    return bool(
+        ctx.fixture_unit_ids.get(fixture_class)
+        or ctx.capability_units.get(fixture_class)
+    )
+
+
+def _has_fixture_feature(ctx: BootstrapContext, fixture_class: str) -> bool:
+    return bool(ctx.fixture_feature_ids.get(fixture_class))
+
+
+def _has_fixture_position(ctx: BootstrapContext, fixture_class: str) -> bool:
+    return fixture_class in ctx.fixture_positions
+
+
+def _custom_command_ready(ctx: BootstrapContext) -> bool:
+    return any(
+        (
+            _has_fixture_unit(ctx, "cloakable"),
+            _has_fixture_unit(ctx, "builder"),
+            _has_fixture_unit(ctx, "custom_target"),
+            ctx.enemy_seed_id is not None,
+        )
+    )
+
+
+def _missing_fixture_classes(
+    ctx: BootstrapContext,
+    fixture_classes: tuple[str, ...],
+) -> tuple[str, ...]:
+    missing: list[str] = []
+    for fixture_class in fixture_classes:
+        if fixture_class in {"restore_target", "movement_lane", "resource_baseline"}:
+            if not _has_fixture_position(ctx, fixture_class):
+                missing.append(fixture_class)
+        elif fixture_class in {"reclaim_target", "wreck_target"}:
+            if not (
+                _has_fixture_feature(ctx, fixture_class)
+                or _has_fixture_position(ctx, fixture_class)
+            ):
+                missing.append(fixture_class)
+        else:
+            if not _has_fixture_unit(ctx, fixture_class):
+                missing.append(fixture_class)
+    return tuple(missing)
+
+
+def _missing_fixture_classes_for_context(
+    arm_name: str,
+    ctx: BootstrapContext,
+) -> tuple[str, ...]:
+    command_id = f"cmd-{arm_name.replace('_', '-')}"
+    command_specific: dict[str, tuple[str, ...]] = {
+        "attack": () if _has_fixture_unit(ctx, "hostile_target") else ("hostile_target",),
+        "attack_area": () if _has_fixture_position(ctx, "hostile_target") else ("hostile_target",),
+        "capture": () if _has_fixture_unit(ctx, "capturable_target") else ("capturable_target",),
+        "capture_area": () if _has_fixture_position(ctx, "capturable_target") else ("capturable_target",),
+        "custom": () if _custom_command_ready(ctx) else ("custom_target",),
+        "dgun": () if _has_fixture_unit(ctx, "hostile_target") else ("hostile_target",),
+        "guard": () if _has_fixture_unit(ctx, "damaged_friendly") else ("damaged_friendly",),
+        "repair": () if _has_fixture_unit(ctx, "damaged_friendly") else ("damaged_friendly",),
+        "load_onto": _missing_fixture_classes(ctx, ("transport_unit", "payload_unit")),
+        "load_units": _missing_fixture_classes(ctx, ("transport_unit", "payload_unit")),
+        "load_units_area": _missing_fixture_classes(ctx, ("transport_unit", "payload_unit")),
+        "reclaim_unit": (
+            ()
+            if _has_fixture_unit(ctx, "reclaim_target") or _has_fixture_unit(ctx, "hostile_target")
+            else ("reclaim_target",)
+        ),
+        "reclaim_feature": () if _has_fixture_feature(ctx, "reclaim_target") else ("reclaim_target",),
+        "reclaim_area": () if _has_fixture_position(ctx, "reclaim_target") else ("reclaim_target",),
+        "reclaim_in_area": () if _has_fixture_position(ctx, "reclaim_target") else ("reclaim_target",),
+        "restore_area": () if _has_fixture_position(ctx, "restore_target") else ("restore_target",),
+        "resurrect": () if _has_fixture_feature(ctx, "wreck_target") else ("wreck_target",),
+        "resurrect_in_area": () if _has_fixture_position(ctx, "wreck_target") else ("wreck_target",),
+        "self_destruct": (
+            ()
+            if (
+                _has_fixture_unit(ctx, "cloakable")
+                or _has_fixture_unit(ctx, "builder")
+                or _has_fixture_unit(ctx, "payload_unit")
+                or _has_fixture_unit(ctx, "damaged_friendly")
+            )
+            else ("builder", "cloakable")
+        ),
+        "set_base": () if _has_fixture_position(ctx, "restore_target") else ("restore_target",),
+        "unload_unit": _missing_fixture_classes(ctx, ("transport_unit", "payload_unit")),
+        "unload_units_area": _missing_fixture_classes(ctx, ("transport_unit", "payload_unit")),
+    }
+    if arm_name in command_specific:
+        return command_specific[arm_name]
+
+    available_fixture_classes = {"commander", "movement_lane", "resource_baseline"}
+    for fixture_class in (
+        "builder",
+        "cloakable",
+        "hostile_target",
+        "capturable_target",
+        "custom_target",
+        "damaged_friendly",
+        "transport_unit",
+        "payload_unit",
+    ):
+        if _has_fixture_unit(ctx, fixture_class):
+            available_fixture_classes.add(fixture_class)
+    for fixture_class in ("reclaim_target", "wreck_target"):
+        if _has_fixture_feature(ctx, fixture_class) or _has_fixture_position(ctx, fixture_class):
+            available_fixture_classes.add(fixture_class)
+    if _has_fixture_position(ctx, "restore_target"):
+        available_fixture_classes.add("restore_target")
+    return tuple(
+        fixture_class
+        for fixture_class in fixture_classes_for_command(command_id)
+        if fixture_class not in available_fixture_classes
+    )
+
+
 def _simplified_bootstrap_precondition_message(
     arm_name: str,
     case: BehavioralTestCase,
@@ -260,14 +507,13 @@ def _simplified_bootstrap_precondition_message(
         if case.required_capability not in ctx.capability_units:
             return (
                 f"required_capability={case.required_capability} "
-                f"not provisioned by simplified bootstrap"
+                f"not provisioned by the live bootstrap context"
             )
-    if arm_name in _SIMPLIFIED_BOOTSTRAP_TARGET_MISSING_ARMS:
-        command_id = f"cmd-{arm_name.replace('_', '-')}"
-        fixture_classes = ", ".join(fixture_classes_for_command(command_id))
+    missing_fixture_classes = _missing_fixture_classes_for_context(arm_name, ctx)
+    if missing_fixture_classes:
         return (
-            "simplified bootstrap does not provision the target fixture "
-            f"required for this arm ({fixture_classes})"
+            "live fixture dependency unavailable for this arm "
+            f"({', '.join(missing_fixture_classes)})"
         )
     return None
 
@@ -291,9 +537,10 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
 
     # ---- Phase 1: bootstrap ------------------------------------------
     # Simplified bootstrap: wait for a snapshot with a commander. Full
-    # plan execution (mex / solar / factories) is deferred because it
-    # requires the coordinator to forward BuildUnit into the engine
-    # and for InvokeCallback to resolve def_ids — both of which live
+    # plan execution (mex / solar / factories) is still deferred until
+    # the coordinator/build-order path is wired into the engine. The
+    # minimal InvokeCallback def-id resolver no longer blocks that
+    # specific piece, but the actual build orchestration remains
     # outside this feature. Phase-2 arm dispatch still runs; each arm
     # that requires a non-commander capability will report
     # precondition_unmet.
@@ -302,10 +549,7 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
         for s in reversed(shared["snapshots"]):
-            for u in s.own_units:
-                if u.max_health > 3000.0:
-                    commander = u
-                    break
+            commander = _find_commander(s)
             if commander:
                 break
         if commander:
@@ -324,17 +568,22 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
             "y": commander.position.y,
             "z": commander.position.z})(),
         capability_units={"commander": commander.unit_id},
+        fixture_unit_ids={},
+        fixture_feature_ids={},
+        fixture_positions={},
         enemy_seed_id=None,
         manifest=(),
         cheats_enabled=False,
         def_id_by_name={},
     )
+    ctx = _refresh_bootstrap_context(shared, ctx)
 
     # ---- Phase 2: per-arm dispatch + verify --------------------------
 
     rows: list[dict] = []
     for arm_name in sorted(REGISTRY.keys()):
         case = REGISTRY[arm_name]
+        ctx = _refresh_bootstrap_context(shared, ctx)
 
         # NotWireObservable sentinel: dispatch, record na/not_wire_observable.
         if isinstance(case.verify_predicate, NotWireObservable):

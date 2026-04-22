@@ -502,9 +502,52 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 	case C::kCustom: {
 		auto* u = unit->GetUnit();
 		if (u == nullptr) return false;
+		const auto customId = cmd.custom().command_id();
+		const auto paramsSize = cmd.custom().params_size();
+		switch (customId) {
+		case CMD_MANUAL_LAUNCH:
+			if (paramsSize != 1 && paramsSize != 3) {
+				LogError(ai, "CommandDispatch",
+				         "custom: MANUAL_LAUNCH expects unit-id or map-position params");
+				return false;
+			}
+			break;
+		case CMD_BAR_PRIORITY:
+		case CMD_WANT_CLOAK:
+			if (paramsSize != 1) {
+				LogError(ai, "CommandDispatch",
+				         "custom: mode-toggle command expects exactly one param");
+				return false;
+			}
+			break;
+		case 34922:  // UNIT_SET_TARGET_NO_GROUND
+		case 34923:  // UNIT_SET_TARGET
+			if (paramsSize != 1 && paramsSize != 3) {
+				LogError(ai, "CommandDispatch",
+				         "custom: set-target command expects unit-id or map-position params");
+				return false;
+			}
+			break;
+		case 34924:  // UNIT_CANCEL_TARGET
+			if (paramsSize != 0) {
+				LogError(ai, "CommandDispatch",
+				         "custom: UNIT_CANCEL_TARGET expects no params");
+				return false;
+			}
+			break;
+		case 34925:  // UNIT_SET_TARGET_RECTANGLE
+			if (paramsSize < 3) {
+				LogError(ai, "CommandDispatch",
+				         "custom: UNIT_SET_TARGET_RECTANGLE expects area params");
+				return false;
+			}
+			break;
+		default:
+			break;
+		}
 		std::vector<float> params(cmd.custom().params().begin(),
 		                           cmd.custom().params().end());
-		u->ExecuteCustomCommand(cmd.custom().command_id(),
+		u->ExecuteCustomCommand(customId,
 		                         std::move(params), opts, timeout);
 		return true;
 	}
@@ -513,6 +556,11 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 		// Cheats::SetMyIncomeMultiplier — only applies under cheats.
 		auto* c = ai->GetCheats();
 		if (c == nullptr) return false;
+		if (!ai->IsCheating()) {
+			LogError(ai, "CommandDispatch",
+			         "set_my_income_share_direct: cheats disabled");
+			return false;
+		}
 		c->SetMyIncomeMultiplier(cmd.set_my_income_share_direct().share());
 		return true;
 	}
@@ -520,6 +568,11 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 		// Same situation as set_my_income_share_direct. Pass through.
 		auto* c = ai->GetCheats();
 		if (c == nullptr) return false;
+		if (!ai->IsCheating()) {
+			LogError(ai, "CommandDispatch",
+			         "set_share_level: cheats disabled");
+			return false;
+		}
 		c->SetMyIncomeMultiplier(cmd.set_share_level().share_level());
 		return true;
 	}
