@@ -29,6 +29,7 @@ from .audit_inventory import (
 )
 from .hypotheses import primary_hypothesis_for_row, rank_hypotheses
 from .registry import REGISTRY
+from .itertesting_types import CommandContractIssue, DeterministicRepro
 from .types import (
     AuditRow,
     DeliverableRefreshStatus,
@@ -52,6 +53,60 @@ _FIXED_PATHOLOGY_IDS = {
     "frame-budget-timeout",
     "save-load-todos",
 }
+
+
+def deterministic_repro_for_issue(
+    issue: CommandContractIssue,
+) -> DeterministicRepro | None:
+    repro_id = f"{issue.issue_id}:repro"
+    if issue.issue_class == "target_drift":
+        return DeterministicRepro(
+            repro_id=repro_id,
+            issue_id=issue.issue_id,
+            command_id=issue.command_id,
+            repro_kind="unit",
+            entrypoint="ctest",
+            arguments=(
+                "--test-dir",
+                "build",
+                "--output-on-failure",
+                "-R",
+                "command_validation_test",
+            ),
+            expected_signal="validator rejects target drift before enqueue",
+            independently_runnable=True,
+        )
+    if issue.issue_class == "validation_gap":
+        return DeterministicRepro(
+            repro_id=repro_id,
+            issue_id=issue.issue_id,
+            command_id=issue.command_id,
+            repro_kind="headless",
+            entrypoint="tests/headless/malformed-payload.sh",
+            expected_signal="gateway returns INVALID_ARGUMENT and does not forward the batch",
+            independently_runnable=True,
+        )
+    if issue.issue_class == "inert_dispatch":
+        return DeterministicRepro(
+            repro_id=repro_id,
+            issue_id=issue.issue_id,
+            command_id=issue.command_id,
+            repro_kind="headless",
+            entrypoint="tests/headless/test_command_contract_hardening.sh",
+            expected_signal="foundational blocker is reported separately from ordinary Itertesting guidance",
+            independently_runnable=True,
+        )
+    return None
+
+
+def deterministic_repros_for_issues(
+    issues: tuple[CommandContractIssue, ...],
+) -> tuple[DeterministicRepro, ...]:
+    return tuple(
+        repro
+        for repro in (deterministic_repro_for_issue(issue) for issue in issues)
+        if repro is not None
+    )
 
 
 @dataclass(frozen=True)

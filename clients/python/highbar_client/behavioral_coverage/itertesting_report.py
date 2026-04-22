@@ -200,23 +200,94 @@ def render_run_report(
             ]
         )
 
+    if run.contract_health_decision is not None:
+        lines.extend(
+            [
+                "## Contract Health",
+                "",
+                f"- Status: {run.contract_health_decision.decision_status}",
+                (
+                    "- Stop or proceed: "
+                    f"{run.contract_health_decision.stop_or_proceed}"
+                ),
+                f"- Summary: {run.contract_health_decision.summary_message}",
+                (
+                    "- Blocking issue count: "
+                    f"{len(run.contract_health_decision.blocking_issue_ids)}"
+                ),
+                (
+                    "- Guidance mode: "
+                    f"{run.improvement_eligibility.guidance_mode if run.improvement_eligibility else 'normal'}"
+                ),
+            ]
+        )
+        if run.contract_health_decision.resolved_issue_ids:
+            lines.append(
+                "- Resolved issue ids: "
+                + ", ".join(run.contract_health_decision.resolved_issue_ids)
+            )
+        lines.append("")
+
+    if run.contract_issues:
+        repros = {item.issue_id: item for item in run.deterministic_repros}
+        lines.extend(["## Foundational Blockers", ""])
+        for issue in run.contract_issues:
+            lines.extend(
+                [
+                    (
+                        f"- `{issue.issue_id}` — {issue.issue_class} — {issue.status} — "
+                        f"{issue.primary_cause}"
+                    ),
+                    f"  evidence: {issue.evidence_summary}",
+                ]
+            )
+            repro = repros.get(issue.issue_id)
+            if repro is not None:
+                args = " ".join(repro.arguments)
+                command = " ".join(part for part in (repro.entrypoint, args) if part)
+                lines.extend(
+                    [
+                        f"  repro: `{command}`",
+                        f"  expected signal: {repro.expected_signal}",
+                    ]
+                )
+            else:
+                lines.append(
+                    "  repro: no deterministic repro available; pattern review required"
+                )
+        lines.append("")
+
     lines.extend(["## Unverified Direct Commands", ""])
     unverified_direct = [
         record
         for record in run.command_records
         if _is_direct(record) and not record.verified
     ]
+    guidance_mode = (
+        run.improvement_eligibility.guidance_mode
+        if run.improvement_eligibility is not None
+        else "normal"
+    )
+    if guidance_mode != "normal":
+        lines.append(
+            "- Ordinary improvement guidance is withheld while contract health is not ready; downstream findings remain visible for context."
+        )
     if unverified_direct:
         causes = {
             item.command_id: item.primary_cause for item in run.failure_classifications
         }
         for record in unverified_direct:
-            lines.append(
+            base = (
                 f"- `{record.command_id}` — {record.attempt_status} — "
                 f"{causes.get(record.command_id, 'unclassified')} — "
-                f"{record.blocking_reason or 'no reason recorded'} — "
-                f"next action: {record.improvement_note or 'no next action recorded'}"
+                f"{record.blocking_reason or 'no reason recorded'}"
             )
+            if guidance_mode == "normal":
+                lines.append(
+                    f"{base} — next action: {record.improvement_note or 'no next action recorded'}"
+                )
+            else:
+                lines.append(f"{base} — secondary finding only")
     else:
         lines.append("- None. All directly verifiable commands were verified in this run.")
 

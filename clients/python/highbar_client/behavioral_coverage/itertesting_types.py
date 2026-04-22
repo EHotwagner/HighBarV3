@@ -32,6 +32,36 @@ FailureSourceScope = Literal[
     "verification_rule",
     "command_outcome",
 ]
+ContractIssueSourceScope = Literal[
+    "validator",
+    "queue_normalization",
+    "dispatcher",
+    "run_classification",
+    "repro_followup",
+]
+FoundationalIssueClass = Literal[
+    "target_drift",
+    "validation_gap",
+    "inert_dispatch",
+    "needs_pattern_review",
+]
+ContractIssueStatus = Literal[
+    "open",
+    "reproduced",
+    "resolved_in_later_run",
+    "needs_new_pattern_review",
+]
+ContractHealthStatus = Literal[
+    "ready_for_itertesting",
+    "blocked_foundational",
+    "needs_pattern_review",
+]
+ContractHealthAction = Literal[
+    "stop_for_repair",
+    "proceed_with_improvement",
+    "proceed_but_flag_review",
+]
+GuidanceMode = Literal["withheld", "secondary_only", "normal"]
 ActionType = Literal[
     "setup-change",
     "target-change",
@@ -56,6 +86,7 @@ CampaignFinalStatus = Literal[
     "runtime_guardrail",
     "aborted",
     "interrupted",
+    "blocked_foundational",
 ]
 RetryIntensityName = Literal["quick", "standard", "deep"]
 StopReason = Literal[
@@ -64,6 +95,7 @@ StopReason = Literal[
     "budget_exhausted",
     "runtime_guardrail",
     "interrupted",
+    "foundational_blocked",
 ]
 
 
@@ -133,6 +165,53 @@ class FailureCauseClassification:
     primary_cause: FailureCause
     supporting_detail: str
     source_scope: FailureSourceScope
+
+
+@dataclass(frozen=True)
+class DeterministicRepro:
+    repro_id: str
+    issue_id: str
+    command_id: str
+    repro_kind: Literal["unit", "integration", "headless", "pytest", "audit"]
+    entrypoint: str
+    expected_signal: str
+    independently_runnable: bool
+    arguments: tuple[str, ...] = ()
+    artifact_path: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CommandContractIssue:
+    issue_id: str
+    run_id: str
+    command_id: str
+    issue_class: FoundationalIssueClass
+    primary_cause: str
+    evidence_summary: str
+    source_scope: ContractIssueSourceScope
+    blocks_improvement: bool
+    status: ContractIssueStatus
+
+
+@dataclass(frozen=True)
+class ContractHealthDecision:
+    run_id: str
+    decision_status: ContractHealthStatus
+    blocking_issue_ids: tuple[str, ...]
+    summary_message: str
+    stop_or_proceed: ContractHealthAction
+    recorded_at: str
+    resolved_issue_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ImprovementEligibility:
+    run_id: str
+    contract_health_status: ContractHealthStatus
+    guidance_mode: GuidanceMode
+    visible_downstream_findings: tuple[str, ...]
+    normal_improvement_actions: tuple[str, ...]
+    withheld_reason: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -240,6 +319,10 @@ class RunSummary:
     transport_interruption_total: int = 0
     predicate_or_evidence_gap_total: int = 0
     behavioral_failure_total: int = 0
+    foundational_blocker_total: int = 0
+    pattern_review_total: int = 0
+    contract_health_status: ContractHealthStatus = "ready_for_itertesting"
+    improvement_guidance_mode: GuidanceMode = "normal"
 
 
 @dataclass(frozen=True)
@@ -274,6 +357,10 @@ class ItertestingRun:
     channel_health: ChannelHealthOutcome | None = None
     verification_rules: tuple[ArmVerificationRule, ...] = ()
     failure_classifications: tuple[FailureCauseClassification, ...] = ()
+    contract_issues: tuple[CommandContractIssue, ...] = ()
+    deterministic_repros: tuple[DeterministicRepro, ...] = ()
+    contract_health_decision: ContractHealthDecision | None = None
+    improvement_eligibility: ImprovementEligibility | None = None
 
 
 @dataclass(frozen=True)
@@ -382,6 +469,61 @@ def _failure_classification_from_dict(
     )
 
 
+def _deterministic_repro_from_dict(payload: dict[str, Any]) -> DeterministicRepro:
+    return DeterministicRepro(
+        repro_id=payload["repro_id"],
+        issue_id=payload["issue_id"],
+        command_id=payload["command_id"],
+        repro_kind=payload["repro_kind"],
+        entrypoint=payload["entrypoint"],
+        expected_signal=payload["expected_signal"],
+        independently_runnable=payload.get("independently_runnable", True),
+        arguments=tuple(payload.get("arguments", ())),
+        artifact_path=payload.get("artifact_path"),
+    )
+
+
+def _contract_issue_from_dict(payload: dict[str, Any]) -> CommandContractIssue:
+    return CommandContractIssue(
+        issue_id=payload["issue_id"],
+        run_id=payload["run_id"],
+        command_id=payload["command_id"],
+        issue_class=payload["issue_class"],
+        primary_cause=payload["primary_cause"],
+        evidence_summary=payload.get("evidence_summary", ""),
+        source_scope=payload.get("source_scope", "run_classification"),
+        blocks_improvement=payload.get("blocks_improvement", True),
+        status=payload.get("status", "open"),
+    )
+
+
+def _contract_health_decision_from_dict(
+    payload: dict[str, Any],
+) -> ContractHealthDecision:
+    return ContractHealthDecision(
+        run_id=payload["run_id"],
+        decision_status=payload["decision_status"],
+        blocking_issue_ids=tuple(payload.get("blocking_issue_ids", ())),
+        summary_message=payload.get("summary_message", ""),
+        stop_or_proceed=payload.get("stop_or_proceed", "proceed_with_improvement"),
+        recorded_at=payload["recorded_at"],
+        resolved_issue_ids=tuple(payload.get("resolved_issue_ids", ())),
+    )
+
+
+def _improvement_eligibility_from_dict(
+    payload: dict[str, Any],
+) -> ImprovementEligibility:
+    return ImprovementEligibility(
+        run_id=payload["run_id"],
+        contract_health_status=payload["contract_health_status"],
+        guidance_mode=payload.get("guidance_mode", "normal"),
+        visible_downstream_findings=tuple(payload.get("visible_downstream_findings", ())),
+        normal_improvement_actions=tuple(payload.get("normal_improvement_actions", ())),
+        withheld_reason=payload.get("withheld_reason"),
+    )
+
+
 def _improvement_action_from_dict(payload: dict[str, Any]) -> ImprovementAction:
     return ImprovementAction(
         action_id=payload["action_id"],
@@ -434,6 +576,12 @@ def _summary_from_dict(payload: dict[str, Any]) -> RunSummary:
             "predicate_or_evidence_gap_total", 0
         ),
         behavioral_failure_total=payload.get("behavioral_failure_total", 0),
+        foundational_blocker_total=payload.get("foundational_blocker_total", 0),
+        pattern_review_total=payload.get("pattern_review_total", 0),
+        contract_health_status=payload.get(
+            "contract_health_status", "ready_for_itertesting"
+        ),
+        improvement_guidance_mode=payload.get("improvement_guidance_mode", "normal"),
     )
 
 
@@ -498,5 +646,23 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
         failure_classifications=tuple(
             _failure_classification_from_dict(item)
             for item in payload.get("failure_classifications", ())
+        ),
+        contract_issues=tuple(
+            _contract_issue_from_dict(item)
+            for item in payload.get("contract_issues", ())
+        ),
+        deterministic_repros=tuple(
+            _deterministic_repro_from_dict(item)
+            for item in payload.get("deterministic_repros", ())
+        ),
+        contract_health_decision=(
+            _contract_health_decision_from_dict(payload["contract_health_decision"])
+            if payload.get("contract_health_decision")
+            else None
+        ),
+        improvement_eligibility=(
+            _improvement_eligibility_from_dict(payload["improvement_eligibility"])
+            if payload.get("improvement_eligibility")
+            else None
         ),
     )

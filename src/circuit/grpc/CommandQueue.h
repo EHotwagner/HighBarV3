@@ -28,6 +28,7 @@ class Counters;
 // Push returns.
 struct QueuedCommand {
 	std::string session_id;
+	std::int32_t authoritative_target_unit_id = 0;
 	::highbar::v1::AICommand command;
 };
 

@@ -7,8 +7,10 @@ from highbar_client.behavioral_coverage.itertesting_types import (
     FixtureProvisioningResult,
 )
 from highbar_client.behavioral_coverage.live_failure_classification import (
+    classify_foundational_issue,
     classify_failure_cause,
     default_live_fixture_profile,
+    is_intentionally_effect_free,
     default_verification_rules,
     missing_fixture_classes_for_command,
 )
@@ -77,3 +79,41 @@ def test_transport_interruption_overrides_other_failure_causes():
 
     assert classification.primary_cause == "transport_interruption"
     assert classification.source_scope == "channel_health"
+
+
+def test_target_drift_is_promoted_to_foundational_issue():
+    record = CommandVerificationRecord(
+        command_id="cmd-move-unit",
+        command_name="move_unit",
+        category="channel_a_command",
+        attempt_status="failed",
+        verification_mode="natural",
+        evidence_kind="none",
+        verified=False,
+        source_run_id="run-1",
+        blocking_reason="target_drift: batch target 4 disagreed with command unit 9",
+    )
+
+    issue = classify_foundational_issue(record)
+
+    assert issue is not None
+    assert issue[0] == "target_drift"
+
+
+def test_intentionally_effect_free_commands_do_not_become_inert_dispatch():
+    record = CommandVerificationRecord(
+        command_id="cmd-stop",
+        command_name="stop",
+        category="channel_a_command",
+        attempt_status="inconclusive",
+        verification_mode="natural",
+        evidence_kind="dispatch-only",
+        verified=False,
+        source_run_id="run-1",
+        blocking_reason="dispatch observed but direct evidence remained ambiguous",
+    )
+
+    issue = classify_foundational_issue(record)
+
+    assert is_intentionally_effect_free("cmd-stop") is True
+    assert issue is None

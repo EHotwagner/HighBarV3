@@ -61,6 +61,38 @@ std::uint64_t NowMicros() {
 		duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
 }
 
+bool IsGameWideCommand(const ::highbar::v1::AICommand& cmd) {
+	using C = ::highbar::v1::AICommand;
+	switch (cmd.command_case()) {
+	case C::kSendTextMessage:
+	case C::kSetLastPosMessage:
+	case C::kPauseTeam:
+	case C::kInitPath:
+	case C::kGetApproxLength:
+	case C::kGetNextWaypoint:
+	case C::kFreePath:
+	case C::kCallLuaRules:
+	case C::kCallLuaUi:
+	case C::kSetMyIncomeShareDirect:
+	case C::kSetShareLevel:
+	case C::kDrawAddPoint:
+	case C::kDrawAddLine:
+	case C::kDrawRemovePoint:
+	case C::kCreateSplineFigure:
+	case C::kCreateLineFigure:
+	case C::kSetFigurePosition:
+	case C::kSetFigureColor:
+	case C::kRemoveFigure:
+	case C::kDrawUnit:
+	case C::kGiveMeNewUnit:
+	case C::kSendResources:
+	case C::kGiveMe:
+		return true;
+	default:
+		return false;
+	}
+}
+
 }  // namespace
 
 CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
@@ -710,95 +742,11 @@ void CGrpcGatewayModule::DrainCommandQueue() {
 	if (drained == 0) return;
 
 	for (auto& entry : batch) {
-		// The proto CommandBatch carried target_unit_id; the per-command
-		// proto arms redundantly re-carry unit_id. We prefer the
-		// sub-command's unit_id when the arm has one (covers the
-		// heterogeneous-batch escape hatch).
+		// The validator accepted a single authoritative batch target and
+		// that normalized target is preserved on the queue entry.
 		const auto& cmd = entry.command;
-		std::int32_t target_id = 0;
-		using C = ::highbar::v1::AICommand;
-		switch (cmd.command_case()) {
-		case C::kBuildUnit:       target_id = cmd.build_unit().unit_id(); break;
-		case C::kStop:            target_id = cmd.stop().unit_id(); break;
-		case C::kWait:            target_id = cmd.wait().unit_id(); break;
-		case C::kMoveUnit:        target_id = cmd.move_unit().unit_id(); break;
-		case C::kPatrol:          target_id = cmd.patrol().unit_id(); break;
-		case C::kFight:           target_id = cmd.fight().unit_id(); break;
-		case C::kAttack:          target_id = cmd.attack().unit_id(); break;
-		case C::kAttackArea:      target_id = cmd.attack_area().unit_id(); break;
-		case C::kGuard:           target_id = cmd.guard().unit_id(); break;
-		case C::kRepair:          target_id = cmd.repair().unit_id(); break;
-		case C::kReclaimUnit:     target_id = cmd.reclaim_unit().unit_id(); break;
-		case C::kReclaimInArea:   target_id = cmd.reclaim_in_area().unit_id(); break;
-		case C::kResurrectInArea: target_id = cmd.resurrect_in_area().unit_id(); break;
-		case C::kSelfDestruct:    target_id = cmd.self_destruct().unit_id(); break;
-		case C::kSetWantedMaxSpeed: target_id = cmd.set_wanted_max_speed().unit_id(); break;
-		case C::kSetFireState:    target_id = cmd.set_fire_state().unit_id(); break;
-		case C::kSetMoveState:    target_id = cmd.set_move_state().unit_id(); break;
-		// T039 — newly wired Channel A arms (see CommandDispatch.cpp).
-		case C::kDgun:               target_id = cmd.dgun().unit_id(); break;
-		case C::kCapture:            target_id = cmd.capture().unit_id(); break;
-		case C::kSetOnOff:           target_id = cmd.set_on_off().unit_id(); break;
-		case C::kSetRepeat:          target_id = cmd.set_repeat().unit_id(); break;
-		case C::kStockpile:          target_id = cmd.stockpile().unit_id(); break;
-		case C::kTimedWait:          target_id = cmd.timed_wait().unit_id(); break;
-		case C::kSquadWait:          target_id = cmd.squad_wait().unit_id(); break;
-		case C::kDeathWait:          target_id = cmd.death_wait().unit_id(); break;
-		case C::kGatherWait:         target_id = cmd.gather_wait().unit_id(); break;
-		case C::kReclaimArea:        target_id = cmd.reclaim_area().unit_id(); break;
-		case C::kReclaimFeature:     target_id = cmd.reclaim_feature().unit_id(); break;
-		case C::kRestoreArea:        target_id = cmd.restore_area().unit_id(); break;
-		case C::kResurrect:          target_id = cmd.resurrect().unit_id(); break;
-		case C::kCaptureArea:        target_id = cmd.capture_area().unit_id(); break;
-		case C::kSetBase:            target_id = cmd.set_base().unit_id(); break;
-		case C::kLoadUnits:          target_id = cmd.load_units().unit_id(); break;
-		case C::kLoadUnitsArea:      target_id = cmd.load_units_area().unit_id(); break;
-		case C::kLoadOnto:           target_id = cmd.load_onto().unit_id(); break;
-		case C::kUnloadUnit:         target_id = cmd.unload_unit().unit_id(); break;
-		case C::kUnloadUnitsArea:    target_id = cmd.unload_units_area().unit_id(); break;
-		case C::kSetTrajectory:      target_id = cmd.set_trajectory().unit_id(); break;
-		case C::kSetAutoRepairLevel: target_id = cmd.set_auto_repair_level().unit_id(); break;
-		case C::kSetIdleMode:        target_id = cmd.set_idle_mode().unit_id(); break;
-		// T040 — newly wired Channel B arms. Most have no per-unit
-		// binding (game-wide actions); use a sentinel id so the unit
-		// lookup below can be bypassed safely. Pick the first own unit
-		// as a stand-in target so DispatchCommand has a CCircuitUnit*
-		// to pass through (it ignores the unit param for these arms).
-		case C::kSendTextMessage:
-		case C::kSetLastPosMessage:
-		case C::kPauseTeam:
-		case C::kInitPath:
-		case C::kGetApproxLength:
-		case C::kGetNextWaypoint:
-		case C::kFreePath:
-		case C::kCallLuaRules:
-		case C::kCallLuaUi:
-		case C::kSetMyIncomeShareDirect:
-		case C::kSetShareLevel:
-		// T041 — Channel C drawer arms also game-wide.
-		case C::kDrawAddPoint:
-		case C::kDrawAddLine:
-		case C::kDrawRemovePoint:
-		case C::kCreateSplineFigure:
-		case C::kCreateLineFigure:
-		case C::kSetFigurePosition:
-		case C::kSetFigureColor:
-		case C::kRemoveFigure:
-		case C::kDrawUnit:
-		case C::kGiveMeNewUnit:
-		case C::kSendResources:
-		case C::kGiveMe: {
-			// Game-wide arms — use any own unit. -1 marks "no
-			// target needed"; the dispatcher loop below will skip the
-			// GetTeamUnit lookup when target_id <= 0.
-			target_id = -1;
-			break;
-		}
-		case C::kCustom:             target_id = cmd.custom().unit_id(); break;
-		case C::kGroupAddUnit:       target_id = cmd.group_add_unit().unit_id(); break;
-		case C::kGroupRemoveUnit:    target_id = cmd.group_remove_unit().unit_id(); break;
-		default: break;
-		}
+		std::int32_t target_id = entry.authoritative_target_unit_id;
+		if (IsGameWideCommand(cmd)) target_id = -1;
 		if (target_id == 0) continue;  // arm not recognised by switch
 
 		// target_id == -1 marks game-wide arms (Game / Pathing / Lua /

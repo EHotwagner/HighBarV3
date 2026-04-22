@@ -11,6 +11,7 @@ from .bootstrap import (
 from .itertesting_types import (
     ArmVerificationRule,
     ChannelHealthOutcome,
+    CommandContractIssue,
     CommandVerificationRecord,
     FailureCauseClassification,
     FixtureProvisioningResult,
@@ -51,6 +52,20 @@ _CHANNEL_FAILURE_SIGNALS = (
     "cmd-ch disconnected",
     "command channel disconnected",
 )
+_INTENTIONALLY_EFFECT_FREE = {
+    "cmd-stop",
+    "cmd-wait",
+    "cmd-timed-wait",
+    "cmd-squad-wait",
+    "cmd-death-wait",
+    "cmd-gather-wait",
+    "cmd-set-wanted-max-speed",
+    "cmd-set-fire-state",
+    "cmd-set-move-state",
+    "cmd-set-on-off",
+    "cmd-set-repeat",
+    "cmd-stockpile",
+}
 
 
 def default_live_fixture_profile() -> LiveFixtureProfile:
@@ -137,6 +152,141 @@ def affected_commands_for_missing_fixtures(
 def is_channel_failure_signal(detail: str | None) -> bool:
     lowered = (detail or "").lower()
     return any(signal in lowered for signal in _CHANNEL_FAILURE_SIGNALS)
+
+
+def is_intentionally_effect_free(command_id: str) -> bool:
+    return command_id in _INTENTIONALLY_EFFECT_FREE
+
+
+def _issue_source_scope(issue_class: str) -> str:
+    if issue_class == "target_drift":
+        return "validator"
+    if issue_class == "validation_gap":
+        return "run_classification"
+    if issue_class == "inert_dispatch":
+        return "dispatcher"
+    return "repro_followup"
+
+
+def classify_foundational_issue(
+    record: CommandVerificationRecord,
+    live_row: dict | None = None,
+) -> tuple[str, str] | None:
+    detail = " ".join(
+        part
+        for part in (
+            record.blocking_reason or "",
+            record.evidence_summary or "",
+            (live_row or {}).get("error", ""),
+            (live_row or {}).get("evidence", ""),
+        )
+        if part
+    ).strip()
+    lowered = detail.lower()
+
+    if any(
+        token in lowered
+        for token in (
+            "target_drift",
+            "target drift",
+            "mismatched target_unit_id",
+            "conflicting unit ids",
+            "batch target",
+        )
+    ):
+        return "target_drift", detail or "batch target drift reached the workflow"
+
+    if is_intentionally_effect_free(record.command_id):
+        return None
+
+    if any(
+        token in lowered
+        for token in ("needs pattern review", "needs_pattern_review", "new foundational pattern")
+    ):
+        return "needs_pattern_review", detail or "foundational issue needs a new pattern review"
+
+    if any(
+        token in lowered
+        for token in (
+            "validation_gap",
+            "validation gap",
+            "invalid_argument",
+            "non-finite",
+            "malformed",
+            "semantic validation",
+        )
+    ):
+        return "validation_gap", detail or "semantically invalid command reached late handling"
+
+    if live_row is not None and (
+        (live_row or {}).get("error") in {"dispatcher_rejected", "validation_gap"}
+        and (live_row or {}).get("dispatched") != "true"
+    ):
+        return "validation_gap", detail or "dispatcher rejected a command the validator did not reject"
+
+    if live_row is not None and (
+        (live_row or {}).get("error") == "effect_not_observed"
+        or "effect_not_observed" in lowered
+        or "inert dispatch" in lowered
+        or "no-op" in lowered
+    ):
+        return "inert_dispatch", detail or "dispatch accepted the command without a durable effect"
+
+    return None
+
+
+def normalize_contract_issues(
+    *,
+    run_id: str,
+    records: tuple[CommandVerificationRecord, ...],
+    live_rows: list[dict] | None = None,
+    previous_issues: tuple[CommandContractIssue, ...] = (),
+) -> tuple[CommandContractIssue, ...]:
+    previous_by_key = {
+        (item.command_id, item.issue_class): item for item in previous_issues
+    }
+    row_map = {item["arm_name"]: item for item in (live_rows or [])}
+    seen: set[tuple[str, str]] = set()
+    issues: list[CommandContractIssue] = []
+    for record in records:
+        classified = classify_foundational_issue(
+            record,
+            live_row=row_map.get(record.command_name),
+        )
+        if classified is None:
+            continue
+        issue_class, cause = classified
+        key = (record.command_id, issue_class)
+        if key in seen:
+            continue
+        seen.add(key)
+        previous = previous_by_key.get(key)
+        status = (
+            "needs_new_pattern_review"
+            if issue_class == "needs_pattern_review"
+            else "reproduced"
+            if previous is not None and previous.status != "resolved_in_later_run"
+            else "open"
+        )
+        detail = (
+            record.blocking_reason
+            or record.evidence_summary
+            or "foundational command-contract issue detected"
+        )
+        issues.append(
+            CommandContractIssue(
+                issue_id=f"{run_id}:{record.command_id}:{issue_class}",
+                run_id=run_id,
+                command_id=record.command_id,
+                issue_class=issue_class,  # type: ignore[arg-type]
+                primary_cause=cause,
+                evidence_summary=detail,
+                source_scope=_issue_source_scope(issue_class),  # type: ignore[arg-type]
+                blocks_improvement=True,
+                status=status,  # type: ignore[arg-type]
+            )
+        )
+    return tuple(sorted(issues, key=lambda item: (item.command_id, item.issue_class)))
 
 
 def classify_failure_cause(

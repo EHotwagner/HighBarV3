@@ -53,6 +53,12 @@ dist/
 node_modules/
 *.log
 .env*
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
 reports/itertesting/
 build/reports/004-*.md
 build/reports/004-*.log

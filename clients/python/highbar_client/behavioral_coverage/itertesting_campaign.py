@@ -135,6 +135,7 @@ def _stop_message(stop_reason: str) -> str:
         "budget_exhausted": "Configured improvement run budget was exhausted.",
         "runtime_guardrail": "Runtime governance guardrail ended the campaign.",
         "interrupted": "Campaign was interrupted by external termination.",
+        "foundational_blocked": "Foundational command-contract blockers must be repaired before Itertesting continues.",
     }
     return messages.get(stop_reason, "Campaign stopped.")
 
@@ -201,6 +202,7 @@ def final_status_for_decision(stop_reason: str) -> str:
         "budget_exhausted": "budget_exhausted",
         "runtime_guardrail": "runtime_guardrail",
         "interrupted": "interrupted",
+        "foundational_blocked": "blocked_foundational",
     }
     return mapping.get(stop_reason, "aborted")
 

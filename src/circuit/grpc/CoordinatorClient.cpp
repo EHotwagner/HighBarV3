@@ -142,6 +142,8 @@ void CoordinatorClient::CommandReaderLoop(CommandQueue* sink) {
 				for (const auto& cmd : batch.commands()) {
 					QueuedCommand q;
 					q.session_id = plugin_id_ + "-cmd-ch";
+					q.authoritative_target_unit_id =
+						static_cast<std::int32_t>(batch.target_unit_id());
 					q.command = cmd;
 					if (!sink->TryPush(std::move(q))) {
 						// Queue full — drop and log.

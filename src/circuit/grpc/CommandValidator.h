@@ -44,6 +44,17 @@ public:
 	ValidationResult ValidateBatch(const ::highbar::v1::CommandBatch& batch) const;
 
 private:
+	// Does this command bind to a specific unit? Returns true for
+	// unit-bound arms and fills `unit_id`; game-wide arms return false.
+	bool TryCommandUnitId(const ::highbar::v1::AICommand& cmd,
+	                      std::int32_t* unit_id) const;
+
+	// Enforce the authoritative batch-target contract for unit-bound
+	// commands before the batch reaches the engine-thread queue.
+	bool ValidateCommandTarget(const ::highbar::v1::AICommand& cmd,
+	                           std::int32_t batch_target_unit_id,
+	                           std::string* error) const;
+
 	// Is `unit_id` a live unit owned by our team? Destroyed / enemy-owned
 	// / never-existed → false.
 	bool OwnsLiveUnit(std::int32_t unit_id) const;

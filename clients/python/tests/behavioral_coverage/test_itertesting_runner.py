@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import highbar_client.behavioral_coverage as behavioral_coverage
 from highbar_client.behavioral_coverage.itertesting_campaign import decide_stop
 from highbar_client.behavioral_coverage.itertesting_retry_policy import normalize_retry_policy
 from highbar_client.behavioral_coverage.itertesting_runner import (
@@ -45,6 +46,7 @@ def test_manifest_validation_and_round_trip(tmp_path):
 
     assert loaded.run_id == run.run_id
     assert len(loaded.command_records) == len(REGISTRY)
+    assert loaded.contract_health_decision is not None
 
 
 def test_run_id_collision_uses_deterministic_suffix(tmp_path):
@@ -296,6 +298,127 @@ def test_live_rows_promote_channel_failures_to_run_level_health_outcome(tmp_path
     assert run.channel_health.first_failure_stage == "dispatch"
     causes = {item.command_id: item for item in run.failure_classifications}
     assert causes["cmd-fight"].primary_cause == "transport_interruption"
+
+
+def test_foundational_blockers_disable_normal_improvement_guidance(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "move_unit",
+                "category": REGISTRY["move_unit"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "batch target 4 disagreed with command unit 9",
+                "error": "target_drift",
+            }
+        ],
+    )
+
+    assert run.contract_health_decision is not None
+    assert run.contract_health_decision.decision_status == "blocked_foundational"
+    assert run.improvement_eligibility is not None
+    assert run.improvement_eligibility.guidance_mode == "secondary_only"
+    assert run.contract_issues
+    assert run.deterministic_repros
+    assert not run.improvement_actions
+
+
+def test_pattern_review_blockers_have_no_normal_guidance_or_repro(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "move_unit",
+                "category": REGISTRY["move_unit"].category,
+                "dispatched": "true",
+                "verified": "false",
+                "evidence": "new foundational pattern needs pattern review",
+                "error": "needs_pattern_review",
+            }
+        ],
+    )
+
+    assert run.contract_health_decision is not None
+    assert run.contract_health_decision.decision_status == "needs_pattern_review"
+    assert run.improvement_eligibility is not None
+    assert run.improvement_eligibility.guidance_mode == "withheld"
+    assert not run.deterministic_repros
+
+
+def test_resolved_contract_issues_are_visible_in_later_run(tmp_path):
+    first = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "move_unit",
+                "category": REGISTRY["move_unit"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "batch target 4 disagreed with command unit 9",
+                "error": "target_drift",
+            }
+        ],
+    )
+
+    second = build_run(
+        campaign_id="campaign-1",
+        sequence_index=1,
+        reports_dir=tmp_path,
+        previous_run=first,
+        live_rows=[
+            {
+                "arm_name": "move_unit",
+                "category": REGISTRY["move_unit"].category,
+                "dispatched": "true",
+                "verified": "true",
+                "evidence": "move_unit verified after validator fix",
+                "error": "",
+            }
+        ],
+    )
+
+    assert second.contract_health_decision is not None
+    assert second.contract_health_decision.decision_status == "ready_for_itertesting"
+    assert second.contract_health_decision.resolved_issue_ids == (
+        first.contract_issues[0].issue_id,
+    )
+
+
+def test_campaign_stops_immediately_when_contract_health_is_blocked(tmp_path, monkeypatch):
+    def fake_collect_live_rows(_args):
+        return [
+            {
+                "arm_name": "move_unit",
+                "category": REGISTRY["move_unit"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "batch target 4 disagreed with command unit 9",
+                "error": "target_drift",
+            }
+        ]
+
+    monkeypatch.setattr(behavioral_coverage, "collect_live_rows", fake_collect_live_rows)
+
+    campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="standard",
+        max_improvement_runs=3,
+        allow_cheat_escalation=False,
+        natural_first=True,
+        skip_live=False,
+        endpoint="unix:/tmp/unused.sock",
+    )
+
+    assert len(runs) == 1
+    assert campaign.stop_decision is not None
+    assert campaign.stop_decision.stop_reason == "foundational_blocked"
 
 
 def test_summary_tracks_tuned_rule_count(tmp_path):

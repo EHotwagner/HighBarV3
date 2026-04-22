@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .audit_inventory import ENGINE_PIN, GAMETYPE_PIN, repo_root
+from .audit_runner import deterministic_repros_for_issues
 from .itertesting_campaign import (
     apply_progress_metrics_to_run,
     decide_stop,
@@ -29,9 +30,13 @@ from .itertesting_types import (
     ArmVerificationRule,
     CampaignStopDecision,
     ChannelHealthOutcome,
+    CommandContractIssue,
     CommandVerificationRecord,
+    ContractHealthDecision,
+    DeterministicRepro,
     FailureCauseClassification,
     FixtureProvisioningResult,
+    ImprovementEligibility,
     ImprovementAction,
     ImprovementInstruction,
     ItertestingCampaign,
@@ -50,6 +55,7 @@ from .live_failure_classification import (
     default_live_fixture_profile,
     default_verification_rules,
     is_channel_failure_signal,
+    normalize_contract_issues,
 )
 from .registry import REGISTRY
 
@@ -724,6 +730,8 @@ def _summary_for_run(
     failure_classifications: tuple[FailureCauseClassification, ...],
     channel_health: ChannelHealthOutcome,
     verification_rules: tuple[ArmVerificationRule, ...],
+    contract_issues: tuple[CommandContractIssue, ...],
+    improvement_eligibility: ImprovementEligibility,
 ) -> RunSummary:
     previous_map = {}
     if previous_run is not None:
@@ -789,7 +797,108 @@ def _summary_for_run(
         transport_interruption_total=cause_totals["transport_interruption"],
         predicate_or_evidence_gap_total=cause_totals["predicate_or_evidence_gap"],
         behavioral_failure_total=cause_totals["behavioral_failure"],
+        foundational_blocker_total=len(contract_issues),
+        pattern_review_total=sum(
+            1 for item in contract_issues if item.issue_class == "needs_pattern_review"
+        ),
+        contract_health_status=improvement_eligibility.contract_health_status,
+        improvement_guidance_mode=improvement_eligibility.guidance_mode,
     )
+
+
+def _resolved_issue_ids(
+    current_issues: tuple[CommandContractIssue, ...],
+    previous_run: ItertestingRun | None,
+) -> tuple[str, ...]:
+    if previous_run is None:
+        return ()
+    current_keys = {
+        (item.command_id, item.issue_class) for item in current_issues
+    }
+    resolved = [
+        item.issue_id
+        for item in previous_run.contract_issues
+        if (item.command_id, item.issue_class) not in current_keys
+        and item.status != "resolved_in_later_run"
+    ]
+    return tuple(sorted(resolved))
+
+
+def _contract_health_for_run(
+    *,
+    run_id: str,
+    contract_issues: tuple[CommandContractIssue, ...],
+    deterministic_repros: tuple[DeterministicRepro, ...],
+    previous_run: ItertestingRun | None,
+    failure_classifications: tuple[FailureCauseClassification, ...],
+    actions: tuple[ImprovementAction, ...],
+) -> tuple[ContractHealthDecision, ImprovementEligibility]:
+    blocking = tuple(item for item in contract_issues if item.blocks_improvement)
+    resolved_issue_ids = _resolved_issue_ids(contract_issues, previous_run)
+    repro_issue_ids = {item.issue_id for item in deterministic_repros}
+    needs_pattern_review = any(
+        item.issue_class == "needs_pattern_review" or item.issue_id not in repro_issue_ids
+        for item in blocking
+    )
+    recorded_at = format_timestamp(utc_now())
+    visible_downstream_findings = tuple(
+        f"{item.command_id}:{item.primary_cause}" for item in failure_classifications
+    )
+    if needs_pattern_review and blocking:
+        decision = ContractHealthDecision(
+            run_id=run_id,
+            decision_status="needs_pattern_review",
+            blocking_issue_ids=tuple(item.issue_id for item in blocking),
+            summary_message="Foundational command-contract blockers require pattern review before normal Itertesting guidance.",
+            stop_or_proceed="proceed_but_flag_review",
+            recorded_at=recorded_at,
+            resolved_issue_ids=resolved_issue_ids,
+        )
+        eligibility = ImprovementEligibility(
+            run_id=run_id,
+            contract_health_status=decision.decision_status,
+            guidance_mode="withheld",
+            visible_downstream_findings=visible_downstream_findings,
+            normal_improvement_actions=(),
+            withheld_reason="A foundational blocker has no deterministic repro and needs pattern review.",
+        )
+        return decision, eligibility
+    if blocking:
+        decision = ContractHealthDecision(
+            run_id=run_id,
+            decision_status="blocked_foundational",
+            blocking_issue_ids=tuple(item.issue_id for item in blocking),
+            summary_message="Foundational command-contract blockers were detected. Repair them before normal Itertesting tuning.",
+            stop_or_proceed="stop_for_repair",
+            recorded_at=recorded_at,
+            resolved_issue_ids=resolved_issue_ids,
+        )
+        eligibility = ImprovementEligibility(
+            run_id=run_id,
+            contract_health_status=decision.decision_status,
+            guidance_mode="secondary_only",
+            visible_downstream_findings=visible_downstream_findings,
+            normal_improvement_actions=(),
+            withheld_reason="Normal improvement guidance is withheld while foundational blockers remain open.",
+        )
+        return decision, eligibility
+    decision = ContractHealthDecision(
+        run_id=run_id,
+        decision_status="ready_for_itertesting",
+        blocking_issue_ids=(),
+        summary_message="No foundational command-contract blockers were detected.",
+        stop_or_proceed="proceed_with_improvement",
+        recorded_at=recorded_at,
+        resolved_issue_ids=resolved_issue_ids,
+    )
+    eligibility = ImprovementEligibility(
+        run_id=run_id,
+        contract_health_status=decision.decision_status,
+        guidance_mode="normal",
+        visible_downstream_findings=visible_downstream_findings,
+        normal_improvement_actions=tuple(item.details for item in actions),
+    )
+    return decision, eligibility
 
 
 def _comparison_for_run(
@@ -894,12 +1003,32 @@ def build_run(
         channel_health,
         verification_rules,
     )
-    actions = _build_actions(
+    provisional_actions = _build_actions(
         command_records,
         current_run_id=run_id,
         next_run_token=f"{campaign_id}-next-{sequence_index + 1}",
         cheat_enabled=cheat_enabled,
         prior_instructions=loaded_instructions,
+    )
+    contract_issues = normalize_contract_issues(
+        run_id=run_id,
+        records=command_records,
+        live_rows=live_rows,
+        previous_issues=previous_run.contract_issues if previous_run is not None else (),
+    )
+    deterministic_repros = deterministic_repros_for_issues(contract_issues)
+    contract_health_decision, improvement_eligibility = _contract_health_for_run(
+        run_id=run_id,
+        contract_issues=contract_issues,
+        deterministic_repros=deterministic_repros,
+        previous_run=previous_run,
+        failure_classifications=failure_classifications,
+        actions=provisional_actions,
+    )
+    actions = (
+        provisional_actions
+        if improvement_eligibility.guidance_mode == "normal"
+        else ()
     )
     summary = _summary_for_run(
         run_id,
@@ -908,6 +1037,8 @@ def build_run(
         failure_classifications,
         channel_health,
         verification_rules,
+        contract_issues,
+        improvement_eligibility,
     )
     setup_mode = (
         "cheat-assisted"
@@ -933,6 +1064,10 @@ def build_run(
         channel_health=channel_health,
         verification_rules=verification_rules,
         failure_classifications=failure_classifications,
+        contract_issues=contract_issues,
+        deterministic_repros=deterministic_repros,
+        contract_health_decision=contract_health_decision,
+        improvement_eligibility=improvement_eligibility,
     )
     comparison = _comparison_for_run(run, previous_run)
     return replace(run, previous_run_comparison=comparison)
@@ -1014,6 +1149,11 @@ def update_instruction_store(
     run: ItertestingRun,
     prior_instructions: dict[str, ImprovementInstruction],
 ) -> tuple[dict[str, ImprovementInstruction], tuple[ImprovementInstruction, ...]]:
+    if (
+        run.improvement_eligibility is not None
+        and run.improvement_eligibility.guidance_mode != "normal"
+    ):
+        return dict(prior_instructions), ()
     updated = dict(prior_instructions)
     action_map = {item.command_id: item for item in run.improvement_actions}
     timestamp = run.completed_at or run.started_at
@@ -1155,12 +1295,29 @@ def run_campaign(
             disproportionate_warning=warning,
         )
         budget_exhausted = sequence_index >= effective_runs
-        stop_decision = decide_stop(
-            policy=policy,
-            snapshots=candidate_snapshots,
-            final_run_id=run.run_id,
-            budget_exhausted=budget_exhausted,
-        )
+        if (
+            run.contract_health_decision is not None
+            and run.contract_health_decision.decision_status != "ready_for_itertesting"
+        ):
+            stop_decision = CampaignStopDecision(
+                decision_id=f"stop-{utc_now().strftime('%Y%m%dT%H%M%SZ')}",
+                campaign_id=policy.campaign_id,
+                final_run_id=run.run_id,
+                stop_reason="foundational_blocked",
+                direct_verified_total=run.summary.direct_verified_total,
+                target_direct_verified=policy.direct_target_min,
+                target_met=False,
+                runtime_elapsed_seconds=elapsed_seconds,
+                message=run.contract_health_decision.summary_message,
+                created_at=format_timestamp(utc_now()),
+            )
+        else:
+            stop_decision = decide_stop(
+                policy=policy,
+                snapshots=candidate_snapshots,
+                final_run_id=run.run_id,
+                budget_exhausted=budget_exhausted,
+            )
         if (
             stop_decision is not None
             and stop_decision.stop_reason == "stalled"

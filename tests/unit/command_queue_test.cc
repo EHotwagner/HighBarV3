@@ -28,9 +28,12 @@ using circuit::grpc::CommandQueue;
 using circuit::grpc::Counters;
 using circuit::grpc::QueuedCommand;
 
-QueuedCommand MakeCommand(const std::string& session, std::int32_t unit_id) {
+QueuedCommand MakeCommand(const std::string& session,
+                          std::int32_t authoritative_target_unit_id,
+                          std::int32_t unit_id) {
 	QueuedCommand q;
 	q.session_id = session;
+	q.authoritative_target_unit_id = authoritative_target_unit_id;
 	// Use MoveUnit as a convenient marker since it carries unit_id.
 	auto* move = q.command.mutable_move_unit();
 	move->set_unit_id(unit_id);
@@ -46,7 +49,7 @@ TEST(CommandQueue, FifoDrainPreservesOrder) {
 	Counters c;
 	CommandQueue q(&c, /*capacity=*/8);
 	for (int i = 1; i <= 5; ++i) {
-		ASSERT_TRUE(q.TryPush(MakeCommand("s1", i)));
+		ASSERT_TRUE(q.TryPush(MakeCommand("s1", i, i)));
 	}
 	EXPECT_EQ(q.Depth(), 5u);
 	EXPECT_EQ(c.command_queue_depth.load(), 5u);
@@ -55,6 +58,7 @@ TEST(CommandQueue, FifoDrainPreservesOrder) {
 	ASSERT_EQ(q.Drain(&out), 5u);
 	ASSERT_EQ(out.size(), 5u);
 	for (int i = 0; i < 5; ++i) {
+		EXPECT_EQ(out[i].authoritative_target_unit_id, i + 1);
 		EXPECT_EQ(out[i].command.move_unit().unit_id(), i + 1);
 	}
 	EXPECT_EQ(q.Depth(), 0u);
@@ -63,25 +67,25 @@ TEST(CommandQueue, FifoDrainPreservesOrder) {
 
 TEST(CommandQueue, OverflowReturnsFalseSynchronously) {
 	CommandQueue q(/*counters=*/nullptr, /*capacity=*/3);
-	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 1)));
-	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 2)));
-	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 3)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 1, 1)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 2, 2)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 3, 3)));
 
 	// Fourth push must fail synchronously with false (caller maps to
 	// RESOURCE_EXHAUSTED on the wire).
-	EXPECT_FALSE(q.TryPush(MakeCommand("s1", 4)));
+	EXPECT_FALSE(q.TryPush(MakeCommand("s1", 4, 4)));
 	EXPECT_EQ(q.Depth(), 3u);
 }
 
 TEST(CommandQueue, OverflowDoesNotDropOrReorderQueued) {
 	CommandQueue q(/*counters=*/nullptr, /*capacity=*/3);
-	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 10)));
-	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 20)));
-	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 30)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 10, 10)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 20, 20)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 30, 30)));
 
 	// Several rejected pushes — must leave the queue untouched.
 	for (int i = 0; i < 5; ++i) {
-		EXPECT_FALSE(q.TryPush(MakeCommand("s1", 99)));
+		EXPECT_FALSE(q.TryPush(MakeCommand("s1", 99, 99)));
 	}
 
 	std::vector<QueuedCommand> drained;
@@ -90,12 +94,15 @@ TEST(CommandQueue, OverflowDoesNotDropOrReorderQueued) {
 	EXPECT_EQ(drained[0].command.move_unit().unit_id(), 10);
 	EXPECT_EQ(drained[1].command.move_unit().unit_id(), 20);
 	EXPECT_EQ(drained[2].command.move_unit().unit_id(), 30);
+	EXPECT_EQ(drained[0].authoritative_target_unit_id, 10);
+	EXPECT_EQ(drained[1].authoritative_target_unit_id, 20);
+	EXPECT_EQ(drained[2].authoritative_target_unit_id, 30);
 }
 
 TEST(CommandQueue, PartialDrainLeavesRemainder) {
 	CommandQueue q(/*counters=*/nullptr, /*capacity=*/10);
 	for (int i = 1; i <= 10; ++i) {
-		ASSERT_TRUE(q.TryPush(MakeCommand("s1", i)));
+		ASSERT_TRUE(q.TryPush(MakeCommand("s1", i, i)));
 	}
 	std::vector<QueuedCommand> out;
 	ASSERT_EQ(q.Drain(&out, /*max=*/4), 4u);

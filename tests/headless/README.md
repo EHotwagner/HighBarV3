@@ -29,6 +29,11 @@ Expected bundle per run:
 - `reports/itertesting/instructions/index.json`
 - `reports/itertesting/instructions/cmd-*.json`
 
+When command-contract blockers are detected, `tests/headless/itertesting.sh`
+prints the contract-health status, the latest run report path, each blocking
+issue id/class, and any linked deterministic repro commands before returning
+control to the maintainer.
+
 Live-hardening validation now has a dedicated entrypoint:
 
 ```bash
@@ -46,3 +51,12 @@ tests/headless/malformed-payload.sh
 ```
 
 Expected result: `INVALID_ARGUMENT` for the bad batch, no gateway disable, continued heartbeats.
+
+Command-contract blocker separation can be checked directly with:
+
+```bash
+tests/headless/test_command_contract_hardening.sh
+```
+
+Expected result: a manifest and report containing `Contract Health` and
+`Foundational Blockers` sections, with ordinary improvement guidance withheld.

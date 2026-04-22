@@ -182,6 +182,31 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 			find_package(GTest QUIET)  # fall back to FindGTest module
 		endif ()
 		if (GTest_FOUND OR GTEST_FOUND)
+			add_library(highbar_command_queue_test_support STATIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/CommandQueue.cpp"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/Counters.cpp")
+			target_include_directories(highbar_command_queue_test_support PUBLIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit"
+				"${HIGHBAR_PROTO_GEN_DIR}"
+				"${HIGHBAR_PIN_GEN_DIR}")
+			target_link_libraries(highbar_command_queue_test_support PUBLIC
+				highbar_proto
+				gRPC::grpc++
+				protobuf::libprotobuf)
+
+			add_library(highbar_command_validator_test_support STATIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/CommandValidator.cpp"
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/command_validator_test_stubs.cpp"
+				"${CMAKE_SOURCE_DIR}/rts/System/float3.cpp")
+			target_include_directories(highbar_command_validator_test_support PUBLIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit"
+				"${HIGHBAR_PROTO_GEN_DIR}"
+				"${HIGHBAR_PIN_GEN_DIR}")
+			target_link_libraries(highbar_command_validator_test_support PUBLIC
+				highbar_proto
+				gRPC::grpc++
+				protobuf::libprotobuf)
+
 			file(GLOB HIGHBAR_UNIT_TEST_SRCS CONFIGURE_DEPENDS
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/*_test.cc")
 			foreach (_test_src IN LISTS HIGHBAR_UNIT_TEST_SRCS)
@@ -202,6 +227,13 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 					highbar_proto
 					gRPC::grpc++
 					protobuf::libprotobuf)
+				if (_test_name STREQUAL "command_queue_test")
+					target_link_libraries("${_test_name}" PRIVATE
+						highbar_command_queue_test_support)
+				elseif (_test_name STREQUAL "command_validation_test")
+					target_link_libraries("${_test_name}" PRIVATE
+						highbar_command_validator_test_support)
+				endif ()
 				add_test(NAME "${_test_name}" COMMAND "${_test_name}")
 			endforeach ()
 		else ()

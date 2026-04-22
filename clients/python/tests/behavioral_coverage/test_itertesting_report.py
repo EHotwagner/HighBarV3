@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from highbar_client.behavioral_coverage.itertesting_report import render_run_report
-from highbar_client.behavioral_coverage.itertesting_runner import run_campaign
+from highbar_client.behavioral_coverage.itertesting_runner import build_run, run_campaign
+from highbar_client.behavioral_coverage.registry import REGISTRY
 
 
 def test_report_renders_required_sections_and_direct_split(tmp_path):
@@ -99,3 +100,26 @@ def test_report_renders_channel_health_and_failure_causes(tmp_path):
     assert "## Fixture Provisioning" in rendered
     assert "## Channel Health" in rendered
     assert "## Failure Cause Summary" in rendered
+
+
+def test_report_renders_contract_health_and_repro_sections(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "move_unit",
+                "category": REGISTRY["move_unit"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "batch target 4 disagreed with command unit 9",
+                "error": "target_drift",
+            }
+        ],
+    )
+
+    rendered = render_run_report(run)
+
+    assert "## Contract Health" in rendered
+    assert "## Foundational Blockers" in rendered

@@ -98,6 +98,40 @@ latest_run_manifest_path() {
         | cut -d' ' -f2-
 }
 
+emit_contract_health_notice() {
+    local manifest_path="$1"
+    if [[ -z "$manifest_path" || ! -f "$manifest_path" ]]; then
+        return 1
+    fi
+    python3 - "$manifest_path" <<'PY'
+import json
+import os
+import sys
+
+manifest_path = sys.argv[1]
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+decision = manifest.get("contract_health_decision") or {}
+status = decision.get("decision_status", "ready_for_itertesting")
+if status == "ready_for_itertesting":
+    raise SystemExit(1)
+
+report_path = os.path.join(os.path.dirname(manifest_path), "run-report.md")
+print(f"itertesting: contract_health={status} report={report_path}")
+for issue in manifest.get("contract_issues", ()):
+    print(
+        "itertesting: blocker="
+        f"{issue.get('issue_id')} class={issue.get('issue_class')} "
+        f"status={issue.get('status')}"
+    )
+for repro in manifest.get("deterministic_repros", ()):
+    args = " ".join(repro.get("arguments", ()))
+    command = " ".join(part for part in (repro.get("entrypoint", ""), args) if part)
+    print(f"itertesting: repro[{repro.get('issue_id')}]={command}")
+PY
+}
+
 should_retry_live_session() {
     local manifest_path="$1"
     local decision_path="$2"
@@ -229,6 +263,7 @@ run_live_campaign() {
 
     after_stop="$(latest_stop_decision_path)"
     after_manifest="$(latest_run_manifest_path)"
+    emit_contract_health_notice "$after_manifest" || true
     if should_retry_live_session "$after_manifest" "$after_stop" "$command_output"; then
         if [[ "$after_stop" != "$before_stop" && -n "$after_stop" ]]; then
             echo "itertesting: live session degraded; latest stop decision=$(basename "$(dirname "$after_stop")")/$(basename "$after_stop")" >&2
@@ -269,7 +304,9 @@ if [[ "$SKIP_LIVE" == "true" ]]; then
 
     echo "itertesting: invoking synthetic campaign: ${ARGS[*]}"
     uv run --project "$REPO_ROOT/clients/python" python -m highbar_client.behavioral_coverage "${ARGS[@]}" "$@"
-    exit $?
+    rc=$?
+    emit_contract_health_notice "$(latest_run_manifest_path)" || true
+    exit $rc
 fi
 
 attempt=1

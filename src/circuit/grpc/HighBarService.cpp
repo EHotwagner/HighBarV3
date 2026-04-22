@@ -623,6 +623,8 @@ private:
 		for (const auto& cmd : incoming_.commands()) {
 			QueuedCommand q;
 			q.session_id = session_id_;
+			q.authoritative_target_unit_id =
+				static_cast<std::int32_t>(incoming_.target_unit_id());
 			q.command = cmd;
 			if (!svc_->command_queue_->TryPush(std::move(q))) {
 				++batches_rejected_full_;
