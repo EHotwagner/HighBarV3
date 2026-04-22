@@ -102,6 +102,30 @@ def test_report_renders_channel_health_and_failure_causes(tmp_path):
     assert "## Failure Cause Summary" in rendered
 
 
+def test_report_renders_blocked_contract_health_for_fixture_blocked_runs(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "transport fixture missing for live validation",
+                "error": "precondition_unmet",
+            }
+        ],
+    )
+
+    rendered = render_run_report(run)
+
+    assert "## Contract Health" in rendered
+    assert "- Status: blocked_foundational" in rendered
+    assert "missing fixture" in rendered.lower()
+
+
 def test_report_renders_contract_health_and_repro_sections(tmp_path):
     run = build_run(
         campaign_id="campaign-1",

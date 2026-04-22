@@ -268,6 +268,31 @@ def test_synthetic_run_records_fixture_provisioning_and_missing_fixture_causes(t
     assert causes["cmd-load-units"].primary_cause == "missing_fixture"
 
 
+def test_live_rows_block_contract_health_when_fixtures_are_missing(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "transport fixture missing for live validation",
+                "error": "precondition_unmet",
+            }
+        ],
+    )
+
+    assert run.contract_health_decision is not None
+    assert run.contract_health_decision.decision_status == "blocked_foundational"
+    assert "live-closeout:missing-fixture" in run.contract_health_decision.blocking_issue_ids
+    assert "missing fixture" in run.contract_health_decision.summary_message.lower()
+    assert run.improvement_eligibility is not None
+    assert run.improvement_eligibility.guidance_mode == "secondary_only"
+
+
 def test_live_rows_promote_channel_failures_to_run_level_health_outcome(tmp_path):
     run = build_run(
         campaign_id="campaign-1",
@@ -298,6 +323,9 @@ def test_live_rows_promote_channel_failures_to_run_level_health_outcome(tmp_path
     assert run.channel_health.first_failure_stage == "dispatch"
     causes = {item.command_id: item for item in run.failure_classifications}
     assert causes["cmd-fight"].primary_cause == "transport_interruption"
+    assert run.contract_health_decision is not None
+    assert "live-closeout:transport-interruption" in run.contract_health_decision.blocking_issue_ids
+    assert "transport interruption" in run.contract_health_decision.summary_message.lower()
 
 
 def test_foundational_blockers_disable_normal_improvement_guidance(tmp_path):

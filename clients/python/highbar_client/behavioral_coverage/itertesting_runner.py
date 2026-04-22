@@ -827,15 +827,37 @@ def _resolved_issue_ids(
 def _contract_health_for_run(
     *,
     run_id: str,
+    command_records: tuple[CommandVerificationRecord, ...],
     contract_issues: tuple[CommandContractIssue, ...],
     deterministic_repros: tuple[DeterministicRepro, ...],
     previous_run: ItertestingRun | None,
     failure_classifications: tuple[FailureCauseClassification, ...],
     actions: tuple[ImprovementAction, ...],
+    enforce_live_closeout_gate: bool,
 ) -> tuple[ContractHealthDecision, ImprovementEligibility]:
     blocking = tuple(item for item in contract_issues if item.blocks_improvement)
     resolved_issue_ids = _resolved_issue_ids(contract_issues, previous_run)
     repro_issue_ids = {item.issue_id for item in deterministic_repros}
+    live_closeout_blockers: list[str] = []
+    live_closeout_reasons: list[str] = []
+    if enforce_live_closeout_gate:
+        records_by_command = {item.command_id: item for item in command_records}
+        relevant_classifications = [
+            item
+            for item in failure_classifications
+            if (
+                records_by_command.get(item.command_id) is None
+                or records_by_command[item.command_id].blocking_reason
+                != "row missing from live run"
+            )
+        ]
+        cause_names = {item.primary_cause for item in relevant_classifications}
+        if "transport_interruption" in cause_names:
+            live_closeout_blockers.append("live-closeout:transport-interruption")
+            live_closeout_reasons.append("transport interruption")
+        if "missing_fixture" in cause_names:
+            live_closeout_blockers.append("live-closeout:missing-fixture")
+            live_closeout_reasons.append("missing fixture coverage")
     needs_pattern_review = any(
         item.issue_class == "needs_pattern_review" or item.issue_id not in repro_issue_ids
         for item in blocking
@@ -863,12 +885,42 @@ def _contract_health_for_run(
             withheld_reason="A foundational blocker has no deterministic repro and needs pattern review.",
         )
         return decision, eligibility
-    if blocking:
+    if blocking or live_closeout_blockers:
+        blocking_issue_ids = tuple(item.issue_id for item in blocking) + tuple(
+            live_closeout_blockers
+        )
+        if blocking and live_closeout_reasons:
+            summary_message = (
+                "Foundational command-contract blockers were detected, and live closeout evidence "
+                f"remains untrustworthy because {' and '.join(live_closeout_reasons)} still blocks "
+                "normal Itertesting tuning."
+            )
+            withheld_reason = (
+                "Normal improvement guidance is withheld while foundational blockers remain open and "
+                "the live closeout workflow is still blocked."
+            )
+        elif blocking:
+            summary_message = (
+                "Foundational command-contract blockers were detected. Repair them before normal "
+                "Itertesting tuning."
+            )
+            withheld_reason = (
+                "Normal improvement guidance is withheld while foundational blockers remain open."
+            )
+        else:
+            summary_message = (
+                "Live closeout evidence remains blocked because "
+                f"{' and '.join(live_closeout_reasons)} still prevents trustworthy command evaluation."
+            )
+            withheld_reason = (
+                "Normal improvement guidance is withheld until the live closeout workflow stops "
+                "reporting transport interruptions or missing fixture blockers."
+            )
         decision = ContractHealthDecision(
             run_id=run_id,
             decision_status="blocked_foundational",
-            blocking_issue_ids=tuple(item.issue_id for item in blocking),
-            summary_message="Foundational command-contract blockers were detected. Repair them before normal Itertesting tuning.",
+            blocking_issue_ids=blocking_issue_ids,
+            summary_message=summary_message,
             stop_or_proceed="stop_for_repair",
             recorded_at=recorded_at,
             resolved_issue_ids=resolved_issue_ids,
@@ -879,7 +931,7 @@ def _contract_health_for_run(
             guidance_mode="secondary_only",
             visible_downstream_findings=visible_downstream_findings,
             normal_improvement_actions=(),
-            withheld_reason="Normal improvement guidance is withheld while foundational blockers remain open.",
+            withheld_reason=withheld_reason,
         )
         return decision, eligibility
     decision = ContractHealthDecision(
@@ -1019,11 +1071,13 @@ def build_run(
     deterministic_repros = deterministic_repros_for_issues(contract_issues)
     contract_health_decision, improvement_eligibility = _contract_health_for_run(
         run_id=run_id,
+        command_records=command_records,
         contract_issues=contract_issues,
         deterministic_repros=deterministic_repros,
         previous_run=previous_run,
         failure_classifications=failure_classifications,
         actions=provisional_actions,
+        enforce_live_closeout_gate=live_rows is not None,
     )
     actions = (
         provisional_actions
