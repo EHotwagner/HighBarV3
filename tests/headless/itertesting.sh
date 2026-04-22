@@ -28,13 +28,20 @@ START_SCRIPT="${HIGHBAR_STARTSCRIPT:-$HEADLESS_DIR/scripts/minimal.startscript}"
 CHEAT_STARTSCRIPT="${HIGHBAR_ITERTESTING_CHEAT_STARTSCRIPT:-$HEADLESS_DIR/scripts/cheats.startscript}"
 WRITE_DIR="${HIGHBAR_WRITE_DIR:-$HOME/.local/state/Beyond All Reason}"
 REPORTS_DIR="${HIGHBAR_ITERTESTING_REPORTS_DIR:-$REPO_ROOT/reports/itertesting}"
-MAX_RUNS="${HIGHBAR_ITERTESTING_MAX_IMPROVEMENT_RUNS:-}"
 RETRY_INTENSITY="${HIGHBAR_ITERTESTING_RETRY_INTENSITY:-standard}"
 RUNTIME_TARGET_MINUTES="${HIGHBAR_ITERTESTING_RUNTIME_TARGET_MINUTES:-15}"
 SKIP_LIVE="${HIGHBAR_ITERTESTING_SKIP_LIVE:-false}"
 LIVE_RETRIES="${HIGHBAR_ITERTESTING_LIVE_RETRIES:-1}"
 THRESHOLD="${HIGHBAR_BEHAVIORAL_THRESHOLD:-0.50}"
 GAMESEED="${HIGHBAR_GAMESEED:-0x42424242}"
+MAX_RUNS="${HIGHBAR_ITERTESTING_MAX_IMPROVEMENT_RUNS:-}"
+# The maintainer-facing live path is documented as a default single run.
+# Keep profile-driven defaults for synthetic campaign validation, but
+# clamp the live wrapper to one run unless the maintainer explicitly
+# requests follow-up retries.
+if [[ "$SKIP_LIVE" != "true" && -z "$MAX_RUNS" ]]; then
+    MAX_RUNS="0"
+fi
 ACTIVE_RUN_DIR=""
 COORD_SOCK=""
 COORD_LOG=""

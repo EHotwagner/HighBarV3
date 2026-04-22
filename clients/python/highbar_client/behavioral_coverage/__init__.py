@@ -47,6 +47,34 @@ from .types import (
 )
 
 
+# These arms need richer live fixtures than the simplified bootstrap
+# provisions (damaged friendlies, in-range capturable units, transports,
+# reclaimable features, etc.). Blindly dispatching them from Itertesting's
+# minimal live loop has proven able to stall the session before later arms
+# run, so we report them as blocked until a dedicated setup path exists.
+_SIMPLIFIED_BOOTSTRAP_TARGET_MISSING_ARMS = {
+    "attack_area",
+    "capture",
+    "capture_area",
+    "custom",
+    "dgun",
+    "guard",
+    "load_onto",
+    "load_units",
+    "load_units_area",
+    "reclaim_area",
+    "reclaim_feature",
+    "reclaim_in_area",
+    "reclaim_unit",
+    "repair",
+    "restore_area",
+    "resurrect",
+    "resurrect_in_area",
+    "unload_unit",
+    "unload_units_area",
+}
+
+
 # ---- argparse -----------------------------------------------------------
 
 
@@ -221,6 +249,22 @@ def _row_for_outcome(case: BehavioralTestCase,
     }
 
 
+def _simplified_bootstrap_precondition_message(
+    arm_name: str,
+    case: BehavioralTestCase,
+    ctx: BootstrapContext,
+) -> str | None:
+    if case.required_capability not in ("none", "commander"):
+        if case.required_capability not in ctx.capability_units:
+            return (
+                f"required_capability={case.required_capability} "
+                f"not provisioned by simplified bootstrap"
+            )
+    if arm_name in _SIMPLIFIED_BOOTSTRAP_TARGET_MISSING_ARMS:
+        return "simplified bootstrap does not provision the target fixture required for this arm"
+    return None
+
+
 def collect_live_rows(args: argparse.Namespace) -> list[dict]:
     """Collect live behavioral rows without emitting artifacts."""
     try:
@@ -302,17 +346,17 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
             rows.append(_row_for_outcome(case, dispatched, outcome))
             continue
 
-        # Pre-check capability provisioning.
-        if case.required_capability not in ("none", "commander"):
-            if case.required_capability not in ctx.capability_units:
-                outcome = VerificationOutcome(
-                    verified="na",
-                    evidence=(f"required_capability={case.required_capability} "
-                              f"not provisioned by simplified bootstrap"),
-                    error="precondition_unmet",
-                )
-                rows.append(_row_for_outcome(case, False, outcome))
-                continue
+        precondition_message = _simplified_bootstrap_precondition_message(
+            arm_name, case, ctx
+        )
+        if precondition_message is not None:
+            outcome = VerificationOutcome(
+                verified="na",
+                evidence=precondition_message,
+                error="precondition_unmet",
+            )
+            rows.append(_row_for_outcome(case, False, outcome))
+            continue
 
         # Capture pre-dispatch snapshot.
         pre = shared["snapshots"][-1] if shared["snapshots"] else None

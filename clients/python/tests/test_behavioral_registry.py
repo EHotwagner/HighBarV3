@@ -9,6 +9,10 @@ from __future__ import annotations
 import pytest
 
 from highbar_client.behavioral_coverage import REGISTRY
+from highbar_client.behavioral_coverage import (
+    _simplified_bootstrap_precondition_message,
+)
+from highbar_client.behavioral_coverage.bootstrap import BootstrapContext
 from highbar_client.behavioral_coverage.capabilities import CAPABILITY_TAGS
 from highbar_client.behavioral_coverage.registry import (
     _build_registry,
@@ -92,3 +96,35 @@ def test_registry_validates_on_rebuild():
     """_build_registry's output is re-validatable."""
     built = _build_registry()
     validate_registry(built)  # should not raise
+
+
+def test_simplified_bootstrap_blocks_target_missing_capture_area():
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+    )
+
+    message = _simplified_bootstrap_precondition_message(
+        "capture_area",
+        REGISTRY["capture_area"],
+        ctx,
+    )
+
+    assert message == (
+        "simplified bootstrap does not provision the target fixture required for this arm"
+    )
+
+
+def test_simplified_bootstrap_keeps_safe_attack_dispatchable():
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+    )
+
+    message = _simplified_bootstrap_precondition_message(
+        "attack",
+        REGISTRY["attack"],
+        ctx,
+    )
+
+    assert message is None
