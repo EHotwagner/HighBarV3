@@ -96,3 +96,63 @@ print('ack', ack.batches_accepted)
 
 See `specs/002-live-headless-e2e/examples/{observer,ai_client}.py`
 for runnable end-to-end demos.
+
+## Python AI plugins
+
+The Spring-side Skirmish AI remains the native `highBar` proxy. Python
+AI plugins are external policies that connect through `HighBarProxy` as
+`ROLE_AI`, consume `StreamState`, and submit command batches back through
+the same proxy.
+
+Run a built-in policy:
+
+```bash
+hb-ai-runner-py \
+  --transport uds \
+  --uds-path /tmp/hb-run/highbar-1.sock \
+  --token-file /tmp/highbar.token \
+  --ai-plugin idle \
+  --name-addon scout-a
+```
+
+Run a smoke movement policy:
+
+```bash
+hb-ai-runner-py \
+  --transport uds \
+  --uds-path /tmp/hb-run/highbar-1.sock \
+  --token-file /tmp/highbar.token \
+  --ai-plugin move-once \
+  --plugin-config '{"target_unit":42,"move_to":"1024,0,1024"}' \
+  --name-addon flank-test
+```
+
+Load a custom policy with `module:factory`:
+
+```python
+from collections.abc import Iterable
+
+from highbar_client.ai_plugins import AIPluginContext, BaseAIPlugin
+from highbar_client.highbar import commands_pb2, state_pb2
+
+
+class MyPolicy(BaseAIPlugin):
+    name = "my-policy"
+    version = "0.1.0"
+
+    def on_state(
+        self,
+        context: AIPluginContext,
+        update: state_pb2.StateUpdate,
+    ) -> Iterable[commands_pb2.CommandBatch]:
+        return ()
+
+
+def create(config):
+    return MyPolicy()
+```
+
+Then run `hb-ai-runner-py --ai-plugin my_module:create ...`.
+`--name-addon` is sanitized and appended to the gRPC `client_id`, so
+multiple Python policies running through the same unchanged proxy can be
+distinguished in coordinator logs.

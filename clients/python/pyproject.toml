@@ -43,6 +43,7 @@ dev = [
 [project.scripts]
 hb-observer-py = "highbar_client.samples.observer:main"
 hb-ai-client-py = "highbar_client.samples.ai_client:main"
+hb-ai-runner-py = "highbar_client.ai_runner:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
