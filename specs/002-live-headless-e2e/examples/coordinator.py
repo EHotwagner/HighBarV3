@@ -239,6 +239,10 @@ class ProxySvc(service_pb2_grpc.HighBarProxyServicer):
         self.callback_proxy_endpoint = os.environ.get(
             "HIGHBAR_CALLBACK_PROXY_ENDPOINT", ""
         ).strip()
+        self.callback_proxy_token_file = (
+            os.environ.get("HIGHBAR_CALLBACK_PROXY_TOKEN_FILE", "").strip()
+            or os.environ.get("HIGHBAR_TOKEN_PATH", "").strip()
+        )
 
     def _new_session_id(self):
         self.session_seq += 1
@@ -250,6 +254,26 @@ class ProxySvc(service_pb2_grpc.HighBarProxyServicer):
             for item in context.invocation_metadata()
             if item.key == TOKEN_HEADER
         ]
+
+    def _callback_proxy_metadata(self, context):
+        if self.callback_proxy_token_file:
+            try:
+                with open(
+                    self.callback_proxy_token_file,
+                    "r",
+                    encoding="utf-8",
+                ) as handle:
+                    token = handle.read().strip()
+                if token:
+                    return [(TOKEN_HEADER, token)], "proxy-token-file"
+            except OSError as exc:
+                print(
+                    f"[proxy] callback token file unavailable "
+                    f"path={self.callback_proxy_token_file}: {exc}",
+                    flush=True,
+                )
+        metadata = self._token_metadata(context)
+        return metadata, "inbound-metadata" if metadata else "absent"
 
     def Hello(self, request, context):
         print(f"[proxy] Hello from {context.peer()} "
@@ -333,12 +357,12 @@ class ProxySvc(service_pb2_grpc.HighBarProxyServicer):
                 grpc.StatusCode.FAILED_PRECONDITION,
                 "InvokeCallback relay unavailable; set HIGHBAR_CALLBACK_PROXY_ENDPOINT",
             )
-        metadata = self._token_metadata(context)
+        metadata, token_source = self._callback_proxy_metadata(context)
         print(
             f"[proxy] InvokeCallback from {context.peer()} "
             f"callback_id={request.callback_id} "
             f"endpoint={self.callback_proxy_endpoint} "
-            f"token={'present' if metadata else 'absent'}",
+            f"token={token_source}",
             flush=True,
         )
         try:

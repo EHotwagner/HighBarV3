@@ -67,6 +67,11 @@ void AppendCoordinatorTrace(const std::string& message) {
 }
 
 std::string ResolveTokenPath(CCircuitAI* ai, const std::string& template_path) {
+	if (const char* env_path = std::getenv("HIGHBAR_TOKEN_PATH")) {
+		if (env_path[0] != '\0') {
+			return std::string(env_path);
+		}
+	}
 	constexpr const char* kMarker = "$writeDir/";
 	const auto pos = template_path.find(kMarker);
 	if (pos != 0) {
