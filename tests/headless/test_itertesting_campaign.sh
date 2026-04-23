@@ -230,6 +230,33 @@ assert_callback_proxy_endpoint_rebinds_per_attempt() {
     fi
 }
 
+assert_gateway_health_dir_follows_token_path() {
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    mapfile -t health_dirs < <(
+        env WRAPPER_PATH="$WRAPPER" HIGHBAR_RUN_DIR="$tmpdir/run" HIGHBAR_WRITE_DIR="$tmpdir/write" bash -lc '
+            set -euo pipefail
+            source "$WRAPPER_PATH"
+            prepare_attempt_dir 1
+            configure_live_attempt_env
+            gateway_health_dir
+            HIGHBAR_TOKEN_PATH="$HIGHBAR_RUN_DIR/custom/highbar.token"
+            export HIGHBAR_TOKEN_PATH
+            gateway_health_dir
+        '
+    )
+    rm -rf "$tmpdir"
+
+    if [[ "${health_dirs[0]:-}" != "/tmp" ]]; then
+        echo "test_itertesting_campaign: default gateway health dir did not follow /tmp token path" >&2
+        exit 1
+    fi
+    if [[ "${health_dirs[1]:-}" != "$tmpdir/run/custom" ]]; then
+        echo "test_itertesting_campaign: custom gateway health dir did not follow HIGHBAR_TOKEN_PATH" >&2
+        exit 1
+    fi
+}
+
 assert_autoquit_config_is_temporarily_disabled() {
     local tmpdir
     tmpdir="$(mktemp -d)"
@@ -408,6 +435,7 @@ assert_wrapper_semantic_inventory "$QUICK_DIR"
 assert_split_live_setup_sequences_smoke_then_seeded
 assert_split_live_setup_forces_seeded_campaign_flags
 assert_callback_proxy_endpoint_rebinds_per_attempt
+assert_gateway_health_dir_follows_token_path
 assert_autoquit_config_is_temporarily_disabled
 assert_semantic_gate_bundle "$QUICK_DIR"
 

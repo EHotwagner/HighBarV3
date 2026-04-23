@@ -1335,6 +1335,15 @@ configure_live_attempt_env() {
     fi
 }
 
+gateway_health_dir() {
+    local token_path="${HIGHBAR_TOKEN_PATH:-}"
+    if [[ -n "$token_path" ]]; then
+        dirname "$token_path"
+        return 0
+    fi
+    printf '%s\n' "$WRITE_DIR/engine/recoil_2025.06.19"
+}
+
 wait_for_gateway_startup() {
     for _ in $(seq 1 30); do
         if grep -q '\[hb-gateway\] startup' "$ENGINE_LOG" 2>/dev/null; then
@@ -1721,8 +1730,8 @@ launch_live_topology() {
         return 1
     fi
 
-    EFFECTIVE_WRITEDIR="$WRITE_DIR/engine/recoil_2025.06.19"
-    fault_status "$EFFECTIVE_WRITEDIR"
+    GATEWAY_HEALTH_DIR="$(gateway_health_dir)"
+    fault_status "$GATEWAY_HEALTH_DIR"
     fs=$?
     if [[ $fs -eq 2 ]]; then
         echo "itertesting: gateway Disabled at start — skip" >&2

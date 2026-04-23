@@ -190,6 +190,9 @@ if [[ "$VIEWER_ONLY" != "true" ]]; then
           "$WRITEDIR/highbar.health" \
           "$WRITEDIR/engine/$PIN_RELEASE/highbar.token" \
           "$WRITEDIR/engine/$PIN_RELEASE/highbar.health"
+    if [[ -n "${HIGHBAR_TOKEN_PATH:-}" ]]; then
+        rm -f "$HIGHBAR_TOKEN_PATH" "$(dirname "$HIGHBAR_TOKEN_PATH")/highbar.health"
+    fi
 
     if [[ -d "$LUA_GADGET_SRC_DIR" ]]; then
         mkdir -p "$WRITEDIR/LuaRules/Gadgets"
