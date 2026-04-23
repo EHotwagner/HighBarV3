@@ -37,31 +37,95 @@ def render_run_report(
         f"- Started: {run.started_at}",
         f"- Completed: {run.completed_at or 'incomplete'}",
         "",
-        "## Coverage Summary",
-        "",
-        f"- Tracked commands total: {run.summary.tracked_commands}",
-        f"- Directly verifiable total: {run.summary.directly_verifiable_total}",
-        f"- Direct verified natural: {run.summary.direct_verified_natural}",
-        (
-            "- Direct verified cheat-assisted: "
-            f"{run.summary.direct_verified_cheat_assisted}"
-        ),
-        f"- Direct verified total: {run.summary.direct_verified_total}",
-        f"- Direct unverified total: {run.summary.direct_unverified_total}",
-        (
-            "- Non-observable tracked total: "
-            f"{run.summary.non_observable_tracked_total}"
-        ),
-        (
-            f"- Direct target ({direct_target}) met: "
-            f"{'yes' if direct_target_met else 'no'}"
-        ),
-        (
-            "- Runtime elapsed seconds: "
-            f"{run.summary.runtime_elapsed_seconds}"
-        ),
-        "",
     ]
+
+    if run.watch_session is not None:
+        watch = run.watch_session
+        lines.extend(
+            [
+                "## Watch Status",
+                "",
+                f"- Watch requested: {'yes' if watch.watch_requested else 'no'}",
+                f"- Lifecycle state: {watch.run_lifecycle_state}",
+                f"- Report path: {watch.report_path or 'pending'}",
+            ]
+        )
+        if watch.watch_request is not None:
+            target = watch.watch_request.target_run_id or "auto"
+            lines.extend(
+                [
+                    f"- Request mode: {watch.watch_request.request_mode}",
+                    f"- Selection mode: {watch.watch_request.selection_mode}",
+                    f"- Watch profile: {watch.watch_request.profile_ref}",
+                    f"- Target run: {target}",
+                ]
+            )
+        if watch.preflight_result is not None:
+            lines.extend(
+                [
+                    f"- Preflight status: {watch.preflight_result.status}",
+                    f"- Preflight reason: {watch.preflight_result.reason}",
+                ]
+            )
+            if watch.preflight_result.resolved_profile is not None:
+                resolved_profile = watch.preflight_result.resolved_profile
+                lines.append(
+                    "- Resolved watch speed: "
+                    f"{resolved_profile.watch_speed if resolved_profile.watch_speed is not None else 'default engine behavior'}"
+                )
+        if watch.viewer_access is not None:
+            lines.extend(
+                [
+                    f"- Viewer access: {watch.viewer_access.availability_state}",
+                    f"- Viewer reason: {watch.viewer_access.reason}",
+                    (
+                        "- Viewer launch command: "
+                        + (
+                            " ".join(watch.viewer_access.launch_command)
+                            if watch.viewer_access.launch_command
+                            else "none"
+                        )
+                    ),
+                    (
+                        "- Viewer launched at: "
+                        f"{watch.viewer_access.launched_at or 'not launched'}"
+                    ),
+                    (
+                        "- Viewer expires at: "
+                        f"{watch.viewer_access.expires_at or 'n/a'}"
+                    ),
+                ]
+            )
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Coverage Summary",
+            "",
+            f"- Tracked commands total: {run.summary.tracked_commands}",
+            f"- Directly verifiable total: {run.summary.directly_verifiable_total}",
+            f"- Direct verified natural: {run.summary.direct_verified_natural}",
+            (
+                "- Direct verified cheat-assisted: "
+                f"{run.summary.direct_verified_cheat_assisted}"
+            ),
+            f"- Direct verified total: {run.summary.direct_verified_total}",
+            f"- Direct unverified total: {run.summary.direct_unverified_total}",
+            (
+                "- Non-observable tracked total: "
+                f"{run.summary.non_observable_tracked_total}"
+            ),
+            (
+                f"- Direct target ({direct_target}) met: "
+                f"{'yes' if direct_target_met else 'no'}"
+            ),
+            (
+                "- Runtime elapsed seconds: "
+                f"{run.summary.runtime_elapsed_seconds}"
+            ),
+            "",
+        ]
+    )
 
     if run.previous_run_comparison is not None:
         cmp = run.previous_run_comparison

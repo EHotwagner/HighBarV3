@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import highbar_client.behavioral_coverage as behavioral_coverage
+import highbar_client.behavioral_coverage.bnv_watch as bnv_watch
 from highbar_client.behavioral_coverage.itertesting_campaign import decide_stop
 from highbar_client.behavioral_coverage.itertesting_retry_policy import normalize_retry_policy
 from highbar_client.behavioral_coverage.itertesting_runner import (
@@ -25,9 +26,17 @@ from highbar_client.behavioral_coverage.itertesting_runner import (
 from highbar_client.behavioral_coverage.itertesting_types import (
     FailureCauseClassification,
     RunProgressSnapshot,
+    ViewerAccessRecord,
+    WatchPreflightResult,
+    WatchRequest,
+    WatchedRunSession,
     manifest_dict,
 )
 from highbar_client.behavioral_coverage.registry import REGISTRY
+from highbar_client.behavioral_coverage.watch_registry import (
+    load_active_watch_index,
+    upsert_watch_session,
+)
 
 
 def _live_rows_with_hardening_metadata():
@@ -112,6 +121,72 @@ def _live_rows_with_hardening_metadata():
             "error": "effect_not_observed",
         },
     ]
+
+
+def _fake_bnv_binary(tmp_path: Path) -> Path:
+    path = tmp_path / "fake-bnv.sh"
+    path.write_text("#!/usr/bin/env bash\nsleep 1\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _seed_graphical_watch_context(monkeypatch, binary: Path, *, pid: str = "101") -> None:
+    monkeypatch.setenv("HIGHBAR_BAR_CLIENT_BINARY", str(binary))
+    monkeypatch.setenv("HIGHBAR_ITERTESTING_WATCH_LAUNCHED", "true")
+    monkeypatch.setenv("HIGHBAR_ITERTESTING_WATCH_ENGINE_PID", pid)
+    monkeypatch.setenv(
+        "HIGHBAR_ITERTESTING_WATCH_STARTSCRIPT",
+        "tests/headless/scripts/minimal.startscript",
+    )
+    monkeypatch.setenv("HIGHBAR_WRITE_DIR", "/tmp/highbar-write")
+
+
+def _active_watch_session(run_id: str) -> WatchedRunSession:
+    return WatchedRunSession(
+        run_id=run_id,
+        campaign_id="campaign-1",
+        run_lifecycle_state="active",
+        watch_requested=True,
+        watch_request=WatchRequest(
+            request_id=f"watch-{run_id}",
+            request_mode="launch-time",
+            requested_at="2026-04-23T10:00:00Z",
+            target_run_id=run_id,
+            selection_mode="explicit",
+            profile_ref="default",
+            watch_required=True,
+        ),
+        preflight_result=WatchPreflightResult(
+            status="ready",
+            reason="BAR graphical client watch preflight succeeded",
+            checked_at="2026-04-23T10:00:00Z",
+            blocking=False,
+        ),
+        viewer_access=ViewerAccessRecord(
+            availability_state="available",
+            reason="graphical BAR client launched for watched run",
+            launch_command=("spring", "--window", "tests/headless/scripts/minimal.startscript"),
+            launched_at="2026-04-23T10:00:01Z",
+            viewer_pid=101,
+            last_transition_at="2026-04-23T10:00:01Z",
+        ),
+        report_path=str(Path("/tmp") / run_id / "run-report.md"),
+    )
+
+
+def _write_active_watch_manifest(reports_dir: Path, session: WatchedRunSession) -> Path:
+    run = build_run(
+        campaign_id=session.campaign_id or "campaign-1",
+        sequence_index=0,
+        reports_dir=reports_dir,
+        run_id=session.run_id,
+        watch_session=session,
+    )
+    bundle = reports_dir / session.run_id
+    bundle.mkdir(parents=True, exist_ok=True)
+    manifest_path = bundle / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest_dict(run)), encoding="utf-8")
+    return manifest_path
 
 
 def test_manifest_validation_and_round_trip(tmp_path):
@@ -350,6 +425,40 @@ def test_cli_argument_parsing_supports_retry_intensity_and_governance_flags():
     assert args.runtime_target_minutes == 20
     assert args.allow_cheat_escalation is True
     assert args.natural_first is True
+
+
+def test_cli_argument_parsing_supports_watch_launch_and_attach_flags():
+    launch_args = parse_itertesting_args(
+        [
+            "--watch",
+            "--watch-profile",
+            "default",
+            "--watch-speed",
+            "2",
+        ]
+    )
+    attach_args = parse_itertesting_args(
+        [
+            "--watch-run",
+            "run-1",
+            "--watch-profile",
+            "default",
+        ]
+    )
+    auto_attach_args = parse_itertesting_args(
+        [
+            "--watch-run",
+            "--watch-profile",
+            "default",
+        ]
+    )
+
+    assert launch_args.watch is True
+    assert launch_args.watch_profile == "default"
+    assert launch_args.watch_speed == 2.0
+    assert attach_args.watch_run == "run-1"
+    assert attach_args.watch is False
+    assert auto_attach_args.watch_run == ""
 
 
 def test_hard_cap_clamps_high_requested_retry_budget(tmp_path):
@@ -1053,6 +1162,184 @@ def test_campaign_escalates_foundational_block_to_cheat_follow_up_when_allowed(
     assert runs[1].sequence_index == 1
     assert campaign.stop_decision is not None
     assert campaign.stop_decision.stop_reason == "foundational_blocked"
+
+
+def test_watch_preflight_failure_aborts_before_live_collection(tmp_path, monkeypatch):
+    calls = 0
+
+    def fake_collect_live_rows(_args):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("collect_live_rows should not be called after watch preflight failure")
+
+    monkeypatch.setattr(behavioral_coverage, "collect_live_rows", fake_collect_live_rows)
+    monkeypatch.delenv("HIGHBAR_BAR_CLIENT_BINARY", raising=False)
+    monkeypatch.delenv("HIGHBAR_BNV_BINARY", raising=False)
+    monkeypatch.delenv("SPRING_HEADLESS", raising=False)
+    monkeypatch.delenv("HIGHBAR_WRITE_DIR", raising=False)
+
+    campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=0,
+        allow_cheat_escalation=False,
+        natural_first=True,
+        skip_live=False,
+        watch=True,
+        watch_profile="default",
+        endpoint="unix:/tmp/unused.sock",
+    )
+
+    assert calls == 0
+    assert campaign.stop_decision is not None
+    assert runs[0].watch_session is not None
+    assert runs[0].watch_session.preflight_result is not None
+    assert runs[0].watch_session.preflight_result.status == "viewer_missing"
+    assert runs[0].watch_session.run_lifecycle_state == "failed"
+
+
+def test_watch_launch_updates_manifest_and_index(tmp_path, monkeypatch):
+    binary = _fake_bnv_binary(tmp_path)
+    _seed_graphical_watch_context(monkeypatch, binary, pid="102")
+    monkeypatch.setattr(bnv_watch, "apply_watch_speed", lambda speed: None)
+
+    def fake_collect_live_rows(_args):
+        return [
+            {
+                "arm_name": "attack",
+                "category": REGISTRY["attack"].category,
+                "dispatched": "true",
+                "verified": "true",
+                "evidence": "attack verified while watch mode was enabled",
+                "error": "",
+            }
+        ]
+
+    monkeypatch.setattr(behavioral_coverage, "collect_live_rows", fake_collect_live_rows)
+
+    _campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=0,
+        allow_cheat_escalation=False,
+        natural_first=True,
+        skip_live=False,
+        watch=True,
+        watch_profile="default",
+        watch_speed=2.0,
+        endpoint="unix:/tmp/unused.sock",
+    )
+
+    run = runs[0]
+    assert run.watch_session is not None
+    assert run.watch_session.preflight_result is not None
+    assert run.watch_session.preflight_result.status == "ready"
+    assert run.watch_session.viewer_access is not None
+    assert run.watch_session.viewer_access.availability_state == "available"
+
+    manifest = load_run_manifest(tmp_path / run.run_id / "manifest.json")
+    assert manifest.watch_session is not None
+    assert manifest.watch_session.preflight_result is not None
+    assert manifest.watch_session.preflight_result.status == "ready"
+    assert manifest.watch_session.preflight_result.resolved_profile is not None
+    assert manifest.watch_session.preflight_result.resolved_profile.watch_speed == 2.0
+    assert manifest.watch_session.report_path.endswith("run-report.md")
+
+    index = load_active_watch_index(tmp_path)
+    entry = [item for item in index.entries if item.run_id == run.run_id][0]
+    assert entry.watch_state == "completed"
+    assert entry.compatible_for_attach is False
+    assert entry.report_path.endswith("run-report.md")
+
+
+def test_attach_later_cli_resolves_explicit_run_id(tmp_path, monkeypatch):
+    binary = _fake_bnv_binary(tmp_path)
+    _seed_graphical_watch_context(monkeypatch, binary, pid="103")
+    session = _active_watch_session("run-1")
+    manifest_path = _write_active_watch_manifest(tmp_path, session)
+    upsert_watch_session(
+        tmp_path,
+        session,
+        updated_at="2026-04-23T10:00:01Z",
+        manifest_path=str(manifest_path),
+    )
+
+    rc = itertesting_main(
+        [
+            "--reports-dir",
+            str(tmp_path),
+            "--watch-run",
+            "run-1",
+            "--watch-profile",
+            "default",
+        ]
+    )
+
+    assert rc == 0
+    index = load_active_watch_index(tmp_path)
+    entry = [item for item in index.entries if item.run_id == "run-1"][0]
+    assert entry.compatible_for_attach is True
+
+
+def test_attach_later_cli_rejects_ambiguous_auto_selection(tmp_path, monkeypatch):
+    binary = _fake_bnv_binary(tmp_path)
+    _seed_graphical_watch_context(monkeypatch, binary, pid="104")
+    session_1 = _active_watch_session("run-1")
+    session_2 = _active_watch_session("run-2")
+    manifest_path_1 = _write_active_watch_manifest(tmp_path, session_1)
+    manifest_path_2 = _write_active_watch_manifest(tmp_path, session_2)
+    upsert_watch_session(
+        tmp_path,
+        session_1,
+        updated_at="2026-04-23T10:00:01Z",
+        manifest_path=str(manifest_path_1),
+    )
+    upsert_watch_session(
+        tmp_path,
+        session_2,
+        updated_at="2026-04-23T10:01:01Z",
+        manifest_path=str(manifest_path_2),
+    )
+
+    rc = itertesting_main(
+        [
+            "--reports-dir",
+            str(tmp_path),
+            "--watch-run",
+            "--watch-profile",
+            "default",
+        ]
+    )
+
+    assert rc == 1
+
+
+def test_non_watch_live_campaign_leaves_watch_session_empty(tmp_path, monkeypatch):
+    def fake_collect_live_rows(_args):
+        return [
+            {
+                "arm_name": "attack",
+                "category": REGISTRY["attack"].category,
+                "dispatched": "true",
+                "verified": "true",
+                "evidence": "attack verified without watch mode",
+                "error": "",
+            }
+        ]
+
+    monkeypatch.setattr(behavioral_coverage, "collect_live_rows", fake_collect_live_rows)
+
+    _campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="quick",
+        max_improvement_runs=0,
+        allow_cheat_escalation=False,
+        natural_first=True,
+        skip_live=False,
+        endpoint="unix:/tmp/unused.sock",
+    )
+
+    assert runs[0].watch_session is None
 
 
 def test_summary_tracks_tuned_rule_count(tmp_path):

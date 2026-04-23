@@ -16,6 +16,11 @@
 #       --coordinator  <uri>            # optional, sets HIGHBAR_COORDINATOR
 #       --writedir     <path>           # default: $HOME/.local/state/Beyond All Reason
 #       --runtime-dir  <path>           # default: $TMPDIR/hb-run
+#       --window-mode  <mode>           # optional for graphical spring: windowed|borderless|fullscreen
+#       --window-width <px>             # optional for graphical spring
+#       --window-height <px>            # optional for graphical spring
+#       --mouse-capture <bool>          # optional for graphical spring
+#       --viewer-only <bool>            # optional for graphical spring join client; skips HighBar host bootstrap cleanup
 #
 # Exits 0 if the engine starts and writes a PID file; 77 if a
 # prerequisite is missing (engine binary, pin file, mismatched SHA);
@@ -33,6 +38,11 @@ WRITEDIR="${HOME}/.local/state/Beyond All Reason"
 RUNTIME_DIR=""
 PHASE_MODE="1"
 ENABLE_BUILTIN=""
+WINDOW_MODE="windowed"
+WINDOW_WIDTH="1920"
+WINDOW_HEIGHT="1080"
+MOUSE_CAPTURE="false"
+VIEWER_ONLY="false"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,6 +56,11 @@ while [[ $# -gt 0 ]]; do
         --runtime-dir)  RUNTIME_DIR="$2";  shift 2 ;;
         --phase)        PHASE_MODE="$2";   shift 2 ;;
         --enable-builtin) ENABLE_BUILTIN="$2"; shift 2 ;;
+        --window-mode)  WINDOW_MODE="$2"; shift 2 ;;
+        --window-width) WINDOW_WIDTH="$2"; shift 2 ;;
+        --window-height) WINDOW_HEIGHT="$2"; shift 2 ;;
+        --mouse-capture) MOUSE_CAPTURE="$2"; shift 2 ;;
+        --viewer-only) VIEWER_ONLY="$2"; shift 2 ;;
         -h|--help)
             sed -n '/^# Usage:/,/^$/p' "$0" >&2
             exit 0
@@ -57,6 +72,7 @@ done
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
 PIN_FILE="$REPO_ROOT/data/config/spring-headless.pin"
 LUA_GADGET_SRC_DIR="$REPO_ROOT/tests/headless/LuaRules/Gadgets"
+DEFAULT_PLUGIN_SO="$REPO_ROOT/build/libSkirmishAI.so"
 
 # --- prerequisite checks (exit 77 on missing) --------------------------------
 
@@ -76,7 +92,17 @@ if [[ ! -x "$ENGINE" ]]; then
     exit 77
 fi
 
-ACTUAL_SHA="$(sha256sum "$ENGINE" | cut -d' ' -f1)"
+ENGINE_BASENAME="$(basename "$ENGINE")"
+PIN_CHECK_ENGINE="$ENGINE"
+if [[ "$ENGINE_BASENAME" != "spring-headless" ]]; then
+    PIN_CHECK_ENGINE="$(dirname "$ENGINE")/spring-headless"
+    if [[ ! -x "$PIN_CHECK_ENGINE" ]]; then
+        echo "_launch.sh: pinned spring-headless sibling not found at $PIN_CHECK_ENGINE" >&2
+        exit 77
+    fi
+fi
+
+ACTUAL_SHA="$(sha256sum "$PIN_CHECK_ENGINE" | cut -d' ' -f1)"
 if [[ "$ACTUAL_SHA" != "$PIN_SHA" ]]; then
     echo "_launch.sh: engine SHA mismatch: pin=$PIN_SHA actual=$ACTUAL_SHA" >&2
     exit 77
@@ -93,21 +119,50 @@ fi
 
 # --- optional plugin install --------------------------------------------------
 
-if [[ -n "$PLUGIN_SO" ]]; then
-    if [[ ! -f "$PLUGIN_SO" ]]; then
-        echo "_launch.sh: --plugin-so given but file missing: $PLUGIN_SO" >&2
+HIGHBAR_DIR="$WRITEDIR/engine/$PIN_RELEASE/AI/Skirmish/highBar/stable"
+BARB_SEED_DIR="$WRITEDIR/engine/$PIN_RELEASE/AI/Skirmish/BARb/stable"
+PLUGIN_SRC="$PLUGIN_SO"
+if [[ -z "$PLUGIN_SRC" && -f "$DEFAULT_PLUGIN_SO" ]]; then
+    PLUGIN_SRC="$DEFAULT_PLUGIN_SO"
+fi
+
+if [[ -n "$PLUGIN_SRC" ]]; then
+    if [[ ! -f "$PLUGIN_SRC" ]]; then
+        echo "_launch.sh: plugin file missing: $PLUGIN_SRC" >&2
         exit 1
     fi
-    BARB_DIR="$WRITEDIR/engine/$PIN_RELEASE/AI/Skirmish/BARb/stable"
-    if [[ ! -d "$BARB_DIR" ]]; then
-        echo "_launch.sh: BAR's BARb AI dir missing at $BARB_DIR" >&2
-        exit 77
+    mkdir -p "$HIGHBAR_DIR/config/dev" "$HIGHBAR_DIR/script/dev"
+    if [[ -d "$BARB_SEED_DIR/config" ]]; then
+        cp -a "$BARB_SEED_DIR/config/." "$HIGHBAR_DIR/config/"
     fi
-    if [[ ! -f "$BARB_DIR/libSkirmishAI.so.upstream-backup" ]]; then
-        cp "$BARB_DIR/libSkirmishAI.so" \
-           "$BARB_DIR/libSkirmishAI.so.upstream-backup"
+    if [[ -d "$BARB_SEED_DIR/script" ]]; then
+        cp -a "$BARB_SEED_DIR/script/." "$HIGHBAR_DIR/script/"
     fi
-    cp "$PLUGIN_SO" "$BARB_DIR/libSkirmishAI.so"
+    cp "$REPO_ROOT/data/AIInfo.lua" "$HIGHBAR_DIR/AIInfo.lua"
+    cp "$REPO_ROOT/data/AIOptions.lua" "$HIGHBAR_DIR/AIOptions.lua"
+    cp "$REPO_ROOT/data/config/"*.json "$HIGHBAR_DIR/config/"
+    cp "$REPO_ROOT/data/config/dev/"*.json "$HIGHBAR_DIR/config/dev/"
+    cp "$REPO_ROOT/data/script/"*.as "$HIGHBAR_DIR/script/"
+    cp "$REPO_ROOT/data/script/dev/"*.as "$HIGHBAR_DIR/script/dev/"
+    cp "$PLUGIN_SRC" "$HIGHBAR_DIR/libSkirmishAI.so"
+elif [[ "$VIEWER_ONLY" != "true" && ! -f "$HIGHBAR_DIR/libSkirmishAI.so" ]]; then
+    echo "_launch.sh: highBar AI is not installed at $HIGHBAR_DIR and no plugin artifact was provided" >&2
+    exit 77
+fi
+
+if [[ "$VIEWER_ONLY" != "true" ]]; then
+    HIGHBAR_GAME_CFG_DIR="$WRITEDIR/LuaRules/Configs/highBar/stable"
+    mkdir -p "$HIGHBAR_GAME_CFG_DIR/config/dev" "$HIGHBAR_GAME_CFG_DIR/script/dev"
+    if [[ -d "$BARB_SEED_DIR/config" ]]; then
+        cp -a "$BARB_SEED_DIR/config/." "$HIGHBAR_GAME_CFG_DIR/config/"
+    fi
+    if [[ -d "$BARB_SEED_DIR/script" ]]; then
+        cp -a "$BARB_SEED_DIR/script/." "$HIGHBAR_GAME_CFG_DIR/script/"
+    fi
+    cp "$REPO_ROOT/data/config/"*.json "$HIGHBAR_GAME_CFG_DIR/config/"
+    cp "$REPO_ROOT/data/config/dev/"*.json "$HIGHBAR_GAME_CFG_DIR/config/dev/"
+    cp "$REPO_ROOT/data/script/"*.as "$HIGHBAR_GAME_CFG_DIR/script/"
+    cp "$REPO_ROOT/data/script/dev/"*.as "$HIGHBAR_GAME_CFG_DIR/script/dev/"
 fi
 
 # --- environment + launch ----------------------------------------------------
@@ -122,29 +177,86 @@ if [[ -z "$PID_FILE" ]]; then PID_FILE="$RUNTIME_DIR/highbar-launch.pid"; fi
 
 export SPRING_DATADIR="$WRITEDIR"
 export XDG_RUNTIME_DIR="$RUNTIME_DIR"
-[[ -n "$COORDINATOR" ]] && export HIGHBAR_COORDINATOR="$COORDINATOR"
-export HIGHBAR_AUDIT_PHASE="$PHASE_MODE"
-if [[ -n "$ENABLE_BUILTIN" ]]; then
-    export HIGHBAR_ENABLE_BUILTIN="$ENABLE_BUILTIN"
-elif [[ "$PHASE_MODE" == "2" ]]; then
-    export HIGHBAR_ENABLE_BUILTIN="false"
-else
-    export HIGHBAR_ENABLE_BUILTIN="true"
+if [[ "$VIEWER_ONLY" != "true" ]]; then
+    [[ -n "$COORDINATOR" ]] && export HIGHBAR_COORDINATOR="$COORDINATOR"
+    export HIGHBAR_AUDIT_PHASE="$PHASE_MODE"
+    if [[ -n "$ENABLE_BUILTIN" ]]; then
+        export HIGHBAR_ENABLE_BUILTIN="$ENABLE_BUILTIN"
+    elif [[ "$PHASE_MODE" == "2" ]]; then
+        export HIGHBAR_ENABLE_BUILTIN="false"
+    else
+        export HIGHBAR_ENABLE_BUILTIN="true"
+    fi
+
+    # Clear stale state files from prior runs.
+    rm -f "$RUNTIME_DIR/highbar-0.sock" \
+          "$WRITEDIR/highbar.token" \
+          "$WRITEDIR/highbar.health" \
+          "$WRITEDIR/engine/$PIN_RELEASE/highbar.token" \
+          "$WRITEDIR/engine/$PIN_RELEASE/highbar.health"
+
+    if [[ -d "$LUA_GADGET_SRC_DIR" ]]; then
+        mkdir -p "$WRITEDIR/LuaRules/Gadgets"
+        cp "$LUA_GADGET_SRC_DIR"/*.lua "$WRITEDIR/LuaRules/Gadgets/"
+    fi
 fi
 
-# Clear stale state files from prior runs.
-rm -f "$RUNTIME_DIR/highbar-0.sock" \
-      "$WRITEDIR/highbar.token" \
-      "$WRITEDIR/highbar.health" \
-      "$WRITEDIR/engine/$PIN_RELEASE/highbar.token" \
-      "$WRITEDIR/engine/$PIN_RELEASE/highbar.health"
+LAUNCH_ARGS=()
+if [[ "$ENGINE_BASENAME" == "spring" ]]; then
+    CONFIG_PATH="$RUNTIME_DIR/highbar-watch.springsettings.cfg"
+    if [[ -f "$WRITEDIR/springsettings.cfg" ]]; then
+        cp "$WRITEDIR/springsettings.cfg" "$CONFIG_PATH"
+    else
+        : > "$CONFIG_PATH"
+    fi
 
-if [[ -d "$LUA_GADGET_SRC_DIR" ]]; then
-    mkdir -p "$WRITEDIR/LuaRules/Gadgets"
-    cp "$LUA_GADGET_SRC_DIR"/*.lua "$WRITEDIR/LuaRules/Gadgets/"
+    case "$WINDOW_MODE" in
+        windowed)
+            fullscreen_value=0
+            borderless_value=0
+            ;;
+        borderless)
+            fullscreen_value=0
+            borderless_value=1
+            ;;
+        fullscreen)
+            fullscreen_value=1
+            borderless_value=0
+            ;;
+        *)
+            echo "_launch.sh: unsupported --window-mode $WINDOW_MODE" >&2
+            exit 1
+            ;;
+    esac
+
+    if [[ "$MOUSE_CAPTURE" == "true" || "$MOUSE_CAPTURE" == "1" ]]; then
+        hardware_cursor=0
+        relative_mode_warp=1
+    else
+        hardware_cursor=1
+        relative_mode_warp=0
+    fi
+
+    cat >> "$CONFIG_PATH" <<EOF
+Fullscreen = $fullscreen_value
+WindowBorderless = $borderless_value
+WindowPosX = 0
+WindowPosY = 0
+XResolution = $WINDOW_WIDTH
+YResolution = $WINDOW_HEIGHT
+XResolutionWindowed = $WINDOW_WIDTH
+YResolutionWindowed = $WINDOW_HEIGHT
+HardwareCursor = $hardware_cursor
+MouseRelativeModeWarp = $relative_mode_warp
+EOF
+
+    LAUNCH_ARGS+=(--write-dir "$WRITEDIR" --config "$CONFIG_PATH")
+    if [[ "$WINDOW_MODE" != "fullscreen" ]]; then
+        LAUNCH_ARGS+=(--window)
+    fi
 fi
 
-"$ENGINE" "$START_SCRIPT" > "$LOG" 2>&1 &
+"$ENGINE" "${LAUNCH_ARGS[@]}" "$START_SCRIPT" > "$LOG" 2>&1 &
 SPRING_PID=$!
 echo "$SPRING_PID" > "$PID_FILE"
 echo "_launch.sh: started spring pid=$SPRING_PID log=$LOG"

@@ -44,7 +44,7 @@
 	{
 		Name=HighBarV3-team0;
 		Team=0;
-		ShortName=BARb;
+		ShortName=highBar;
 		Version=stable;
 		Host=0;
 	}

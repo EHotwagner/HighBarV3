@@ -93,16 +93,21 @@ tests/headless/_gen-arm-coverage.sh --repo-root . --output build/reports/aicomma
 echo "wired: $(grep -c ',true,' build/reports/aicommand-arm-coverage.csv) / $(grep -cv arm_name build/reports/aicommand-arm-coverage.csv)"
 ```
 
-## 7. Install the built `.so` into BAR's AI dir (override upstream BARb)
+## 7. Install the built `.so` into a separate `highBar` AI dir
 
 <!-- expect: HighBarV3 install OK -->
 ```bash
 BAR_DIR="$HOME/.local/state/Beyond All Reason/engine/recoil_2025.06.19"
-[ ! -f "$BAR_DIR/AI/Skirmish/BARb/stable/libSkirmishAI.so.upstream-backup" ] && \
-    cp "$BAR_DIR/AI/Skirmish/BARb/stable/libSkirmishAI.so" \
-       "$BAR_DIR/AI/Skirmish/BARb/stable/libSkirmishAI.so.upstream-backup"
+HIGHBAR_DIR="$BAR_DIR/AI/Skirmish/highBar/stable"
+mkdir -p "$HIGHBAR_DIR/config/dev" "$HIGHBAR_DIR/script/dev"
+cp data/AIInfo.lua "$HIGHBAR_DIR/AIInfo.lua"
+cp data/AIOptions.lua "$HIGHBAR_DIR/AIOptions.lua"
+cp data/config/*.json "$HIGHBAR_DIR/config/"
+cp data/config/dev/*.json "$HIGHBAR_DIR/config/dev/"
+cp data/script/*.as "$HIGHBAR_DIR/script/"
+cp data/script/dev/*.as "$HIGHBAR_DIR/script/dev/"
 cp ~/recoil-engine/build/AI/Skirmish/BARb/data/libSkirmishAI.so \
-   "$BAR_DIR/AI/Skirmish/BARb/stable/libSkirmishAI.so"
+   "$HIGHBAR_DIR/libSkirmishAI.so"
 echo "HighBarV3 install OK"
 ```
 

@@ -3,6 +3,13 @@ from __future__ import annotations
 
 from highbar_client.behavioral_coverage.itertesting_report import render_run_report
 from highbar_client.behavioral_coverage.itertesting_runner import build_run, run_campaign
+from highbar_client.behavioral_coverage.itertesting_types import (
+    ViewerAccessRecord,
+    WatchPreflightResult,
+    WatchProfile,
+    WatchRequest,
+    WatchedRunSession,
+)
 from highbar_client.behavioral_coverage.registry import REGISTRY
 
 
@@ -90,6 +97,45 @@ def _hardening_live_rows():
     ]
 
 
+def _watch_session(run_id: str, state: str, reason: str) -> WatchedRunSession:
+    return WatchedRunSession(
+        run_id=run_id,
+        campaign_id="campaign-1",
+        run_lifecycle_state="failed" if state == "unavailable" else "completed",
+        watch_requested=True,
+        watch_request=WatchRequest(
+            request_id=f"watch-{run_id}",
+            request_mode="launch-time",
+            requested_at="2026-04-23T10:00:00Z",
+            target_run_id=run_id,
+            selection_mode="explicit",
+            profile_ref="default",
+            watch_required=True,
+        ),
+        preflight_result=WatchPreflightResult(
+            status="ready" if state != "unavailable" else "environment_unready",
+            reason=reason,
+            checked_at="2026-04-23T10:00:00Z",
+            resolved_profile=WatchProfile(
+                profile_id="default",
+                viewer_binary="/tmp/fake-spring",
+                watch_speed=3.0,
+            ),
+            blocking=(state == "unavailable"),
+        ),
+        viewer_access=ViewerAccessRecord(
+            availability_state=state,
+            reason=reason,
+            launch_command=("spring", "--window", "/tmp/minimal.startscript"),
+            launched_at="2026-04-23T10:00:01Z" if state != "unavailable" else None,
+            expires_at="2026-04-23T10:05:00Z" if state == "expired" else None,
+            viewer_pid=123 if state != "unavailable" else None,
+            last_transition_at="2026-04-23T10:05:00Z",
+        ),
+        report_path=f"/tmp/{run_id}/run-report.md",
+    )
+
+
 def test_report_renders_required_sections_and_direct_split(tmp_path):
     campaign, runs = run_campaign(
         reports_dir=tmp_path,
@@ -137,6 +183,58 @@ def test_report_labels_natural_and_cheat_assisted_totals(tmp_path):
 
     assert "Direct verified natural:" in rendered
     assert "Direct verified cheat-assisted:" in rendered
+
+
+def test_report_renders_watch_status_for_available_viewer_access(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        watch_session=_watch_session(
+            "run-1",
+            "available",
+            "graphical BAR client launched for watched run",
+        ),
+    )
+
+    rendered = render_run_report(run)
+
+    assert "## Watch Status" in rendered
+    assert "- Watch requested: yes" in rendered
+    assert "- Viewer access: available" in rendered
+    assert "- Watch profile: default" in rendered
+    assert "- Resolved watch speed: 3.0" in rendered
+
+
+def test_report_renders_expired_and_unavailable_watch_reasons(tmp_path):
+    expired = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        watch_session=_watch_session(
+            "run-expired",
+            "expired",
+            "run completed; attach-later access expired",
+        ),
+    )
+    unavailable = build_run(
+        campaign_id="campaign-1",
+        sequence_index=1,
+        reports_dir=tmp_path,
+        watch_session=_watch_session(
+            "run-unavailable",
+            "unavailable",
+            "graphical BAR client prerequisites are not installed",
+        ),
+    )
+
+    expired_rendered = render_run_report(expired)
+    unavailable_rendered = render_run_report(unavailable)
+
+    assert "- Viewer access: expired" in expired_rendered
+    assert "attach-later access expired" in expired_rendered
+    assert "- Preflight status: environment_unready" in unavailable_rendered
+    assert "graphical BAR client prerequisites are not installed" in unavailable_rendered
 
 
 def test_report_lists_unverified_direct_commands_with_next_actions(tmp_path):

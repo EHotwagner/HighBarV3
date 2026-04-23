@@ -13,6 +13,11 @@ from typing import Any
 
 from .audit_inventory import ENGINE_PIN, GAMETYPE_PIN, repo_root
 from .audit_runner import deterministic_repros_for_issues
+from .bnv_watch import (
+    evaluate_watch_preflight,
+    launch_viewer,
+    make_watch_request,
+)
 from .bootstrap import (
     DEFAULT_LIVE_FIXTURE_CLASSES,
     OPTIONAL_LIVE_FIXTURE_CLASSES,
@@ -73,6 +78,8 @@ from .itertesting_types import (
     TransportLifecycleEvent,
     TransportProvisioningResult,
     TransportResolutionTrace,
+    ViewerAccessRecord,
+    WatchedRunSession,
     manifest_dict,
     run_from_dict,
 )
@@ -86,6 +93,7 @@ from .live_failure_classification import (
 from .run_interpretation import interpret_live_execution_capture
 from .predicates import semantic_gate_metadata
 from .registry import REGISTRY
+from .watch_registry import resolve_attach_later_target, upsert_watch_session
 
 
 _ALWAYS_NATURAL = {"attack", "build_unit", "self_destruct"}
@@ -100,6 +108,13 @@ def utc_now() -> datetime:
 
 def format_timestamp(instant: datetime) -> str:
     return instant.isoformat().replace("+00:00", "Z")
+
+
+def env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def default_reports_dir() -> Path:
@@ -124,6 +139,14 @@ def make_run_id(reports_dir: Path, now: datetime | None = None) -> str:
 
 def run_dir(reports_dir: Path, run_id: str) -> Path:
     return reports_dir / run_id
+
+
+def manifest_path_for_run(reports_dir: Path, run_id: str) -> Path:
+    return run_dir(reports_dir, run_id) / "manifest.json"
+
+
+def report_path_for_run(reports_dir: Path, run_id: str) -> Path:
+    return run_dir(reports_dir, run_id) / "run-report.md"
 
 
 def instructions_dir(reports_dir: Path) -> Path:
@@ -1905,13 +1928,16 @@ def build_run(
     campaign_id: str,
     sequence_index: int,
     reports_dir: Path,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
     previous_run: ItertestingRun | None = None,
     cheat_enabled: bool = False,
     prior_instructions: dict[str, ImprovementInstruction] | None = None,
     live_rows: list[dict] | None = None,
+    watch_session: WatchedRunSession | None = None,
 ) -> ItertestingRun:
-    started = utc_now()
-    run_id = make_run_id(reports_dir, started)
+    started = started_at or utc_now()
+    run_id = run_id or make_run_id(reports_dir, started)
     loaded_instructions = prior_instructions or {}
     capture = build_live_execution_capture(
         run_id=run_id,
@@ -2072,6 +2098,7 @@ def build_run(
         deterministic_repros=deterministic_repros,
         contract_health_decision=contract_health_decision,
         improvement_eligibility=improvement_eligibility,
+        watch_session=watch_session,
     )
     comparison = _comparison_for_run(run, previous_run)
     return replace(run, previous_run_comparison=comparison)
@@ -2086,11 +2113,16 @@ def write_run_bundle(
     bundle_dir = run_dir(reports_dir, run.run_id)
     bundle_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = bundle_dir / "manifest.json"
+    report_path = bundle_dir / "run-report.md"
+    if run.watch_session is not None and run.watch_session.report_path != str(report_path):
+        run = replace(
+            run,
+            watch_session=replace(run.watch_session, report_path=str(report_path)),
+        )
     manifest_path.write_text(
         json.dumps(manifest_dict(run), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    report_path = bundle_dir / "run-report.md"
     report_path.write_text(
         render_run_report(
             run,
@@ -2138,6 +2170,138 @@ def load_run_manifest(path: Path) -> ItertestingRun:
 def latest_run_manifest(reports_dir: Path) -> Path | None:
     manifests = sorted(reports_dir.glob("itertesting-*/manifest.json"))
     return manifests[-1] if manifests else None
+
+
+def _attach_existing_graphical_client(
+    *,
+    manifest_path: str,
+    preflight_checked_at: str,
+) -> ViewerAccessRecord:
+    if not manifest_path:
+        return ViewerAccessRecord(
+            availability_state="unavailable",
+            reason="active watched run has no manifest path for graphical client reuse",
+            last_transition_at=preflight_checked_at,
+        )
+    try:
+        manifest = load_run_manifest(Path(manifest_path))
+    except (FileNotFoundError, ValueError) as exc:
+        return ViewerAccessRecord(
+            availability_state="unavailable",
+            reason=f"failed to load watched run manifest for attach-later: {exc}",
+            last_transition_at=preflight_checked_at,
+        )
+    existing = (
+        manifest.watch_session.viewer_access
+        if manifest.watch_session is not None
+        else None
+    )
+    if existing is None or existing.availability_state not in {"available", "attached"}:
+        return ViewerAccessRecord(
+            availability_state="unavailable",
+            reason="active watched run does not have a reusable graphical BAR client",
+            last_transition_at=preflight_checked_at,
+        )
+    return ViewerAccessRecord(
+        availability_state="attached",
+        reason="reused the existing graphical BAR client for the active watched run",
+        launch_command=existing.launch_command,
+        launched_at=existing.launched_at,
+        viewer_pid=existing.viewer_pid,
+        expires_at=existing.expires_at,
+        last_transition_at=preflight_checked_at,
+    )
+
+
+def attach_watch_to_active_run(
+    *,
+    reports_dir: Path,
+    watch_run: str | None,
+    watch_profile: str,
+    watch_speed: float | None = None,
+) -> tuple[WatchedRunSession, int]:
+    selection = resolve_attach_later_target(
+        reports_dir,
+        run_id=(watch_run or None),
+    )
+    selected_run_id = selection.run_id or (watch_run or "attach-later")
+    request = make_watch_request(
+        request_mode="attach-later",
+        profile_ref=watch_profile,
+        target_run_id=(watch_run or None),
+        selection_mode=selection.selection_mode,
+    )
+    preflight = evaluate_watch_preflight(
+        profile_ref=watch_profile,
+        resolved_run_id=selection.run_id,
+        run_compatible=selection.entry.compatible_for_attach if selection.entry else False,
+        selection_error=None if selection.run_id is not None else selection.reason,
+        watch_speed=watch_speed,
+    )
+    session = WatchedRunSession(
+        run_id=selected_run_id,
+        campaign_id=selection.entry.campaign_id if selection.entry else None,
+        run_lifecycle_state="failed" if preflight.blocking else "active",
+        watch_requested=True,
+        watch_request=request,
+        preflight_result=preflight,
+        report_path=selection.entry.report_path if selection.entry else "",
+    )
+    if preflight.blocking or preflight.resolved_profile is None:
+        return session, 1
+    viewer_access = _attach_existing_graphical_client(
+        manifest_path=selection.entry.manifest_path if selection.entry else "",
+        preflight_checked_at=preflight.checked_at,
+    )
+    session = replace(
+        session,
+        run_lifecycle_state=(
+            "active" if viewer_access.availability_state == "attached" else "failed"
+        ),
+        viewer_access=viewer_access,
+    )
+    if selection.entry is not None:
+        upsert_watch_session(
+            reports_dir,
+            session,
+            updated_at=viewer_access.last_transition_at,
+            manifest_path=selection.entry.manifest_path,
+        )
+    return session, 0 if viewer_access.availability_state == "attached" else 1
+
+
+def emit_watch_summary(session: WatchedRunSession) -> None:
+    preflight = session.preflight_result
+    if session.watch_request is not None:
+        target = session.watch_request.target_run_id or "auto"
+        print(
+            "itertesting: watch_request "
+            f"mode={session.watch_request.request_mode} "
+            f"profile={session.watch_request.profile_ref} "
+            f"selection={session.watch_request.selection_mode} "
+            f"target={target}"
+        )
+    if preflight is not None:
+        print(
+            "itertesting: watch_preflight "
+            f"status={preflight.status} "
+            f"run={preflight.resolved_run_id or session.run_id} "
+            f"reason={preflight.reason}"
+        )
+        if preflight.resolved_profile is not None:
+            print(
+                "itertesting: watch_profile "
+                f"id={preflight.resolved_profile.profile_id} "
+                f"speed={preflight.resolved_profile.watch_speed if preflight.resolved_profile.watch_speed is not None else 'default'}"
+            )
+    if session.viewer_access is not None:
+        print(
+            "itertesting: watch_access "
+            f"state={session.viewer_access.availability_state} "
+            f"reason={session.viewer_access.reason}"
+        )
+    if session.report_path:
+        print(f"itertesting: watch_report={session.report_path}")
 
 
 def _next_instruction_revision(
@@ -2231,6 +2395,9 @@ def run_campaign(
     gameseed: str = "0x42424242",
     threshold: float = 0.50,
     skip_live: bool = True,
+    watch: bool = False,
+    watch_profile: str = "default",
+    watch_speed: float | None = None,
 ) -> tuple[ItertestingCampaign, tuple[ItertestingRun, ...]]:
     ensure_reports_dir(reports_dir)
     campaign_started = utc_now()
@@ -2258,27 +2425,86 @@ def run_campaign(
             sequence_index=sequence_index,
         )
         force_cheat_next_run = False
+        started = utc_now()
+        next_run_id = make_run_id(reports_dir, started)
         live_rows: list[dict] | None = None
+        watch_session: WatchedRunSession | None = None
+        if watch:
+            requested_at = format_timestamp(started)
+            watch_request = make_watch_request(
+                request_mode="launch-time",
+                profile_ref=watch_profile,
+                target_run_id=next_run_id,
+                selection_mode="explicit",
+                requested_at=requested_at,
+            )
+            preflight = evaluate_watch_preflight(
+                profile_ref=watch_profile,
+                resolved_run_id=next_run_id,
+                run_compatible=not skip_live,
+                incompatibility_reason="watch mode requires a live Itertesting run",
+                checked_at=requested_at,
+                watch_speed=watch_speed,
+            )
+            watch_session = WatchedRunSession(
+                run_id=next_run_id,
+                campaign_id=campaign_id,
+                run_lifecycle_state="preflight" if preflight.blocking else "launching",
+                watch_requested=True,
+                watch_request=watch_request,
+                preflight_result=preflight,
+                report_path=str(report_path_for_run(reports_dir, next_run_id)),
+            )
+            if not preflight.blocking and preflight.resolved_profile is not None:
+                viewer_access = launch_viewer(
+                    preflight.resolved_profile,
+                    run_id=next_run_id,
+                    reports_dir=reports_dir,
+                )
+                watch_session = replace(
+                    watch_session,
+                    run_lifecycle_state=(
+                        "active"
+                        if viewer_access.availability_state == "available"
+                        else "failed"
+                    ),
+                    viewer_access=viewer_access,
+                )
+                if viewer_access.availability_state == "available":
+                    upsert_watch_session(
+                        reports_dir,
+                        watch_session,
+                        updated_at=viewer_access.last_transition_at,
+                        manifest_path=str(manifest_path_for_run(reports_dir, next_run_id)),
+                    )
+                else:
+                    live_rows = []
+            elif preflight.blocking:
+                live_rows = []
         if not skip_live:
             from . import collect_live_rows
 
-            live_args = _build_live_args(
-                endpoint=endpoint or os.environ.get("HIGHBAR_COORDINATOR", "unix:/tmp/hb-run/hb-coord.sock"),
-                startscript=cheat_startscript if cheat_enabled else startscript,
-                gameseed=gameseed,
-                output_dir=reports_dir / "_live-artifacts",
-                threshold=threshold,
-                run_index=sequence_index,
-            )
-            live_rows = collect_live_rows(live_args)
+            if live_rows is None:
+                live_args = _build_live_args(
+                    endpoint=endpoint or os.environ.get("HIGHBAR_COORDINATOR", "unix:/tmp/hb-run/hb-coord.sock"),
+                    startscript=cheat_startscript if cheat_enabled else startscript,
+                    gameseed=gameseed,
+                    output_dir=reports_dir / "_live-artifacts",
+                    threshold=threshold,
+                    run_index=sequence_index,
+                )
+                live_rows = collect_live_rows(live_args)
         run = build_run(
             campaign_id=campaign_id,
             sequence_index=sequence_index,
             reports_dir=reports_dir,
+            run_id=next_run_id,
+            started_at=started,
             previous_run=previous_run,
             cheat_enabled=cheat_enabled,
             prior_instructions=instruction_store,
             live_rows=live_rows,
+            watch_session=watch_session,
         )
         elapsed_seconds = int((utc_now() - campaign_started).total_seconds())
         snapshot = progress_snapshot_for_run(
@@ -2349,7 +2575,29 @@ def run_campaign(
             instruction_store,
         )
         run = replace(run, instruction_updates=instruction_updates)
-        write_run_bundle(run, reports_dir, stop_decision=stop_decision)
+        if run.watch_session is not None:
+            final_watch_session = replace(
+                run.watch_session,
+                run_lifecycle_state=(
+                    "completed"
+                    if (
+                        run.watch_session.viewer_access is not None
+                        and run.watch_session.viewer_access.availability_state
+                        in {"available", "attached"}
+                    )
+                    else "failed"
+                ),
+                report_path=str(report_path_for_run(reports_dir, run.run_id)),
+            )
+            run = replace(run, watch_session=final_watch_session)
+        bundle_dir = write_run_bundle(run, reports_dir, stop_decision=stop_decision)
+        if run.watch_session is not None:
+            upsert_watch_session(
+                reports_dir,
+                run.watch_session,
+                updated_at=run.completed_at or run.started_at,
+                manifest_path=str(bundle_dir / "manifest.json"),
+            )
         runs.append(run)
         progress_snapshots.append(snapshot)
         previous_run = run
@@ -2451,16 +2699,61 @@ def parse_itertesting_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="runtime governance target for successful campaigns",
     )
     parser.add_argument(
+        "--watch",
+        action=argparse.BooleanOptionalAction,
+        default=env_flag("HIGHBAR_ITERTESTING_WATCH", default=False),
+        help="run the same live Itertesting attempt inside the graphical BAR client",
+    )
+    parser.add_argument(
+        "--watch-profile",
+        default=os.environ.get("HIGHBAR_ITERTESTING_WATCH_PROFILE", "default"),
+        help="watch profile reference or inline json:<object> watch profile",
+    )
+    parser.add_argument(
+        "--watch-speed",
+        type=float,
+        default=(
+            float(os.environ["HIGHBAR_ITERTESTING_WATCH_SPEED"])
+            if os.environ.get("HIGHBAR_ITERTESTING_WATCH_SPEED")
+            else None
+        ),
+        help="target graphical BAR client simulation speed applied after launch via the local AI Bridge",
+    )
+    parser.add_argument(
+        "--watch-run",
+        nargs="?",
+        const="",
+        default=None,
+        help="reuse the active watched run's graphical BAR client; omit the run id to auto-select when unambiguous",
+    )
+    parser.add_argument(
         "--skip-live",
         action="store_true",
         help="skip the coordinator/gateway session and use the synthetic campaign model",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.watch and args.watch_run is not None:
+        parser.error("--watch and --watch-run are mutually exclusive")
+    return args
 
 
 def itertesting_main(argv: list[str] | None = None) -> int:
     args = parse_itertesting_args(argv)
     reports_dir = ensure_reports_dir(Path(args.reports_dir))
+    if args.watch_run is not None:
+        session, rc = attach_watch_to_active_run(
+            reports_dir=reports_dir,
+            watch_run=(args.watch_run or None),
+            watch_profile=args.watch_profile,
+            watch_speed=args.watch_speed,
+        )
+        emit_watch_summary(session)
+        print(f"itertesting: reports={reports_dir}")
+        print(f"itertesting: instructions={instructions_dir(reports_dir)}")
+        print(
+            f"itertesting: watch_index={reports_dir / 'active-watch-sessions.json'}"
+        )
+        return rc
     campaign, runs = run_campaign(
         reports_dir=reports_dir,
         max_improvement_runs=(
@@ -2478,6 +2771,9 @@ def itertesting_main(argv: list[str] | None = None) -> int:
         gameseed=args.gameseed,
         threshold=args.threshold,
         skip_live=args.skip_live,
+        watch=args.watch,
+        watch_profile=args.watch_profile,
+        watch_speed=args.watch_speed,
     )
     latest = runs[-1]
     print(
@@ -2502,4 +2798,14 @@ def itertesting_main(argv: list[str] | None = None) -> int:
     if args.allow_cheat_escalation:
         print(f"itertesting: cheat-startscript={args.cheat_startscript}")
     print(f"itertesting: instructions={instructions_dir(reports_dir)}")
+    if latest.watch_session is not None:
+        emit_watch_summary(latest.watch_session)
+        print(
+            f"itertesting: watch_index={reports_dir / 'active-watch-sessions.json'}"
+        )
+    if (
+        latest.watch_session is not None
+        and latest.watch_session.run_lifecycle_state == "failed"
+    ):
+        return 1
     return 0

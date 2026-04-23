@@ -42,6 +42,25 @@ BOOTSTRAP_WAIT_SECONDS="${HIGHBAR_ITERTESTING_BOOTSTRAP_WAIT_SECONDS:-12}"
 ENABLE_BUILTIN="${HIGHBAR_ITERTESTING_ENABLE_BUILTIN:-false}"
 SPLIT_LIVE_SETUP="${HIGHBAR_ITERTESTING_SPLIT_LIVE_SETUP:-true}"
 EXPLICIT_CALLBACK_PROXY_ENDPOINT="${HIGHBAR_CALLBACK_PROXY_ENDPOINT:-}"
+WATCH_ENABLED="${HIGHBAR_ITERTESTING_WATCH:-false}"
+WATCH_PROFILE="${HIGHBAR_ITERTESTING_WATCH_PROFILE:-default}"
+WATCH_SPEED="${HIGHBAR_ITERTESTING_WATCH_SPEED:-}"
+WATCH_ENGINE_BINARY=""
+WATCH_WINDOW_MODE_RESOLVED=""
+WATCH_WINDOW_WIDTH_RESOLVED=""
+WATCH_WINDOW_HEIGHT_RESOLVED=""
+WATCH_MOUSE_CAPTURE_RESOLVED=""
+WATCH_SPEED_RESOLVED=""
+WATCH_SPEED_MIN_RESOLVED="0.0"
+WATCH_SPEED_MAX_RESOLVED="10.0"
+WATCH_PLAYER_NAME_RESOLVED="${HIGHBAR_ITERTESTING_WATCH_PLAYER_NAME:-HighBarV3Watch}"
+WATCH_HOST_PORT_RESOLVED=""
+WATCH_HOST_STARTSCRIPT=""
+WATCH_VIEWER_STARTSCRIPT=""
+WATCH_VIEWER_RUNTIME_DIR=""
+WATCH_VIEWER_LOG=""
+WATCH_VIEWER_PID_FILE=""
+WATCH_VIEWER_HELPER_PID=""
 # The maintainer-facing live path is documented as a default single run.
 # Keep profile-driven defaults for synthetic campaign validation, but
 # clamp the live wrapper to one run unless the maintainer explicitly
@@ -60,6 +79,17 @@ BYAR_USER_CONFIG_PATH=""
 BYAR_USER_CONFIG_BACKUP=""
 BYAR_ENGINE_CONFIG_PATH=""
 BYAR_ENGINE_CONFIG_BACKUP=""
+AI_BRIDGE_WIDGET_PATH=""
+AI_BRIDGE_WIDGET_BACKUP=""
+AI_NAMER_POOL_PATH=""
+AI_NAMER_POOL_BACKUP=""
+WATCH_NAME_WIDGET_MANIFEST=""
+WATCH_AI_NAME_GADGET_PATH=""
+WATCH_AI_NAME_GADGET_BACKUP=""
+WATCH_AI_NAME_WIDGET_PATH=""
+WATCH_AI_NAME_WIDGET_BACKUP=""
+WATCH_ADVPLAYERSLIST_OVERRIDE_PATH=""
+WATCH_ADVPLAYERSLIST_OVERRIDE_BACKUP=""
 
 mkdir -p "$RUN_DIR"
 
@@ -140,7 +170,933 @@ restore_autoquit_config() {
     BYAR_ENGINE_CONFIG_BACKUP=""
 }
 
+enable_watch_ai_name_widget_config() {
+    local config_path="$1"
+    [[ -f "$config_path" ]] || return 0
+    python3 - "$config_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+pattern = r'(\["HighBar AI Names"\]\s*=\s*)0(,)'
+updated, count = re.subn(pattern, r'\g<1>1\2', text, count=1)
+if count:
+    path.write_text(updated, encoding="utf-8")
+PY
+}
+
+patch_watch_ai_bridge_widget() {
+    AI_BRIDGE_WIDGET_PATH="$WRITE_DIR/LuaUI/Widgets/api_ai_bridge.lua"
+    AI_BRIDGE_WIDGET_BACKUP="$ACTIVE_RUN_DIR/api_ai_bridge.lua.pre-highbar"
+    if [[ ! -f "$AI_BRIDGE_WIDGET_PATH" ]]; then
+        AI_BRIDGE_WIDGET_PATH=""
+        AI_BRIDGE_WIDGET_BACKUP=""
+        return 1
+    fi
+    cp "$AI_BRIDGE_WIDGET_PATH" "$AI_BRIDGE_WIDGET_BACKUP"
+    python3 - "$AI_BRIDGE_WIDGET_PATH" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+original = '  Spring.SendCommands("setminspeed " .. msg.speed)\n  Spring.SendCommands("setmaxspeed " .. msg.speed)\n'
+patched = '  Spring.SendCommands("setspeed " .. msg.speed)\n'
+if original in text:
+    text = text.replace(original, patched, 1)
+elif patched in text:
+    pass
+else:
+    raise SystemExit(1)
+
+original_handlers = '  set_speed  = function(msg) handleSetSpeed(msg) end,\n  pause      = function(msg) handlePause(msg) end,\n'
+patched_handlers = (
+    '  set_speed  = function(msg) handleSetSpeed(msg) end,\n'
+    '  grab_input = function(msg) handleGrabInput(msg) end,\n'
+    '  pause      = function(msg) handlePause(msg) end,\n'
+)
+if original_handlers in text:
+    text = text.replace(original_handlers, patched_handlers, 1)
+elif patched_handlers in text:
+    pass
+else:
+    raise SystemExit(1)
+
+original_forward = (
+    'local handleSetSpeed\n'
+    'local handlePause\n'
+    'local handleClientDisconnect\n'
+)
+patched_forward = (
+    'local handleSetSpeed\n'
+    'local handleGrabInput\n'
+    'local handlePause\n'
+    'local handleClientDisconnect\n'
+)
+if original_forward in text:
+    text = text.replace(original_forward, patched_forward, 1)
+elif patched_forward in text:
+    pass
+else:
+    raise SystemExit(1)
+
+original_pause = (
+    'handlePause = function(msg)\n'
+    '  if type(msg.paused) ~= "boolean" then\n'
+    '    sendError(msg.id, "invalid_message", "Missing or invalid paused (expected boolean)")\n'
+    '    return\n'
+    '  end\n\n'
+    '  Spring.SendCommands("pause " .. (msg.paused and "1" or "0"))\n'
+    '  sendMessage({ type = "ok", id = msg.id })\n'
+    'end\n'
+)
+patched_pause = (
+    'handleGrabInput = function(msg)\n'
+    '  if type(msg.enabled) ~= "boolean" then\n'
+    '    sendError(msg.id, "invalid_message", "Missing or invalid enabled (expected boolean)")\n'
+    '    return\n'
+    '  end\n\n'
+    '  Spring.SendCommands("GrabInput " .. (msg.enabled and "1" or "0"))\n'
+    '  sendMessage({ type = "ok", id = msg.id })\n'
+    'end\n\n'
+    'handlePause = function(msg)\n'
+    '  if type(msg.paused) ~= "boolean" then\n'
+    '    sendError(msg.id, "invalid_message", "Missing or invalid paused (expected boolean)")\n'
+    '    return\n'
+    '  end\n\n'
+    '  Spring.SendCommands("pause " .. (msg.paused and "1" or "0"))\n'
+    '  sendMessage({ type = "ok", id = msg.id })\n'
+    'end\n'
+)
+if original_pause in text:
+    text = text.replace(original_pause, patched_pause, 1)
+elif 'handleGrabInput = function(msg)' in text:
+    pass
+else:
+    raise SystemExit(1)
+path.write_text(text, encoding="utf-8")
+PY
+    return $?
+}
+
+restore_watch_ai_bridge_widget() {
+    if [[ -n "$AI_BRIDGE_WIDGET_PATH" && -n "$AI_BRIDGE_WIDGET_BACKUP" && -f "$AI_BRIDGE_WIDGET_BACKUP" ]]; then
+        cp "$AI_BRIDGE_WIDGET_BACKUP" "$AI_BRIDGE_WIDGET_PATH"
+    fi
+    AI_BRIDGE_WIDGET_PATH=""
+    AI_BRIDGE_WIDGET_BACKUP=""
+}
+
+resolve_watch_package_pool_entry() {
+    local entry_name="$1"
+    python3 - "$WRITE_DIR" "$entry_name" <<'PY'
+from pathlib import Path
+import gzip
+import sys
+
+write_dir = Path(sys.argv[1])
+needle = sys.argv[2].encode("utf-8")
+packages_dir = write_dir / "packages"
+pool_dir = write_dir / "pool"
+
+if not packages_dir.is_dir() or not pool_dir.is_dir():
+    raise SystemExit(1)
+
+for sdp_path in sorted(packages_dir.glob("*.sdp")):
+    try:
+        data = gzip.open(sdp_path, "rb").read()
+    except OSError:
+        continue
+    entry_index = data.find(needle)
+    if entry_index < 0:
+        continue
+    digest_start = entry_index + len(needle)
+    digest = data[digest_start : digest_start + 16].hex()
+    if len(digest) != 32:
+        continue
+    pool_path = pool_dir / digest[:2] / f"{digest[2:]}.gz"
+    if pool_path.is_file():
+        print(pool_path)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+resolve_watch_package_pool_entries() {
+    local entry_name="$1"
+    python3 - "$WRITE_DIR" "$entry_name" <<'PY'
+from pathlib import Path
+import gzip
+import sys
+
+write_dir = Path(sys.argv[1])
+needle = sys.argv[2].encode("utf-8")
+packages_dir = write_dir / "packages"
+pool_dir = write_dir / "pool"
+
+if not packages_dir.is_dir() or not pool_dir.is_dir():
+    raise SystemExit(1)
+
+paths: list[str] = []
+seen: set[str] = set()
+for sdp_path in sorted(packages_dir.glob("*.sdp")):
+    try:
+        data = gzip.open(sdp_path, "rb").read()
+    except OSError:
+        continue
+    start = 0
+    while True:
+        entry_index = data.find(needle, start)
+        if entry_index < 0:
+            break
+        digest_start = entry_index + len(needle)
+        digest = data[digest_start : digest_start + 16].hex()
+        pool_path = pool_dir / digest[:2] / f"{digest[2:]}.gz"
+        if len(digest) == 32 and pool_path.is_file():
+            key = str(pool_path)
+            if key not in seen:
+                seen.add(key)
+                paths.append(key)
+        start = entry_index + 1
+
+if not paths:
+    raise SystemExit(1)
+
+print("\n".join(paths))
+PY
+}
+
+patch_watch_ai_namer() {
+    AI_NAMER_POOL_PATH="$(
+        resolve_watch_package_pool_entry "luarules/gadgets/ai_namer.lua"
+    )" || {
+        AI_NAMER_POOL_PATH=""
+        AI_NAMER_POOL_BACKUP=""
+        return 1
+    }
+
+    AI_NAMER_POOL_BACKUP="$ACTIVE_RUN_DIR/ai_namer.lua.pre-highbar.gz"
+    cp "$AI_NAMER_POOL_PATH" "$AI_NAMER_POOL_BACKUP"
+    python3 - "$AI_NAMER_POOL_PATH" <<'PY'
+from pathlib import Path
+import gzip
+import sys
+
+path = Path(sys.argv[1])
+patched = """local gadget = gadget ---@type Gadget
+
+function gadget:GetInfo()
+  return {
+    name    = "AI namer",
+    desc    = "Assignes deterministic names to AI teams",
+    author  = "HighBar",
+    date    = "April 2026",
+    license = "GNU GPL, v2 or later",
+    layer   = 999,
+    enabled = true,
+  }
+end
+
+if not gadgetHandler:IsSyncedCode() then
+  return false
+end
+
+local PUBLIC = { public = true }
+
+local function applyStableAINames()
+  local updated = false
+  for _, teamID in ipairs(Spring.GetTeamList()) do
+    if select(4, Spring.GetTeamInfo(teamID, false)) then
+      local aiName = string.format("HighBarV3-team%d", teamID)
+      Spring.SetGameRulesParam("ainame_" .. teamID, aiName, PUBLIC)
+      Spring.Echo("HighBar AI name override: team " .. teamID .. " => " .. aiName)
+      updated = true
+    end
+  end
+  return updated
+end
+
+function gadget:Initialize()
+  applyStableAINames()
+end
+
+function gadget:GameID()
+  applyStableAINames()
+end
+
+function gadget:GameFrame(frame)
+  if frame < 1 then
+    return
+  end
+  applyStableAINames()
+  gadgetHandler:RemoveGadget(self)
+end
+"""
+with gzip.open(path, "wt", encoding="utf-8") as handle:
+    handle.write(patched)
+PY
+    return $?
+}
+
+restore_watch_ai_namer() {
+    if [[ -n "$AI_NAMER_POOL_PATH" && -n "$AI_NAMER_POOL_BACKUP" && -f "$AI_NAMER_POOL_BACKUP" ]]; then
+        cp "$AI_NAMER_POOL_BACKUP" "$AI_NAMER_POOL_PATH"
+    fi
+    AI_NAMER_POOL_PATH=""
+    AI_NAMER_POOL_BACKUP=""
+}
+
+install_watch_ai_name_gadget() {
+    local gadget_dir="$WRITE_DIR/LuaRules/Gadgets"
+    WATCH_AI_NAME_GADGET_PATH="$gadget_dir/highbar_ai_name_override.lua"
+    WATCH_AI_NAME_GADGET_BACKUP="$ACTIVE_RUN_DIR/highbar_ai_name_override.lua.pre-highbar"
+    mkdir -p "$gadget_dir"
+    if [[ -f "$WATCH_AI_NAME_GADGET_PATH" ]]; then
+        cp "$WATCH_AI_NAME_GADGET_PATH" "$WATCH_AI_NAME_GADGET_BACKUP"
+    else
+        WATCH_AI_NAME_GADGET_BACKUP=""
+    fi
+    python3 - "$WATCH_AI_NAME_GADGET_PATH" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    """local gadget = gadget ---@type Gadget
+
+function gadget:GetInfo()
+  return {
+    name    = "HighBar AI Name Override",
+    desc    = "Publishes stable AI names for watched BAR runs",
+    author  = "HighBar",
+    date    = "April 2026",
+    license = "MIT",
+    layer   = 999999,
+    enabled = true,
+  }
+end
+
+if not gadgetHandler:IsSyncedCode() then
+  return false
+end
+
+local PUBLIC = { public = true }
+
+local function normalizedText(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  if value == "" or value == "UNKNOWN" or value == "n/a" then
+    return nil
+  end
+  return value
+end
+
+local function buildDesiredAIName(teamID)
+  local _, aiName, _, shortName, _, options = Spring.GetAIInfo(teamID)
+  local label = normalizedText(shortName) or normalizedText(aiName)
+  local detail = nil
+  if type(options) == "table" then
+    detail = normalizedText(options.profile) or normalizedText(options.difficulty)
+  end
+  if not label then
+    return string.format("AI team %d", teamID)
+  end
+  if detail and detail ~= label then
+    return string.format("%s (%s)", label, detail)
+  end
+  return label
+end
+
+local function applyStableAINames()
+  local updated = false
+  for _, teamID in ipairs(Spring.GetTeamList()) do
+    if select(4, Spring.GetTeamInfo(teamID, false)) then
+      local aiName = buildDesiredAIName(teamID)
+      Spring.SetGameRulesParam("ainame_" .. teamID, aiName, PUBLIC)
+      updated = true
+    end
+  end
+  return updated
+end
+
+function gadget:Initialize()
+  applyStableAINames()
+end
+
+function gadget:GameID()
+  applyStableAINames()
+end
+
+function gadget:GameFrame(frame)
+  if frame < 1 then
+    return
+  end
+  applyStableAINames()
+  gadgetHandler:RemoveGadget(self)
+end
+""",
+    encoding="utf-8",
+)
+PY
+}
+
+restore_watch_ai_name_gadget() {
+    if [[ -z "$WATCH_AI_NAME_GADGET_PATH" ]]; then
+        return
+    fi
+    if [[ -n "$WATCH_AI_NAME_GADGET_BACKUP" && -f "$WATCH_AI_NAME_GADGET_BACKUP" ]]; then
+        cp "$WATCH_AI_NAME_GADGET_BACKUP" "$WATCH_AI_NAME_GADGET_PATH"
+    else
+        rm -f "$WATCH_AI_NAME_GADGET_PATH"
+    fi
+    WATCH_AI_NAME_GADGET_PATH=""
+    WATCH_AI_NAME_GADGET_BACKUP=""
+}
+
+install_watch_ai_name_widget() {
+    local widget_dir="$WRITE_DIR/LuaUI/Widgets"
+    WATCH_AI_NAME_WIDGET_PATH="$widget_dir/aaa_highbar_ai_names.lua"
+    WATCH_AI_NAME_WIDGET_BACKUP="$ACTIVE_RUN_DIR/aaa_highbar_ai_names.lua.pre-highbar"
+    mkdir -p "$widget_dir"
+    if [[ -f "$WATCH_AI_NAME_WIDGET_PATH" ]]; then
+        cp "$WATCH_AI_NAME_WIDGET_PATH" "$WATCH_AI_NAME_WIDGET_BACKUP"
+    else
+        WATCH_AI_NAME_WIDGET_BACKUP=""
+    fi
+    python3 - "$WATCH_AI_NAME_WIDGET_PATH" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    """local widget = widget ---@type Widget
+
+local PATCH_KEY = "__highbar_ai_name_patch"
+local globalTable = widget._G or {}
+local patchState = rawget(globalTable, PATCH_KEY)
+if not patchState then
+  patchState = {
+    originalGetAIInfo = Spring.GetAIInfo,
+    originalGetGameRulesParam = Spring.GetGameRulesParam,
+  }
+  rawset(globalTable, PATCH_KEY, patchState)
+end
+
+local function normalizedText(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  if value == "" or value == "UNKNOWN" or value == "n/a" then
+    return nil
+  end
+  return value
+end
+
+local function buildDesiredAIName(teamID, aiName, shortName, options)
+  local label = normalizedText(shortName) or normalizedText(aiName)
+  local detail = nil
+  if type(options) == "table" then
+    detail = normalizedText(options.profile) or normalizedText(options.difficulty)
+  end
+  if not label then
+    return string.format("AI team %d", teamID)
+  end
+  if detail and detail ~= label then
+    return string.format("%s (%s)", label, detail)
+  end
+  return label
+end
+
+local function resolveAIName(teamID, currentName)
+  local _, _, _, isAI = Spring.GetTeamInfo(teamID, false)
+  if isAI then
+    local _, aiName, _, shortName, _, options = patchState.originalGetAIInfo(teamID)
+    return buildDesiredAIName(teamID, aiName, shortName, options)
+  end
+  return currentName
+end
+
+local function resolveGameRulesParam(key)
+  if type(key) ~= "string" then
+    return nil
+  end
+  local teamID = key:match("^ainame_(%d+)$")
+  if not teamID then
+    return nil
+  end
+  teamID = tonumber(teamID)
+  if teamID == nil then
+    return nil
+  end
+  local _, aiName, _, shortName, _, options = patchState.originalGetAIInfo(teamID)
+  return buildDesiredAIName(teamID, aiName, shortName, options)
+end
+
+if not patchState.patchedGetAIInfo then
+  patchState.patchedGetAIInfo = function(teamID, ...)
+    local skirmishAIID, aiName, hostingPlayerID, shortName, version, options =
+      patchState.originalGetAIInfo(teamID, ...)
+    return skirmishAIID, resolveAIName(teamID, aiName), hostingPlayerID, shortName, version, options
+  end
+end
+
+if not patchState.patchedGetGameRulesParam then
+  patchState.patchedGetGameRulesParam = function(key, ...)
+    local resolved = resolveGameRulesParam(key)
+    if resolved ~= nil then
+      return resolved
+    end
+    return patchState.originalGetGameRulesParam(key, ...)
+  end
+end
+
+Spring.GetAIInfo = patchState.patchedGetAIInfo
+Spring.GetGameRulesParam = patchState.patchedGetGameRulesParam
+
+function widget:GetInfo()
+  return {
+    name = "HighBar AI Names",
+    desc = "Provides stable AI names to BAR UI widgets",
+    author = "HighBar",
+    date = "2026-04-23",
+    license = "MIT",
+    layer = -1000000,
+    enabled = true,
+  }
+end
+
+function widget:Shutdown()
+  local state = rawget(globalTable, PATCH_KEY)
+  if state and state.originalGetAIInfo then
+    Spring.GetAIInfo = state.originalGetAIInfo
+    if state.originalGetGameRulesParam then
+      Spring.GetGameRulesParam = state.originalGetGameRulesParam
+    end
+    rawset(globalTable, PATCH_KEY, nil)
+  end
+end
+""",
+    encoding="utf-8",
+)
+PY
+    enable_watch_ai_name_widget_config "$BYAR_USER_CONFIG_PATH"
+    enable_watch_ai_name_widget_config "$BYAR_ENGINE_CONFIG_PATH"
+}
+
+restore_watch_ai_name_widget() {
+    if [[ -z "$WATCH_AI_NAME_WIDGET_PATH" ]]; then
+        return
+    fi
+    if [[ -n "$WATCH_AI_NAME_WIDGET_BACKUP" && -f "$WATCH_AI_NAME_WIDGET_BACKUP" ]]; then
+        cp "$WATCH_AI_NAME_WIDGET_BACKUP" "$WATCH_AI_NAME_WIDGET_PATH"
+    else
+        rm -f "$WATCH_AI_NAME_WIDGET_PATH"
+    fi
+    WATCH_AI_NAME_WIDGET_PATH=""
+    WATCH_AI_NAME_WIDGET_BACKUP=""
+}
+
+install_watch_widget_override() {
+    local widget_filename="$1"
+    local source_ref="$2"
+    local package_entry_name="$3"
+    local widget_dir="$WRITE_DIR/LuaUI/Widgets"
+    local target_path="$widget_dir/$widget_filename"
+    local backup_path="$ACTIVE_RUN_DIR/$widget_filename.pre-highbar"
+    local effective_source_ref="$source_ref"
+    mkdir -p "$widget_dir"
+    if [[ -f "$target_path" ]]; then
+        cp "$target_path" "$backup_path"
+    else
+        backup_path=""
+    fi
+    if [[ -z "$effective_source_ref" ]]; then
+        effective_source_ref="$(
+            resolve_watch_package_pool_entry "$package_entry_name"
+        )" || return 1
+    fi
+    python3 - "$effective_source_ref" "$target_path" "$widget_filename" <<'PY'
+from pathlib import Path
+import gzip
+import re
+import sys
+import urllib.request
+
+source_ref = sys.argv[1]
+target_path = Path(sys.argv[2])
+widget_filename = sys.argv[3]
+
+if "://" in source_ref:
+    with urllib.request.urlopen(source_ref, timeout=20) as response:
+        target_path.write_bytes(response.read())
+else:
+    source_path = Path(source_ref)
+    if source_path.suffix == ".gz":
+        with gzip.open(source_path, "rt", encoding="utf-8") as handle:
+            target_path.write_text(handle.read(), encoding="utf-8")
+    else:
+        target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+text = target_path.read_text(encoding="utf-8")
+
+if widget_filename == "gui_advplayerslist.lua":
+    pattern = re.compile(
+        r"function GetAIName\(teamID\)\n.*?\nend\n\nfunction CreatePlayerFromTeam",
+        re.DOTALL,
+    )
+    replacement = """function GetAIName(teamID)
+    local name = Spring.GetGameRulesParam('ainame_' .. teamID)
+    if not name or name == "" or name == "n/a" then
+        local _, aiName, _, shortName, _, options = sp.GetAIInfo(teamID)
+        name = shortName
+        if not name or name == "" or name == "UNKNOWN" or name == "n/a" then
+            name = aiName
+        end
+        local detail = options and (options.profile or options.difficulty) or nil
+        if detail and detail ~= "" and detail ~= name then
+            name = name .. " (" .. detail .. ")"
+        end
+    end
+    return name or string.format("AI team %d", teamID)
+end
+
+function CreatePlayerFromTeam"""
+elif widget_filename == "gui_info.lua":
+    pattern = re.compile(
+        r"local function GetAIName\(teamID\)\n.*?\nend",
+        re.DOTALL,
+    )
+    replacement = """local function GetAIName(teamID)
+\tlocal name = Spring.GetGameRulesParam('ainame_' .. teamID)
+\tif not name or name == "" or name == "n/a" then
+\t\tlocal _, aiName, _, shortName, _, options = Spring.GetAIInfo(teamID)
+\t\tname = shortName
+\t\tif not name or name == "" or name == "UNKNOWN" or name == "n/a" then
+\t\t\tname = aiName
+\t\tend
+\t\tlocal detail = options and (options.profile or options.difficulty) or nil
+\t\tif detail and detail ~= "" and detail ~= name then
+\t\t\tname = name .. " (" .. detail .. ")"
+\t\tend
+\tend
+\treturn name or string.format("AI team %d", teamID)
+end"""
+elif widget_filename == "gui_com_nametags.lua":
+    pattern = re.compile(
+        r"name = Spring\.I18N\('ui\.playersList\.aiName', \{ name = spGetGameRulesParam\('ainame_' \.\. team\) \}\)",
+    )
+    replacement = """local aiLabel = spGetGameRulesParam('ainame_' .. team)
+\t\t\tif not aiLabel or aiLabel == "" or aiLabel == "n/a" then
+\t\t\t\tlocal _, aiName, _, shortName, _, options = Spring.GetAIInfo(team)
+\t\t\t\taiLabel = shortName
+\t\t\t\tif not aiLabel or aiLabel == "" or aiLabel == "UNKNOWN" or aiLabel == "n/a" then
+\t\t\t\t\taiLabel = aiName
+\t\t\t\tend
+\t\t\t\tlocal detail = options and (options.profile or options.difficulty) or nil
+\t\t\t\tif detail and detail ~= "" and detail ~= aiLabel then
+\t\t\t\t\taiLabel = aiLabel .. " (" .. detail .. ")"
+\t\t\t\tend
+\t\t\tend
+\t\t\tname = aiLabel or string.format("AI team %d", team)"""
+elif widget_filename == "camera_player_tv.lua":
+    pattern = re.compile(
+        r"(?P<indent>\s*)name = niceName or aiName(?:\n(?P=indent)name = Spring\.I18N\('ui\.playersList\.aiName', \{ name = name \}\))?",
+        re.MULTILINE,
+    )
+
+    def replace_camera_name(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f"{indent}name = niceName\n"
+            f"{indent}if not name or name == '' or name == 'n/a' then\n"
+            f"{indent}\tname = aiName\n"
+            f"{indent}end\n"
+            f"{indent}local _, _, _, shortName, _, options = Spring.GetAIInfo(myTeamID)\n"
+            f"{indent}if shortName and shortName ~= '' and shortName ~= 'UNKNOWN' and shortName ~= 'n/a' then\n"
+            f"{indent}\tname = shortName\n"
+            f"{indent}end\n"
+            f"{indent}local detail = options and (options.profile or options.difficulty) or nil\n"
+            f"{indent}if detail and detail ~= '' and detail ~= name then\n"
+            f"{indent}\tname = name .. ' (' .. detail .. ')'\n"
+            f"{indent}end\n"
+            f"{indent}if not name or name == '' or name == 'n/a' then\n"
+            f"{indent}\tname = string.format('AI team %d', myTeamID)\n"
+            f"{indent}end"
+        )
+
+    text, count = pattern.subn(replace_camera_name, text)
+    if count < 1:
+        raise SystemExit(1)
+    target_path.write_text(text, encoding="utf-8")
+    raise SystemExit(0)
+else:
+    raise SystemExit(1)
+
+text, count = pattern.subn(replacement, text, count=1)
+if count != 1:
+    raise SystemExit(1)
+target_path.write_text(text, encoding="utf-8")
+PY
+    if [[ $? -ne 0 ]]; then
+        if [[ -n "$backup_path" && -f "$backup_path" ]]; then
+            cp "$backup_path" "$target_path"
+        else
+            rm -f "$target_path"
+        fi
+        return 1
+    fi
+    printf '%s|%s\n' "$target_path" "$backup_path" >> "$WATCH_WIDGET_OVERRIDE_MANIFEST"
+}
+
+install_watch_name_widget_overrides() {
+    WATCH_WIDGET_OVERRIDE_MANIFEST="$ACTIVE_RUN_DIR/watch-widget-overrides.manifest"
+    : > "$WATCH_WIDGET_OVERRIDE_MANIFEST"
+    install_watch_widget_override "gui_advplayerslist.lua" "${HIGHBAR_WATCH_ADVPLAYERSLIST_SOURCE:-}" "luaui/widgets/gui_advplayerslist.lua" || return 1
+    install_watch_widget_override "gui_info.lua" "${HIGHBAR_WATCH_GUI_INFO_SOURCE:-}" "luaui/widgets/gui_info.lua" || return 1
+    install_watch_widget_override "gui_com_nametags.lua" "${HIGHBAR_WATCH_GUI_COM_NAMETAGS_SOURCE:-}" "luaui/widgets/gui_com_nametags.lua" || return 1
+    install_watch_widget_override "camera_player_tv.lua" "${HIGHBAR_WATCH_CAMERA_PLAYER_TV_SOURCE:-}" "luaui/widgets/camera_player_tv.lua" || return 1
+}
+
+restore_watch_name_widget_overrides() {
+    if [[ -n "$WATCH_WIDGET_OVERRIDE_MANIFEST" && -f "$WATCH_WIDGET_OVERRIDE_MANIFEST" ]]; then
+        while IFS='|' read -r target_path backup_path; do
+            [[ -n "$target_path" ]] || continue
+            if [[ -n "$backup_path" && -f "$backup_path" ]]; then
+                cp "$backup_path" "$target_path"
+            else
+                rm -f "$target_path"
+            fi
+        done < "$WATCH_WIDGET_OVERRIDE_MANIFEST"
+    fi
+    WATCH_WIDGET_OVERRIDE_MANIFEST=""
+}
+
+patch_watch_name_widgets() {
+    WATCH_NAME_WIDGET_MANIFEST="$ACTIVE_RUN_DIR/watch-name-widgets.manifest"
+    : > "$WATCH_NAME_WIDGET_MANIFEST"
+    while IFS= read -r entry_name; do
+        [[ -n "$entry_name" ]] || continue
+        local pool_paths
+        local backup_path
+        pool_paths="$(
+            resolve_watch_package_pool_entries "$entry_name"
+        )" || {
+            restore_watch_name_widgets
+            WATCH_NAME_WIDGET_MANIFEST=""
+            return 1
+        }
+        while IFS= read -r pool_path; do
+            [[ -n "$pool_path" ]] || continue
+            backup_path="$ACTIVE_RUN_DIR/$(basename "$pool_path").pre-highbar.gz"
+            cp "$pool_path" "$backup_path"
+            printf '%s|%s\n' "$pool_path" "$backup_path" >> "$WATCH_NAME_WIDGET_MANIFEST"
+            python3 - "$pool_path" "$entry_name" <<'PY'
+from pathlib import Path
+import gzip
+import re
+import sys
+
+path = Path(sys.argv[1])
+entry_name = sys.argv[2]
+text = gzip.open(path, "rt", encoding="utf-8").read()
+
+if entry_name.endswith("gui_advplayerslist.lua"):
+    pattern = re.compile(
+        r"function GetAIName\(teamID\)\n.*?\nend\n\nfunction CreatePlayerFromTeam",
+        re.DOTALL,
+    )
+    replacement = """function GetAIName(teamID)
+    local _, _, _, name, _, options = sp.GetAIInfo(teamID)
+    local niceName = Spring.GetGameRulesParam('ainame_' .. teamID)
+
+    if niceName and niceName ~= "" and niceName ~= "n/a" then
+        name = niceName
+    elseif not name or name == "" or name == "n/a" then
+        name = string.format("HighBarV3-team%d", teamID)
+    end
+
+    if Spring.Utilities.ShowDevUI() and options and options.profile then
+        name = name .. " [" .. options.profile .. "]"
+    end
+
+    return name
+end
+
+function CreatePlayerFromTeam"""
+elif entry_name.endswith("chat.lua") or entry_name.endswith("gui_territorial_domination.lua"):
+    pattern = re.compile(
+        r"local function getAIName\(teamID\)\n.*?\nend",
+        re.DOTALL,
+    )
+    replacement = """local function getAIName(teamID)
+\tlocal _, _, _, name, _, options = Spring.GetAIInfo(teamID)
+\tlocal niceName = Spring.GetGameRulesParam('ainame_' .. teamID)
+\tif niceName and niceName ~= "" and niceName ~= "n/a" then
+\t\tname = niceName
+\telseif not name or name == "" or name == "n/a" then
+\t\tname = string.format("HighBarV3-team%d", teamID)
+\tend
+\tif Spring.Utilities.ShowDevUI() and options and options.profile then
+\t\tname = name .. " [" .. options.profile .. "]"
+\tend
+\treturn name
+end"""
+elif entry_name.endswith("gui_info.lua"):
+    pattern = re.compile(
+        r"local function GetAIName\(teamID\)\n.*?\nend",
+        re.DOTALL,
+    )
+    replacement = """local function GetAIName(teamID)
+\tlocal _, _, _, name, _, options = Spring.GetAIInfo(teamID)
+\tlocal niceName = Spring.GetGameRulesParam('ainame_' .. teamID)
+\tif niceName and niceName ~= "" and niceName ~= "n/a" then
+\t\tname = niceName
+\telseif not name or name == "" or name == "n/a" then
+\t\tname = string.format("HighBarV3-team%d", teamID)
+\tend
+\tif Spring.Utilities.ShowDevUI() and options and options.profile then
+\t\tname = name .. " [" .. options.profile .. "]"
+\tend
+\treturn name
+end"""
+elif entry_name.endswith("cmd_share_unit.lua"):
+    pattern = re.compile(
+        r"local function findPlayerName\(teamId\)\n.*?\nend",
+        re.DOTALL,
+    )
+    replacement = """local function findPlayerName(teamId)
+\tlocal name = ''
+\tlocal niceName = GetGameRulesParam('ainame_' .. teamId)
+\tif niceName and niceName ~= "" and niceName ~= "n/a" then
+\t\tname = niceName
+\telse
+\t\tlocal players = GetPlayerList(teamId)
+\t\tname = (#players > 0) and GetPlayerInfo(players[1], false) or string.format('HighBarV3-team%d', teamId)
+
+\t\tfor _, pID in ipairs(players) do
+\t\t\tlocal pname, active, isspec = GetPlayerInfo(pID, false)
+\t\t\tif active and not isspec then
+\t\t\t\tname = pname
+\t\t\t\tbreak
+\t\t\tend
+\t\tend
+\tend
+\treturn name
+end"""
+elif entry_name.endswith("map_startbox.lua"):
+    pattern = re.compile(
+        r"if isAI then\n.*?\n\t\telse",
+        re.DOTALL,
+    )
+    replacement = """if isAI then
+\t\t\tlocal _, _, _, aiName = Spring.GetAIInfo(teamID)
+\t\t\tlocal niceName = Spring.GetGameRulesParam('ainame_' .. teamID)
+\t\t\tif niceName and niceName ~= "" and niceName ~= "n/a" then
+\t\t\t\taiName = niceName
+\t\t\telseif not aiName or aiName == "" or aiName == "n/a" then
+\t\t\t\taiName = string.format("HighBarV3-team%d", teamID)
+\t\t\tend
+\t\t\tbaseName = aiName
+\t\telse"""
+elif entry_name.endswith("gui_com_nametags.lua"):
+    pattern = re.compile(
+        r"name = Spring\.I18N\('ui\.playersList\.aiName', \{ name = spGetGameRulesParam\('ainame_' \.\. team\) \}\)",
+    )
+    replacement = """local aiName = spGetGameRulesParam('ainame_' .. team)
+\t\t\tif aiName and aiName ~= "" and aiName ~= "n/a" then
+\t\t\t\tname = aiName
+\t\t\telse
+\t\t\t\tname = string.format("HighBarV3-team%d", team)
+\t\t\tend"""
+elif entry_name.endswith("camera_player_tv.lua"):
+    pattern = re.compile(
+        r"(?P<indent>\s*)name = niceName or aiName(?:\n(?P=indent)name = Spring\.I18N\('ui\.playersList\.aiName', \{ name = name \}\))?",
+        re.MULTILINE,
+    )
+
+    def replace_camera_name(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f"{indent}if niceName and niceName ~= \"\" and niceName ~= \"n/a\" then\n"
+            f"{indent}\tname = niceName\n"
+            f"{indent}elseif aiName and aiName ~= \"\" and aiName ~= \"n/a\" then\n"
+            f"{indent}\tname = aiName\n"
+            f"{indent}else\n"
+            f"{indent}\tname = string.format(\"HighBarV3-team%d\", myTeamID)\n"
+            f"{indent}end"
+        )
+
+    updated, count = pattern.subn(replace_camera_name, text)
+    if count < 1:
+        raise SystemExit(1)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write(updated)
+    raise SystemExit(0)
+else:
+    raise SystemExit(1)
+
+updated, count = pattern.subn(replacement, text, count=1)
+if count != 1:
+    raise SystemExit(1)
+with gzip.open(path, "wt", encoding="utf-8") as handle:
+    handle.write(updated)
+PY
+            if [[ $? -ne 0 ]]; then
+                restore_watch_name_widgets
+                WATCH_NAME_WIDGET_MANIFEST=""
+                return 1
+            fi
+        done <<< "$pool_paths"
+    done <<'EOF'
+luaui/widgets/gui_advplayerslist.lua
+luaui/widgets/gui_chat.lua
+luaui/widgets/cmd_share_unit.lua
+luaui/widgets/gui_info.lua
+luaui/widgets/gui_com_nametags.lua
+luaui/widgets/camera_player_tv.lua
+luaui/widgets/map_startbox.lua
+luaui/rmlwidgets/gui_territorial_domination/gui_territorial_domination.lua
+EOF
+    return 0
+}
+
+restore_watch_name_widgets() {
+    if [[ -n "$WATCH_NAME_WIDGET_MANIFEST" && -f "$WATCH_NAME_WIDGET_MANIFEST" ]]; then
+        while IFS='|' read -r pool_path backup_path; do
+            [[ -n "$pool_path" && -n "$backup_path" && -f "$backup_path" ]] || continue
+            cp "$backup_path" "$pool_path"
+        done < "$WATCH_NAME_WIDGET_MANIFEST"
+    fi
+    WATCH_NAME_WIDGET_MANIFEST=""
+}
+
+clear_watch_launch_context() {
+    unset HIGHBAR_ITERTESTING_WATCH_LAUNCHED
+    unset HIGHBAR_ITERTESTING_WATCH_ENGINE_MODE
+    unset HIGHBAR_ITERTESTING_WATCH_ENGINE_BINARY
+    unset HIGHBAR_ITERTESTING_WATCH_ENGINE_PID
+    unset HIGHBAR_ITERTESTING_WATCH_STARTSCRIPT
+    unset HIGHBAR_BAR_CLIENT_BINARY
+    WATCH_HOST_PORT_RESOLVED=""
+    WATCH_HOST_STARTSCRIPT=""
+    WATCH_VIEWER_STARTSCRIPT=""
+    WATCH_VIEWER_RUNTIME_DIR=""
+    WATCH_VIEWER_LOG=""
+    WATCH_VIEWER_PID_FILE=""
+    WATCH_VIEWER_HELPER_PID=""
+}
+
 stop_live_topology() {
+    if [[ -n "$WATCH_VIEWER_HELPER_PID" ]]; then
+        kill -TERM "$WATCH_VIEWER_HELPER_PID" 2>/dev/null || true
+    fi
+    if [[ -n "$WATCH_VIEWER_PID_FILE" && -f "$WATCH_VIEWER_PID_FILE" ]]; then
+        kill -TERM "$(cat "$WATCH_VIEWER_PID_FILE")" 2>/dev/null || true
+    fi
     if [[ -f "$ENGINE_PID_FILE" ]]; then
         kill -TERM "$(cat "$ENGINE_PID_FILE")" 2>/dev/null || true
     fi
@@ -148,7 +1104,11 @@ stop_live_topology() {
         kill -TERM "$COORD_PID" 2>/dev/null || true
     fi
     sleep 1
+    restore_watch_ai_name_widget
+    restore_watch_ai_name_gadget
+    restore_watch_ai_bridge_widget
     restore_autoquit_config
+    clear_watch_launch_context
 }
 
 prepare_attempt_dir() {
@@ -162,6 +1122,221 @@ prepare_attempt_dir() {
     ENGINE_LOG="$ACTIVE_RUN_DIR/highbar-launch.log"
     ENGINE_PID_FILE="$ACTIVE_RUN_DIR/highbar-launch.pid"
     COORD_PID=""
+}
+
+resolve_watch_launch_profile() {
+    local resolved
+    if [[ "$WATCH_ENABLED" != "true" ]]; then
+        return 0
+    fi
+    resolved="$(
+        HIGHBAR_WRITE_DIR="$WRITE_DIR" \
+        HIGHBAR_ENGINE_RELEASE="${HIGHBAR_ENGINE_RELEASE:-recoil_2025.06.19}" \
+        uv run --project "$REPO_ROOT/clients/python" python - "$WATCH_PROFILE" <<'PY'
+import os
+import shlex
+import sys
+
+from highbar_client.behavioral_coverage.bnv_watch import parse_watch_profile
+
+profile = parse_watch_profile(sys.argv[1], environ=os.environ)
+for key, value in (
+    ("WATCH_ENGINE_BINARY", profile.viewer_binary),
+    ("WATCH_WINDOW_MODE_RESOLVED", profile.window_mode),
+    ("WATCH_WINDOW_WIDTH_RESOLVED", str(profile.window_width)),
+    ("WATCH_WINDOW_HEIGHT_RESOLVED", str(profile.window_height)),
+    ("WATCH_MOUSE_CAPTURE_RESOLVED", "true" if profile.mouse_capture else "false"),
+    ("WATCH_SPEED_RESOLVED", str(profile.watch_speed if profile.watch_speed is not None else 3.0)),
+):
+    print(f"{key}={shlex.quote(value)}")
+PY
+    )" || {
+        echo "itertesting: failed to resolve watch profile '$WATCH_PROFILE'" >&2
+        return 1
+    }
+    eval "$resolved"
+}
+
+reserve_watch_host_port() {
+    python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
+prepare_watch_host_startscript() {
+    local source_start_script="$1"
+    local host_port="$2"
+    local viewer_player_name="$3"
+    local target_start_script="$ACTIVE_RUN_DIR/$(basename "${source_start_script%.startscript}")-watch-host.startscript"
+
+    python3 - "$source_start_script" "$target_start_script" "$WATCH_SPEED_MIN_RESOLVED" "$WATCH_SPEED_MAX_RESOLVED" "$host_port" "$viewer_player_name" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+min_speed = sys.argv[3]
+max_speed = sys.argv[4]
+host_port = sys.argv[5]
+viewer_player_name = sys.argv[6]
+text = source.read_text(encoding="utf-8")
+
+for key, value in (("MinSpeed", min_speed), ("MaxSpeed", max_speed), ("HostPort", host_port)):
+    pattern = rf"(^\s*{key}\s*=)\s*[^;]+;"
+    replacement = rf"\g<1>{value};"
+    updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
+    if count == 0:
+        raise SystemExit(f"missing {key} in {source}")
+    text = updated
+
+player_block = (
+    "\n\t[PLAYER1]\n"
+    "\t{\n"
+    f"\t\tName={viewer_player_name};\n"
+    "\t\tTeam=0;\n"
+    "\t\tIsFromDemo=0;\n"
+    "\t\tSpectator=1;\n"
+    "\t}\n"
+)
+if "[PLAYER1]" not in text:
+    text, count = re.subn(
+        r"(\n\t\[AI0\]\n)",
+        player_block + r"\1",
+        text,
+        count=1,
+    )
+    if count == 0:
+        raise SystemExit(f"missing AI0 insertion point in {source}")
+
+text, count = re.subn(
+    r"(^\s*NumPlayers\s*=)\s*\d+;",
+    r"\g<1>2;",
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count == 0:
+    raise SystemExit(f"missing NumPlayers in {source}")
+
+ai_block_pattern = re.compile(r"(?P<header>\n\t\[AI\d+\]\n\t\{\n)(?P<body>.*?)(?P<footer>\n\t\})", re.DOTALL)
+
+def rewrite_ai_block(match: re.Match[str]) -> str:
+    body = match.group("body")
+    short_name_match = re.search(r"(^\s*ShortName\s*=)\s*([^;]+);", body, flags=re.MULTILINE)
+    if not short_name_match:
+        return match.group(0)
+    short_name = short_name_match.group(2).strip()
+    detail_match = re.search(r"^\s*(?:difficulty|profile)\s*=\s*([^;]+);", body, flags=re.MULTILINE)
+    label = short_name
+    if detail_match:
+        detail = detail_match.group(1).strip()
+        if detail and detail != short_name:
+            label = f"{short_name} ({detail})"
+    updated_body, count = re.subn(
+        r"(^\s*Name\s*=)\s*[^;]+;",
+        rf"\g<1>{label};",
+        body,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count == 0:
+        updated_body = f"\t\tName={label};\n" + body
+    return f"{match.group('header')}{updated_body}{match.group('footer')}"
+
+text = ai_block_pattern.sub(rewrite_ai_block, text)
+
+target.write_text(text, encoding="utf-8")
+PY
+    printf '%s\n' "$target_start_script"
+}
+
+prepare_watch_client_startscript() {
+    local host_port="$1"
+    local viewer_player_name="$2"
+    local target_start_script="$ACTIVE_RUN_DIR/watch-client.startscript"
+
+    python3 - "$target_start_script" "$host_port" "$viewer_player_name" <<'PY'
+from pathlib import Path
+import sys
+
+target = Path(sys.argv[1])
+host_port = sys.argv[2]
+viewer_player_name = sys.argv[3]
+
+target.write_text(
+    f"""[GAME]
+{{
+\tHostIP=127.0.0.1;
+\tHostPort={host_port};
+\tSourcePort=0;
+\tMyPlayerName={viewer_player_name};
+\tIsHost=0;
+}}
+""",
+    encoding="utf-8",
+)
+PY
+    printf '%s\n' "$target_start_script"
+}
+
+launch_watch_viewer() {
+    local viewer_engine="$1"
+    local client_start_script="$2"
+
+    WATCH_VIEWER_RUNTIME_DIR="$ACTIVE_RUN_DIR/viewer-runtime"
+    WATCH_VIEWER_LOG="$ACTIVE_RUN_DIR/viewer-launch.log"
+    WATCH_VIEWER_PID_FILE="$ACTIVE_RUN_DIR/viewer-launch.pid"
+    mkdir -p "$WATCH_VIEWER_RUNTIME_DIR"
+
+    if ! patch_watch_ai_bridge_widget; then
+        echo "itertesting: failed to patch BAR AI Bridge widget for watch speed control" >&2
+        return 1
+    fi
+
+    "$HEADLESS_DIR/_launch.sh" \
+        --start-script "$client_start_script" \
+        --engine "$viewer_engine" \
+        --runtime-dir "$WATCH_VIEWER_RUNTIME_DIR" \
+        --log "$WATCH_VIEWER_LOG" \
+        --pid-file "$WATCH_VIEWER_PID_FILE" \
+        --window-mode "$WATCH_WINDOW_MODE_RESOLVED" \
+        --window-width "$WATCH_WINDOW_WIDTH_RESOLVED" \
+        --window-height "$WATCH_WINDOW_HEIGHT_RESOLVED" \
+        --mouse-capture "$WATCH_MOUSE_CAPTURE_RESOLVED" \
+        --viewer-only true >/dev/null 2>&1 || {
+            echo "itertesting: failed to launch graphical BAR watch client" >&2
+            return 1
+        }
+
+    if [[ "$WATCH_MOUSE_CAPTURE_RESOLVED" == "false" || "$WATCH_MOUSE_CAPTURE_RESOLVED" == "0" ]]; then
+        (
+            sleep 2
+            HIGHBAR_BNV_BRIDGE_TIMEOUT_SECONDS=2 \
+                uv run --project "$REPO_ROOT/clients/python" python - <<'PY' >/dev/null 2>&1 || true
+from highbar_client.behavioral_coverage.bnv_watch import apply_watch_mouse_capture
+raise SystemExit(0 if apply_watch_mouse_capture(False) is None else 1)
+PY
+            sleep 3
+            HIGHBAR_BNV_BRIDGE_TIMEOUT_SECONDS=2 \
+                uv run --project "$REPO_ROOT/clients/python" python - <<'PY' >/dev/null 2>&1 || true
+from highbar_client.behavioral_coverage.bnv_watch import apply_watch_mouse_capture
+raise SystemExit(0 if apply_watch_mouse_capture(False) is None else 1)
+PY
+            sleep 10
+            HIGHBAR_BNV_BRIDGE_TIMEOUT_SECONDS=2 \
+                uv run --project "$REPO_ROOT/clients/python" python - <<'PY' >/dev/null 2>&1 || true
+from highbar_client.behavioral_coverage.bnv_watch import apply_watch_mouse_capture
+raise SystemExit(0 if apply_watch_mouse_capture(False) is None else 1)
+PY
+        ) &
+        WATCH_VIEWER_HELPER_PID=$!
+    fi
+    return 0
 }
 
 configure_live_attempt_env() {
@@ -446,8 +1621,11 @@ PY
 
 launch_live_topology() {
     local launch_start_script="${1:-$START_SCRIPT}"
+    local watch_viewer_engine="${2:-}"
+    local effective_start_script="$launch_start_script"
     configure_live_attempt_env
     disable_autoquit_for_attempt
+    clear_watch_launch_context
     if ! highbar_start_coordinator "$EXAMPLES_DIR" "$ACTIVE_RUN_DIR" "bcov" "$COORD_LOG"; then
         echo "itertesting: coordinator failed to bind on unix or tcp — skip" >&2
         cat "$COORD_LOG" >&2
@@ -456,11 +1634,29 @@ launch_live_topology() {
     COORD_PID="$HIGHBAR_COORDINATOR_PID"
     COORD_ENDPOINT="$HIGHBAR_COORDINATOR_ENDPOINT"
 
-    LAUNCH_OUT=$("$HEADLESS_DIR/_launch.sh" \
-        --start-script "$launch_start_script" \
-        --coordinator "$COORD_ENDPOINT" \
-        --enable-builtin "$ENABLE_BUILTIN" \
-        --runtime-dir "$ACTIVE_RUN_DIR" 2>&1)
+    if [[ -n "$watch_viewer_engine" ]]; then
+        if ! install_watch_ai_name_gadget; then
+            echo "itertesting: failed to install BAR AI name override gadget" >&2
+            return 1
+        fi
+        if ! install_watch_ai_name_widget; then
+            echo "itertesting: failed to install BAR AI name override widget" >&2
+            return 1
+        fi
+        WATCH_HOST_PORT_RESOLVED="$(reserve_watch_host_port)"
+        WATCH_HOST_STARTSCRIPT="$(prepare_watch_host_startscript "$launch_start_script" "$WATCH_HOST_PORT_RESOLVED" "$WATCH_PLAYER_NAME_RESOLVED")"
+        WATCH_VIEWER_STARTSCRIPT="$(prepare_watch_client_startscript "$WATCH_HOST_PORT_RESOLVED" "$WATCH_PLAYER_NAME_RESOLVED")"
+        effective_start_script="$WATCH_HOST_STARTSCRIPT"
+    fi
+
+    LAUNCH_ARGS=(
+        "$HEADLESS_DIR/_launch.sh"
+        --start-script "$effective_start_script"
+        --coordinator "$COORD_ENDPOINT"
+        --enable-builtin "$ENABLE_BUILTIN"
+        --runtime-dir "$ACTIVE_RUN_DIR"
+    )
+    LAUNCH_OUT=$("${LAUNCH_ARGS[@]}" 2>&1)
     LAUNCH_RC=$?
     if [[ $LAUNCH_RC -eq 77 ]]; then
         echo "itertesting: _launch.sh prereq missing — skip" >&2
@@ -484,7 +1680,24 @@ launch_live_topology() {
         return 77
     fi
 
+    if [[ -n "$watch_viewer_engine" ]]; then
+        if ! launch_watch_viewer "$watch_viewer_engine" "$WATCH_VIEWER_STARTSCRIPT"; then
+            return 1
+        fi
+    fi
+
     sleep "$BOOTSTRAP_WAIT_SECONDS"
+    if [[ -n "$watch_viewer_engine" ]]; then
+        export HIGHBAR_ITERTESTING_WATCH_LAUNCHED="true"
+        export HIGHBAR_ITERTESTING_WATCH_ENGINE_MODE="graphical-client"
+        export HIGHBAR_ITERTESTING_WATCH_ENGINE_BINARY="$watch_viewer_engine"
+        export HIGHBAR_BAR_CLIENT_BINARY="$watch_viewer_engine"
+        export HIGHBAR_ITERTESTING_WATCH_STARTSCRIPT="$WATCH_VIEWER_STARTSCRIPT"
+        if [[ -f "$WATCH_VIEWER_PID_FILE" ]]; then
+            export HIGHBAR_ITERTESTING_WATCH_ENGINE_PID
+            HIGHBAR_ITERTESTING_WATCH_ENGINE_PID="$(cat "$WATCH_VIEWER_PID_FILE")"
+        fi
+    fi
     return 0
 }
 
@@ -518,6 +1731,12 @@ run_live_campaign() {
         ARGS+=(--allow-cheat-escalation --no-natural-first)
     elif [[ "${HIGHBAR_ITERTESTING_ALLOW_CHEAT_ESCALATION:-false}" == "true" ]]; then
         ARGS+=(--allow-cheat-escalation)
+    fi
+    if [[ "$WATCH_ENABLED" == "true" ]]; then
+        ARGS+=(--watch --watch-profile "$WATCH_PROFILE")
+        if [[ -n "$WATCH_SPEED" ]]; then
+            ARGS+=(--watch-speed "$WATCH_SPEED")
+        fi
     fi
 
     echo "itertesting: invoking live campaign (attempt $attempt): ${ARGS[*]}"
@@ -587,6 +1806,7 @@ run_natural_smoke_campaign() {
         --gameseed "$GAMESEED"
         --cheat-startscript "$CHEAT_STARTSCRIPT"
         --max-improvement-runs 0
+        --no-watch
     )
 
     echo "itertesting: invoking natural smoke: ${ARGS[*]}"
@@ -624,6 +1844,12 @@ main() {
         if [[ "${HIGHBAR_ITERTESTING_ALLOW_CHEAT_ESCALATION:-false}" == "true" ]]; then
             ARGS+=(--allow-cheat-escalation)
         fi
+        if [[ "$WATCH_ENABLED" == "true" ]]; then
+            ARGS+=(--watch --watch-profile "$WATCH_PROFILE")
+            if [[ -n "$WATCH_SPEED" ]]; then
+                ARGS+=(--watch-speed "$WATCH_SPEED")
+            fi
+        fi
 
         echo "itertesting: invoking synthetic campaign: ${ARGS[*]}"
         uv run --project "$REPO_ROOT/clients/python" python -m highbar_client.behavioral_coverage "${ARGS[@]}" "$@"
@@ -631,6 +1857,10 @@ main() {
         emit_contract_health_notice "$(latest_run_manifest_path)" || true
         emit_fixture_provisioning_notice "$(latest_run_manifest_path)" || true
         return $rc
+    fi
+
+    if [[ "$WATCH_ENABLED" == "true" ]]; then
+        resolve_watch_launch_profile || return 1
     fi
 
     if [[ "$SPLIT_LIVE_SETUP" == "true" ]]; then
@@ -649,9 +1879,17 @@ main() {
     while [[ $attempt -le $total_attempts ]]; do
         prepare_attempt_dir "$attempt"
         if [[ "$SPLIT_LIVE_SETUP" == "true" ]]; then
-            launch_live_topology "$CHEAT_STARTSCRIPT"
+            if [[ "$WATCH_ENABLED" == "true" ]]; then
+                launch_live_topology "$CHEAT_STARTSCRIPT" "$WATCH_ENGINE_BINARY"
+            else
+                launch_live_topology "$CHEAT_STARTSCRIPT"
+            fi
         else
-            launch_live_topology "$START_SCRIPT"
+            if [[ "$WATCH_ENABLED" == "true" ]]; then
+                launch_live_topology "$START_SCRIPT" "$WATCH_ENGINE_BINARY"
+            else
+                launch_live_topology "$START_SCRIPT"
+            fi
         fi
         launch_rc=$?
         if [[ $launch_rc -ne 0 ]]; then

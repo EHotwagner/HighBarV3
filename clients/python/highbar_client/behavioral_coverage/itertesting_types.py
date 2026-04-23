@@ -234,6 +234,39 @@ TransportAvailabilityStatus = Literal[
     "mode_qualified_non_live",
 ]
 InterpretationWarningSeverity = Literal["warning", "blocking_warning"]
+WatchRequestMode = Literal["launch-time", "attach-later"]
+WatchSelectionMode = Literal["explicit", "single-active-auto", "ambiguous"]
+WatchPreflightStatus = Literal[
+    "ready",
+    "profile_invalid",
+    "viewer_missing",
+    "environment_unready",
+    "run_incompatible",
+    "selection_failed",
+]
+ViewerAvailabilityState = Literal[
+    "pending",
+    "available",
+    "attached",
+    "unavailable",
+    "expired",
+    "disconnected",
+]
+WatchRunLifecycleState = Literal[
+    "preflight",
+    "launching",
+    "active",
+    "completed",
+    "failed",
+    "expired",
+]
+ActiveWatchState = Literal[
+    "active",
+    "available",
+    "unavailable",
+    "expired",
+    "completed",
+]
 
 
 @dataclass(frozen=True)
@@ -741,6 +774,82 @@ class RunComparison:
 
 
 @dataclass(frozen=True)
+class WatchProfile:
+    profile_id: str
+    viewer_binary: str
+    window_mode: str = "windowed"
+    window_width: int = 1920
+    window_height: int = 1080
+    mouse_capture: bool = False
+    watch_speed: float | None = None
+    extra_launch_args: tuple[str, ...] = ()
+    spectator_only: bool = True
+
+
+@dataclass(frozen=True)
+class WatchRequest:
+    request_id: str
+    request_mode: WatchRequestMode
+    requested_at: str
+    target_run_id: str | None
+    selection_mode: WatchSelectionMode
+    profile_ref: str
+    watch_required: bool = True
+
+
+@dataclass(frozen=True)
+class WatchPreflightResult:
+    status: WatchPreflightStatus
+    reason: str
+    checked_at: str
+    resolved_profile: WatchProfile | None = None
+    resolved_run_id: str | None = None
+    blocking: bool = True
+
+
+@dataclass(frozen=True)
+class ViewerAccessRecord:
+    availability_state: ViewerAvailabilityState
+    reason: str
+    launch_command: tuple[str, ...] = ()
+    launched_at: str | None = None
+    viewer_pid: int | None = None
+    expires_at: str | None = None
+    last_transition_at: str = ""
+
+
+@dataclass(frozen=True)
+class WatchedRunSession:
+    run_id: str
+    campaign_id: str | None
+    run_lifecycle_state: WatchRunLifecycleState
+    watch_requested: bool
+    watch_request: WatchRequest | None = None
+    preflight_result: WatchPreflightResult | None = None
+    viewer_access: ViewerAccessRecord | None = None
+    report_path: str = ""
+
+
+@dataclass(frozen=True)
+class ActiveWatchIndexEntry:
+    run_id: str
+    campaign_id: str | None
+    watch_state: ActiveWatchState
+    compatible_for_attach: bool
+    selection_summary: str
+    updated_at: str
+    report_path: str = ""
+    manifest_path: str = ""
+
+
+@dataclass(frozen=True)
+class ActiveWatchIndex:
+    generated_at: str
+    entries: tuple[ActiveWatchIndexEntry, ...]
+    source_reports_dir: str
+
+
+@dataclass(frozen=True)
 class ItertestingRun:
     run_id: str
     campaign_id: str
@@ -779,6 +888,7 @@ class ItertestingRun:
     deterministic_repros: tuple[DeterministicRepro, ...] = ()
     contract_health_decision: ContractHealthDecision | None = None
     improvement_eligibility: ImprovementEligibility | None = None
+    watch_session: WatchedRunSession | None = None
 
 
 @dataclass(frozen=True)
@@ -1350,6 +1460,84 @@ def _comparison_from_dict(payload: dict[str, Any]) -> RunComparison:
     )
 
 
+def _watch_profile_from_dict(payload: dict[str, Any]) -> WatchProfile:
+    return WatchProfile(
+        profile_id=payload["profile_id"],
+        viewer_binary=payload.get("viewer_binary", payload.get("bnv_binary", "")),
+        window_mode=payload.get("window_mode", "windowed"),
+        window_width=payload.get("window_width", 1920),
+        window_height=payload.get("window_height", 1080),
+        mouse_capture=payload.get("mouse_capture", False),
+        watch_speed=payload.get("watch_speed"),
+        extra_launch_args=tuple(payload.get("extra_launch_args", ())),
+        spectator_only=payload.get("spectator_only", True),
+    )
+
+
+def _watch_request_from_dict(payload: dict[str, Any]) -> WatchRequest:
+    return WatchRequest(
+        request_id=payload["request_id"],
+        request_mode=payload["request_mode"],
+        requested_at=payload["requested_at"],
+        target_run_id=payload.get("target_run_id"),
+        selection_mode=payload.get("selection_mode", "explicit"),
+        profile_ref=payload.get("profile_ref", "default"),
+        watch_required=payload.get("watch_required", True),
+    )
+
+
+def _watch_preflight_from_dict(payload: dict[str, Any]) -> WatchPreflightResult:
+    return WatchPreflightResult(
+        status=payload.get("status", "selection_failed"),
+        reason=payload.get("reason", ""),
+        checked_at=payload["checked_at"],
+        resolved_profile=(
+            _watch_profile_from_dict(payload["resolved_profile"])
+            if payload.get("resolved_profile")
+            else None
+        ),
+        resolved_run_id=payload.get("resolved_run_id"),
+        blocking=payload.get("blocking", True),
+    )
+
+
+def _viewer_access_from_dict(payload: dict[str, Any]) -> ViewerAccessRecord:
+    return ViewerAccessRecord(
+        availability_state=payload.get("availability_state", "pending"),
+        reason=payload.get("reason", ""),
+        launch_command=tuple(payload.get("launch_command", ())),
+        launched_at=payload.get("launched_at"),
+        viewer_pid=payload.get("viewer_pid"),
+        expires_at=payload.get("expires_at"),
+        last_transition_at=payload.get("last_transition_at", ""),
+    )
+
+
+def _watch_session_from_dict(payload: dict[str, Any]) -> WatchedRunSession:
+    return WatchedRunSession(
+        run_id=payload["run_id"],
+        campaign_id=payload.get("campaign_id"),
+        run_lifecycle_state=payload.get("run_lifecycle_state", "preflight"),
+        watch_requested=payload.get("watch_requested", False),
+        watch_request=(
+            _watch_request_from_dict(payload["watch_request"])
+            if payload.get("watch_request")
+            else None
+        ),
+        preflight_result=(
+            _watch_preflight_from_dict(payload["preflight_result"])
+            if payload.get("preflight_result")
+            else None
+        ),
+        viewer_access=(
+            _viewer_access_from_dict(payload["viewer_access"])
+            if payload.get("viewer_access")
+            else None
+        ),
+        report_path=payload.get("report_path", ""),
+    )
+
+
 def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
     comparison = payload.get("previous_run_comparison")
     return ItertestingRun(
@@ -1483,6 +1671,11 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
         improvement_eligibility=(
             _improvement_eligibility_from_dict(payload["improvement_eligibility"])
             if payload.get("improvement_eligibility")
+            else None
+        ),
+        watch_session=(
+            _watch_session_from_dict(payload["watch_session"])
+            if payload.get("watch_session")
             else None
         ),
     )

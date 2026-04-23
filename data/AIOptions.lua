@@ -25,8 +25,8 @@ local options = {
 	},
 	{ -- bool
 		key     = 'comm_merge',
-		name    = 'Merge neighbour BARbarIAns',
-		desc    = 'Merge spatially close BARbarIAn ally commanders',
+		name    = 'Merge neighbour highBars',
+		desc    = 'Merge spatially close highBar ally commanders',
 		type    = 'bool',
 		section = 'performance',
 		def     = false,
@@ -81,7 +81,7 @@ local options = {
 		name    = 'Difficulty profile',
 		desc    = 'Difficulty or play-style of AI (see init.as).\nkey: profile',
 		type    = 'list',
-		def     = 'hard',
+		def     = 'dev',
 		items   = {
 -- 			{
 -- 				key  = 'hard',
