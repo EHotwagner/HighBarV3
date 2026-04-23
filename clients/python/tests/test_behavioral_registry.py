@@ -46,6 +46,7 @@ from highbar_client.behavioral_coverage.types import (
     BehavioralTestCase,
     NotWireObservable,
     RegistryError,
+    SnapshotPair,
 )
 
 
@@ -106,6 +107,15 @@ class FakeDeltaEvent:
 
     def WhichOneof(self, _name: str) -> str:
         return "feature_created"
+
+
+class FakeTypedDeltaEvent:
+    def __init__(self, kind: str, payload: object):
+        setattr(self, kind, payload)
+        self._kind = kind
+
+    def WhichOneof(self, _name: str) -> str:
+        return self._kind
 
 
 def test_registry_completeness():
@@ -215,6 +225,443 @@ def test_simplified_bootstrap_keeps_attack_dispatchable_with_hostile_target():
     assert message is None
 
 
+def test_build_unit_verifier_accepts_unit_created_delta_from_commander():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    before = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    after = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=40,
+    )
+    pair = SnapshotPair(
+        before=before,
+        after=after,
+        dispatched_at_frame=10,
+        delta_log=[
+            FakeTypedDeltaEvent(
+                "unit_created",
+                type("UnitCreated", (), {"unit_id": 99, "builder_id": 42})(),
+            )
+        ],
+    )
+
+    outcome = REGISTRY["build_unit"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "unit_created" in outcome.evidence
+
+
+def test_guard_verifier_accepts_distance_shrink_to_friendly_target():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    damaged_builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=600.0,
+        max_health=690.0,
+    )
+    moved_commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(60.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander, damaged_builder),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(moved_commander, damaged_builder),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[],
+    )
+
+    outcome = REGISTRY["guard"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "distance_to_guard_target" in outcome.evidence
+
+
+def test_repair_verifier_accepts_health_gain_on_damaged_friendly():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    damaged_builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=600.0,
+        max_health=690.0,
+    )
+    repaired_builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=625.0,
+        max_health=690.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander, damaged_builder),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(commander, repaired_builder),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[],
+    )
+
+    outcome = REGISTRY["repair"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "delta=+" in outcome.evidence
+
+
+def test_reclaim_feature_verifier_accepts_consumed_feature():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    reclaim_feature = FakeFeature(
+        feature_id=200,
+        def_id=15,
+        position=FakePosition(100.0, 0.0, 0.0),
+        reclaim_value_metal=25.0,
+        reclaim_value_energy=0.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(),
+            map_features=(reclaim_feature,),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[],
+    )
+
+    outcome = REGISTRY["reclaim_feature"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "feature_id=200" in outcome.evidence
+
+
+def test_capture_verifier_accepts_target_becoming_owned():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    enemy = FakeEnemyUnit(
+        unit_id=300,
+        def_id=99,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=500.0,
+        max_health=500.0,
+    )
+    captured = FakeOwnUnit(
+        unit_id=300,
+        def_id=99,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=500.0,
+        max_health=500.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(enemy,),
+            map_features=(),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(commander, captured),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[],
+    )
+
+    outcome = REGISTRY["capture"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "own_units" in outcome.evidence
+
+
+def test_attack_area_verifier_accepts_distance_shrink_to_hostile_target():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    enemy = FakeEnemyUnit(
+        unit_id=300,
+        def_id=99,
+        position=FakePosition(400.0, 0.0, 0.0),
+        health=500.0,
+        max_health=500.0,
+    )
+    moved_commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(enemy,),
+            map_features=(),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(moved_commander,),
+            visible_enemies=(enemy,),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[],
+    )
+
+    outcome = REGISTRY["attack_area"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "distance_to_target shrank" in outcome.evidence
+
+
+def test_dgun_verifier_accepts_enemy_health_drop():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    enemy_before = FakeEnemyUnit(
+        unit_id=300,
+        def_id=99,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=500.0,
+        max_health=500.0,
+    )
+    enemy_after = FakeEnemyUnit(
+        unit_id=300,
+        def_id=99,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=300.0,
+        max_health=500.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(enemy_before,),
+            map_features=(),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(enemy_after,),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[],
+    )
+
+    outcome = REGISTRY["dgun"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "target_health" in outcome.evidence
+
+
+def test_reclaim_unit_verifier_accepts_enemy_disappearing():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    enemy = FakeEnemyUnit(
+        unit_id=300,
+        def_id=99,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=500.0,
+        max_health=500.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(enemy,),
+            map_features=(),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[
+            FakeTypedDeltaEvent(
+                "enemy_destroyed",
+                type("EnemyDestroyed", (), {"enemy_id": 300})(),
+            )
+        ],
+    )
+
+    outcome = REGISTRY["reclaim_unit"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "destroyed" in outcome.evidence
+
+
+def test_self_destruct_verifier_accepts_target_destruction():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander, builder),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(commander,),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[
+            FakeTypedDeltaEvent(
+                "unit_destroyed",
+                type("UnitDestroyed", (), {"unit_id": 77})(),
+            )
+        ],
+    )
+
+    outcome = REGISTRY["self_destruct"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "unit_id=77" in outcome.evidence
+
+
+def test_self_destruct_verifier_prefers_builder_fixture_over_other_small_units():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(0.0, 0.0, 0.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    damaged_friendly = FakeOwnUnit(
+        unit_id=54,
+        def_id=7,
+        position=FakePosition(120.0, 0.0, 0.0),
+        health=2500.0,
+        max_health=2800.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(100.0, 0.0, 0.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    pair = SnapshotPair(
+        before=FakeSnapshot(
+            own_units=(commander, damaged_friendly, builder),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=10,
+        ),
+        after=FakeSnapshot(
+            own_units=(commander, damaged_friendly),
+            visible_enemies=(),
+            map_features=(),
+            frame_number=40,
+        ),
+        dispatched_at_frame=10,
+        delta_log=[
+            FakeTypedDeltaEvent(
+                "unit_destroyed",
+                type("UnitDestroyed", (), {"unit_id": 77})(),
+            )
+        ],
+    )
+
+    outcome = REGISTRY["self_destruct"].verify_predicate(pair, pair.delta_log)
+
+    assert outcome.verified == "true"
+    assert "unit_id=77" in outcome.evidence
+
+
 def test_simplified_bootstrap_softens_damaged_friendly_for_cheat_seeded_guard_and_repair():
     builder = FakeOwnUnit(
         unit_id=77,
@@ -315,6 +762,46 @@ def test_refresh_bootstrap_context_tracks_native_fixture_candidates():
     assert refreshed.fixture_feature_ids["wreck_target"] == 200
 
 
+def test_refresh_bootstrap_context_prefers_nearest_enemy_fixture_candidate():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    far_enemy = FakeEnemyUnit(
+        unit_id=123,
+        def_id=5,
+        position=FakePosition(500.0, 0.0, 600.0),
+        health=100.0,
+        max_health=100.0,
+    )
+    near_enemy = FakeEnemyUnit(
+        unit_id=124,
+        def_id=5,
+        position=FakePosition(70.0, 0.0, 90.0),
+        health=100.0,
+        max_health=100.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(far_enemy, near_enemy),
+        map_features=(),
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42},
+    )
+
+    refreshed = _refresh_bootstrap_context({"snapshots": [snapshot], "deltas": []}, ctx)
+
+    assert refreshed.enemy_seed_id == 124
+    assert refreshed.fixture_unit_ids["hostile_target"] == 124
+    assert refreshed.fixture_unit_ids["capturable_target"] == 124
+
+
 def test_authoritative_fixture_preconditions_allow_capture_with_native_target():
     ctx = BootstrapContext(
         commander_unit_id=42,
@@ -365,6 +852,44 @@ def test_refresh_bootstrap_context_falls_back_to_secondary_reclaimable_feature_f
 
     assert refreshed.fixture_feature_ids["reclaim_target"] == 200
     assert refreshed.fixture_feature_ids["wreck_target"] == 250
+
+
+def test_refresh_bootstrap_context_prefers_nearest_reclaimable_feature_for_reclaim_target():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    far_feature = FakeFeature(
+        feature_id=200,
+        def_id=9,
+        position=FakePosition(500.0, 0.0, 600.0),
+        reclaim_value_metal=25.0,
+        reclaim_value_energy=0.0,
+    )
+    near_feature = FakeFeature(
+        feature_id=250,
+        def_id=10,
+        position=FakePosition(40.0, 0.0, 50.0),
+        reclaim_value_metal=80.0,
+        reclaim_value_energy=10.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(),
+        map_features=(far_feature, near_feature),
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+    )
+
+    refreshed = _refresh_bootstrap_context({"snapshots": [snapshot], "deltas": []}, ctx)
+
+    assert refreshed.fixture_feature_ids["reclaim_target"] == 250
+    assert refreshed.fixture_feature_ids["wreck_target"] == 200
 
 
 def test_attempt_enemy_fixture_provisioning_spawns_enemy_when_missing(monkeypatch):

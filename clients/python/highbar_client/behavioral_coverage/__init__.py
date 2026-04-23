@@ -379,6 +379,10 @@ def _distance_sq(a: Vector3, b: Vector3) -> float:
     return dx * dx + dy * dy + dz * dz
 
 
+def _position_distance_sq(a: Any, b: Vector3) -> float:
+    return _distance_sq(_vector3_from_position(a), b)
+
+
 def _position_is_clear(
     candidate: Vector3,
     *,
@@ -2442,7 +2446,11 @@ def _refresh_bootstrap_context(shared: dict, ctx: BootstrapContext) -> Bootstrap
             damaged_friendly.position
         )
 
-    enemy = next(iter(getattr(snapshot, "visible_enemies", ())), None)
+    enemy = min(
+        getattr(snapshot, "visible_enemies", ()),
+        key=lambda item: _position_distance_sq(item.position, ctx.commander_position),
+        default=None,
+    )
     if enemy is not None:
         ctx.enemy_seed_id = enemy.unit_id
         enemy_position = _vector3_from_position(enemy.position)
@@ -2460,7 +2468,10 @@ def _refresh_bootstrap_context(shared: dict, ctx: BootstrapContext) -> Bootstrap
         if feature.reclaim_value_metal > 0.0 or feature.reclaim_value_energy > 0.0
     ]
     if reclaimable_features:
-        feature = reclaimable_features[0]
+        feature = min(
+            reclaimable_features,
+            key=lambda item: _position_distance_sq(item.position, ctx.commander_position),
+        )
         ctx.fixture_feature_ids["reclaim_target"] = feature.feature_id
         ctx.fixture_positions["reclaim_target"] = _vector3_from_position(feature.position)
 
@@ -2483,8 +2494,10 @@ def _refresh_bootstrap_context(shared: dict, ctx: BootstrapContext) -> Bootstrap
                 feature
                 for feature in sorted(
                     reclaimable_features,
-                    key=lambda item: item.feature_id,
-                    reverse=True,
+                    key=lambda item: (
+                        _position_distance_sq(item.position, ctx.commander_position),
+                        -item.feature_id,
+                    ),
                 )
                 if feature.feature_id != reclaim_target_id
             ),

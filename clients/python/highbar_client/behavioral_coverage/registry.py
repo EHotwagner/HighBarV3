@@ -21,12 +21,16 @@ from .predicates import (
     build_progress_monotonic_predicate,
     capability_selector,
     combat_engagement_predicate,
-    commander_selector,
     construction_started_predicate,
+    capture_ownership_predicate,
+    feature_consumed_predicate,
+    guard_proximity_predicate,
     health_delta_predicate,
     movement_progress_predicate,
     position_delta_predicate,
+    repair_health_gain_predicate,
     unit_count_delta_predicate,
+    unit_destroyed_predicate,
 )
 from .upstream_fixture_intelligence import all_custom_command_inventory
 from .types import (
@@ -112,6 +116,87 @@ def _fixture_feature_id(ctx: Any, fixture_class: str, fallback: int = 0) -> int:
 def _fixture_position(ctx: Any, fixture_class: str):
     fixture_positions = getattr(ctx, "fixture_positions", {}) or {}
     return fixture_positions.get(fixture_class) or ctx.commander_position
+
+
+def _commander_unit_id_from_snapshot(snap: Any) -> int | None:
+    return next(
+        (u.unit_id for u in snap.own_units if u.max_health > 3000),
+        None,
+    )
+
+
+def _nearest_visible_enemy_id(snap: Any) -> int | None:
+    commander = next((u for u in snap.own_units if u.max_health > 3000), None)
+    if commander is None or not snap.visible_enemies:
+        return None
+    return min(
+        snap.visible_enemies,
+        key=lambda enemy: (
+            (enemy.position.x - commander.position.x) ** 2
+            + (enemy.position.y - commander.position.y) ** 2
+            + (enemy.position.z - commander.position.z) ** 2,
+            enemy.unit_id,
+        ),
+    ).unit_id
+
+
+def _nearest_reclaimable_feature_id(snap: Any) -> int | None:
+    commander = next((u for u in snap.own_units if u.max_health > 3000), None)
+    reclaimable = [
+        feature
+        for feature in snap.map_features
+        if feature.reclaim_value_metal > 0.0 or feature.reclaim_value_energy > 0.0
+    ]
+    if commander is None or not reclaimable:
+        return None
+    return min(
+        reclaimable,
+        key=lambda feature: (
+            (feature.position.x - commander.position.x) ** 2
+            + (feature.position.y - commander.position.y) ** 2
+            + (feature.position.z - commander.position.z) ** 2,
+            feature.feature_id,
+        ),
+    ).feature_id
+
+
+def _secondary_reclaimable_feature_id(snap: Any) -> int | None:
+    commander = next((u for u in snap.own_units if u.max_health > 3000), None)
+    reclaimable = [
+        feature
+        for feature in snap.map_features
+        if feature.reclaim_value_metal > 0.0 or feature.reclaim_value_energy > 0.0
+    ]
+    if commander is None or len(reclaimable) < 2:
+        return None
+    ranked = sorted(
+        reclaimable,
+        key=lambda feature: (
+            (feature.position.x - commander.position.x) ** 2
+            + (feature.position.y - commander.position.y) ** 2
+            + (feature.position.z - commander.position.z) ** 2,
+            feature.feature_id,
+        ),
+    )
+    return ranked[1].feature_id
+
+
+def _damaged_friendly_unit_id(snap: Any) -> int | None:
+    candidates = [u for u in snap.own_units if u.max_health < 3000 and u.health < u.max_health]
+    if candidates:
+        return max(
+            candidates,
+            key=lambda unit: (unit.max_health - unit.health, -unit.unit_id),
+        ).unit_id
+    return next((u.unit_id for u in snap.own_units if u.max_health < 3000), None)
+
+
+def _self_destruct_target_unit_id(snap: Any) -> int | None:
+    for expected_health in (690.0, 89.0):
+        for unit in snap.own_units:
+            if abs(float(getattr(unit, "max_health", 0.0)) - expected_health) <= 1.0:
+                return unit.unit_id
+    return _damaged_friendly_unit_id(snap)
 
 
 def _payload_unit_id(ctx: Any) -> int:
@@ -704,10 +789,7 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
         required_capability="commander",
         input_builder=_move_unit_builder,
         verify_predicate=movement_progress_predicate(
-            unit_id_selector=lambda snap: next(
-                (u.unit_id for u in snap.own_units if u.max_health > 3000),
-                None,
-            ),
+            unit_id_selector=_commander_unit_id_from_snapshot,
             min_delta=48.0,
         ),
         verify_window_frames=180,
@@ -719,8 +801,9 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
         required_capability="commander",
         input_builder=_build_unit_builder,
         verify_predicate=construction_started_predicate(
-            builder_id_selector=commander_selector),
-        verify_window_frames=210,
+            builder_id_selector=_commander_unit_id_from_snapshot,
+        ),
+        verify_window_frames=300,
         rationale="construction-tuned rule: new site appears and build progress starts",
     )
 
@@ -729,13 +812,8 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
         required_capability="commander",
         input_builder=_fight_builder,
         verify_predicate=combat_engagement_predicate(
-            unit_id_selector=lambda snap: next(
-                (u.unit_id for u in snap.own_units if u.max_health > 3000),
-                None,
-            ),
-            target_selector=lambda snap: (
-                snap.visible_enemies[0].unit_id if snap.visible_enemies else None
-            ),
+            unit_id_selector=_commander_unit_id_from_snapshot,
+            target_selector=_nearest_visible_enemy_id,
             min_drop=1.0,
             min_distance_delta=48.0,
         ),
@@ -748,34 +826,64 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
         required_capability="commander",
         input_builder=_attack_unit_builder,
         verify_predicate=health_delta_predicate(
-            target_selector=lambda snap: (snap.visible_enemies[0].unit_id
-                                           if snap.visible_enemies else None),
+            target_selector=_nearest_visible_enemy_id,
             min_drop=1.0, target_is_enemy=True,
         ),
         verify_window_frames=450,  # 15s — LOS + engagement window
         rationale="enemy health dropped or target destroyed",
     )
 
+    reg["attack_area"] = BehavioralTestCase(
+        arm_name="attack_area",
+        category="channel_a_command",
+        required_capability="commander",
+        input_builder=_attack_area_builder,
+        verify_predicate=combat_engagement_predicate(
+            unit_id_selector=_commander_unit_id_from_snapshot,
+            target_selector=_nearest_visible_enemy_id,
+            min_drop=1.0,
+            min_distance_delta=48.0,
+        ),
+        verify_window_frames=450,
+        rationale="attack-area rule: either the hostile target takes damage or the commander closes toward the ordered impact area",
+    )
+
+    reg["dgun"] = BehavioralTestCase(
+        arm_name="dgun",
+        category="channel_a_command",
+        required_capability="commander",
+        input_builder=_dgun_builder,
+        verify_predicate=health_delta_predicate(
+            target_selector=_nearest_visible_enemy_id,
+            min_drop=1.0,
+            target_is_enemy=True,
+        ),
+        verify_window_frames=300,
+        rationale="dgun-tuned rule: hostile target health drops or the target is destroyed",
+    )
+
+    reg["reclaim_unit"] = BehavioralTestCase(
+        arm_name="reclaim_unit",
+        category="channel_a_command",
+        required_capability="commander",
+        input_builder=_reclaim_unit_builder,
+        verify_predicate=health_delta_predicate(
+            target_selector=_nearest_visible_enemy_id,
+            min_drop=1.0,
+            target_is_enemy=True,
+        ),
+        verify_window_frames=360,
+        rationale="reclaim-unit rule: hostile reclaim target loses health or disappears",
+    )
+
     for arm_name, builder in (
-        ("attack_area", _attack_area_builder),
-        ("guard", _guard_builder),
-        ("repair", _repair_builder),
-        ("reclaim_unit", _reclaim_unit_builder),
-        ("reclaim_area", _reclaim_area_builder),
-        ("reclaim_in_area", _reclaim_in_area_builder),
-        ("reclaim_feature", _reclaim_feature_builder),
         ("restore_area", _restore_area_builder),
-        ("resurrect", _resurrect_builder),
-        ("resurrect_in_area", _resurrect_in_area_builder),
-        ("capture", _capture_builder),
-        ("capture_area", _capture_area_builder),
         ("set_base", _set_base_builder),
         ("load_units", _load_units_builder),
         ("load_units_area", _load_units_area_builder),
         ("load_onto", _load_onto_builder),
         ("unload_unit", _unload_unit_builder),
         ("unload_units_area", _unload_units_area_builder),
-        ("dgun", _dgun_builder),
         ("custom", _custom_builder),
     ):
         reg[arm_name] = BehavioralTestCase(
@@ -788,12 +896,78 @@ def _build_registry() -> dict[str, BehavioralTestCase]:
             rationale=f"{arm_name}: dispatch sanity with fixture-aware arguments, no snapshot verifier wired",
         )
 
+    reg["guard"] = BehavioralTestCase(
+        arm_name="guard",
+        category="channel_a_command",
+        required_capability="commander",
+        input_builder=_guard_builder,
+        verify_predicate=guard_proximity_predicate(
+            unit_id_selector=_commander_unit_id_from_snapshot,
+            target_selector=_damaged_friendly_unit_id,
+        ),
+        verify_window_frames=300,
+        rationale="guard-tuned rule: commander closes distance to the friendly guard target",
+    )
+
+    reg["repair"] = BehavioralTestCase(
+        arm_name="repair",
+        category="channel_a_command",
+        required_capability="commander",
+        input_builder=_repair_builder,
+        verify_predicate=repair_health_gain_predicate(
+            target_selector=_damaged_friendly_unit_id,
+        ),
+        verify_window_frames=180,
+        rationale="repair-tuned rule: the damaged friendly target gains health",
+    )
+
+    for arm_name, builder in (
+        ("reclaim_area", _reclaim_area_builder),
+        ("reclaim_in_area", _reclaim_in_area_builder),
+        ("reclaim_feature", _reclaim_feature_builder),
+        ("resurrect", _resurrect_builder),
+        ("resurrect_in_area", _resurrect_in_area_builder),
+    ):
+        reg[arm_name] = BehavioralTestCase(
+            arm_name=arm_name,
+            category="channel_a_command",
+            required_capability="commander",
+            input_builder=builder,
+            verify_predicate=feature_consumed_predicate(
+                feature_id_selector=(
+                    _secondary_reclaimable_feature_id
+                    if arm_name.startswith("resurrect")
+                    else _nearest_reclaimable_feature_id
+                )
+            ),
+            verify_window_frames=240,
+            rationale=f"{arm_name}: target feature disappears from the snapshot or emits feature_destroyed",
+        )
+
+    for arm_name, builder in (
+        ("capture", _capture_builder),
+        ("capture_area", _capture_area_builder),
+    ):
+        reg[arm_name] = BehavioralTestCase(
+            arm_name=arm_name,
+            category="channel_a_command",
+            required_capability="commander",
+            input_builder=builder,
+            verify_predicate=capture_ownership_predicate(
+                target_selector=_nearest_visible_enemy_id
+            ),
+            verify_window_frames=360,
+            rationale=f"{arm_name}: hostile target becomes owned or emits a capture transfer event",
+        )
+
     reg["self_destruct"] = BehavioralTestCase(
         arm_name="self_destruct", category="channel_a_command",
         required_capability="none",
         input_builder=_self_destruct_builder,
-        verify_predicate=unit_count_delta_predicate(expected_delta=-1),
-        verify_window_frames=180,  # SelfDestruct has a countdown
+        verify_predicate=unit_destroyed_predicate(
+            target_selector=_self_destruct_target_unit_id
+        ),
+        verify_window_frames=300,  # SelfDestruct has a countdown
         rationale="targeted disposable unit disappeared from own_units",
     )
 

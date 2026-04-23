@@ -42,6 +42,23 @@ def _find_unit(snap: Any, unit_id: int) -> Optional[Any]:
     return None
 
 
+def _find_feature(snap: Any, feature_id: int) -> Optional[Any]:
+    for feature in getattr(snap, "map_features", ()):
+        if getattr(feature, "feature_id", 0) == feature_id:
+            return feature
+    return None
+
+
+def _delta_kind(delta: Any) -> str:
+    which_oneof = getattr(delta, "WhichOneof", None)
+    if which_oneof is None:
+        return ""
+    try:
+        return which_oneof("kind") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _distance(p1: Any, p2: Any) -> float:
     return math.sqrt(
         (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2 + (p1.z - p2.z) ** 2
@@ -367,6 +384,26 @@ def build_progress_monotonic_predicate(
     """
 
     def predicate(pair: SnapshotPair, _deltas: list) -> VerificationOutcome:
+        builder_id = builder_id_selector(pair.before)
+        pre_ids = {u.unit_id for u in pair.before.own_units}
+        if builder_id is not None:
+            created_by_builder = [
+                getattr(delta, "unit_created")
+                for delta in pair.delta_log
+                if _delta_kind(delta) == "unit_created"
+                and getattr(getattr(delta, "unit_created"), "builder_id", 0) == builder_id
+                and getattr(getattr(delta, "unit_created"), "unit_id", 0) not in pre_ids
+            ]
+            if created_by_builder:
+                created = max(created_by_builder, key=lambda item: getattr(item, "unit_id", 0))
+                return VerificationOutcome(
+                    verified="true",
+                    evidence=(
+                        f"unit_created unit_id={created.unit_id} "
+                        f"builder_id={created.builder_id}"
+                    ),
+                )
+
         pre_ids = {u.unit_id for u in pair.before.own_units}
         new_units = [u for u in pair.after.own_units
                      if u.unit_id not in pre_ids]
@@ -413,6 +450,223 @@ def construction_started_predicate(
     return build_progress_monotonic_predicate(builder_id_selector=builder_id_selector)
 
 
+def unit_destroyed_predicate(
+    target_selector: Callable[[Any], Optional[int]],
+) -> Callable[[SnapshotPair, list], VerificationOutcome]:
+    def predicate(pair: SnapshotPair, deltas: list) -> VerificationOutcome:
+        target_id = target_selector(pair.before)
+        if target_id is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence="target unit not in pre-snapshot",
+                error="precondition_unmet",
+            )
+        pre = _find_unit(pair.before, target_id)
+        if pre is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence=f"unit_id={target_id} not in pre-snapshot",
+                error="precondition_unmet",
+            )
+        if _find_unit(pair.after, target_id) is None:
+            return VerificationOutcome(
+                verified="true",
+                evidence=f"unit_id={target_id} absent from post-snapshot",
+            )
+        if any(
+            _delta_kind(delta) == "unit_destroyed"
+            and getattr(getattr(delta, "unit_destroyed"), "unit_id", 0) == target_id
+            for delta in deltas
+        ):
+            return VerificationOutcome(
+                verified="true",
+                evidence=f"unit_destroyed delta observed for unit_id={target_id}",
+            )
+        return VerificationOutcome(
+            verified="false",
+            evidence=f"unit_id={target_id} still present after self_destruct window",
+            error="effect_not_observed",
+        )
+
+    return predicate
+
+
+def feature_consumed_predicate(
+    feature_id_selector: Callable[[Any], Optional[int]],
+) -> Callable[[SnapshotPair, list], VerificationOutcome]:
+    def predicate(pair: SnapshotPair, deltas: list) -> VerificationOutcome:
+        feature_id = feature_id_selector(pair.before)
+        if feature_id is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence="target feature not in pre-snapshot",
+                error="precondition_unmet",
+            )
+        pre = _find_feature(pair.before, feature_id)
+        if pre is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence=f"feature_id={feature_id} not in pre-snapshot",
+                error="precondition_unmet",
+            )
+        if _find_feature(pair.after, feature_id) is None:
+            return VerificationOutcome(
+                verified="true",
+                evidence=f"feature_id={feature_id} absent from post-snapshot",
+            )
+        if any(
+            _delta_kind(delta) == "feature_destroyed"
+            and getattr(getattr(delta, "feature_destroyed"), "feature_id", 0) == feature_id
+            for delta in deltas
+        ):
+            return VerificationOutcome(
+                verified="true",
+                evidence=f"feature_destroyed delta observed for feature_id={feature_id}",
+            )
+        return VerificationOutcome(
+            verified="false",
+            evidence=f"feature_id={feature_id} still present after reclaim/resurrect window",
+            error="effect_not_observed",
+        )
+
+    return predicate
+
+
+def repair_health_gain_predicate(
+    target_selector: Callable[[Any], Optional[int]],
+    *,
+    min_gain: float = 1.0,
+) -> Callable[[SnapshotPair, list], VerificationOutcome]:
+    def predicate(pair: SnapshotPair, _deltas: list) -> VerificationOutcome:
+        target_id = target_selector(pair.before)
+        if target_id is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence="repair target not in pre-snapshot",
+                error="precondition_unmet",
+            )
+        pre = _find_unit(pair.before, target_id)
+        post = _find_unit(pair.after, target_id)
+        if pre is None or post is None:
+            return VerificationOutcome(
+                verified="false",
+                evidence=f"repair target unit_id={target_id} was not observable across the window",
+                error="target_unit_destroyed",
+            )
+        gain = post.health - pre.health
+        if gain >= min_gain:
+            return VerificationOutcome(
+                verified="true",
+                evidence=(
+                    f"repair target health before={pre.health:.3f} "
+                    f"after={post.health:.3f} delta=+{gain:.3f}"
+                ),
+            )
+        return VerificationOutcome(
+            verified="false",
+            evidence=(
+                f"repair target health before={pre.health:.3f} "
+                f"after={post.health:.3f} delta=+{gain:.3f} "
+                f"(threshold {min_gain:.3f})"
+            ),
+            error="effect_not_observed",
+        )
+
+    return predicate
+
+
+def guard_proximity_predicate(
+    unit_id_selector: Callable[[Any], Optional[int]],
+    target_selector: Callable[[Any], Optional[int]],
+    *,
+    min_distance_delta: float = 24.0,
+    max_post_distance: float = 160.0,
+) -> Callable[[SnapshotPair, list], VerificationOutcome]:
+    def predicate(pair: SnapshotPair, _deltas: list) -> VerificationOutcome:
+        unit_id = unit_id_selector(pair.before)
+        target_id = target_selector(pair.before)
+        if unit_id is None or target_id is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence="guard actor or target missing pre-snapshot",
+                error="precondition_unmet",
+            )
+        pre_unit = _find_unit(pair.before, unit_id)
+        post_unit = _find_unit(pair.after, unit_id)
+        pre_target = _find_unit(pair.before, target_id)
+        post_target = _find_unit(pair.after, target_id)
+        if any(item is None for item in (pre_unit, post_unit, pre_target, post_target)):
+            return VerificationOutcome(
+                verified="false",
+                evidence="guard actor or target was not observable across the window",
+                error="target_unit_destroyed",
+            )
+        pre_distance = _distance(pre_unit.position, pre_target.position)
+        post_distance = _distance(post_unit.position, post_target.position)
+        distance_delta = pre_distance - post_distance
+        if distance_delta >= min_distance_delta or (
+            post_distance <= max_post_distance and post_distance < pre_distance
+        ):
+            return VerificationOutcome(
+                verified="true",
+                evidence=(
+                    f"distance_to_guard_target before={pre_distance:.3f} "
+                    f"after={post_distance:.3f} delta=-{distance_delta:.3f}"
+                ),
+            )
+        return VerificationOutcome(
+            verified="false",
+            evidence=(
+                f"distance_to_guard_target before={pre_distance:.3f} "
+                f"after={post_distance:.3f} delta=-{distance_delta:.3f}"
+            ),
+            error="effect_not_observed",
+        )
+
+    return predicate
+
+
+def capture_ownership_predicate(
+    target_selector: Callable[[Any], Optional[int]],
+) -> Callable[[SnapshotPair, list], VerificationOutcome]:
+    def predicate(pair: SnapshotPair, deltas: list) -> VerificationOutcome:
+        target_id = target_selector(pair.before)
+        if target_id is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence="capture target missing pre-snapshot",
+                error="precondition_unmet",
+            )
+        pre_target = _find_unit(pair.before, target_id)
+        if pre_target is None:
+            return VerificationOutcome(
+                verified="na",
+                evidence=f"capture target unit_id={target_id} not in pre-snapshot",
+                error="precondition_unmet",
+            )
+        if any(getattr(unit, "unit_id", 0) == target_id for unit in pair.after.own_units):
+            return VerificationOutcome(
+                verified="true",
+                evidence=f"captured unit_id={target_id} now appears in own_units",
+            )
+        if any(
+            _delta_kind(delta) in {"unit_captured", "unit_given"}
+            and getattr(getattr(delta, _delta_kind(delta)), "unit_id", 0) == target_id
+            for delta in deltas
+        ):
+            return VerificationOutcome(
+                verified="true",
+                evidence=f"capture delta observed for unit_id={target_id}",
+            )
+        return VerificationOutcome(
+            verified="false",
+            evidence=f"capture target unit_id={target_id} remained hostile or unobserved",
+            error="effect_not_observed",
+        )
+
+    return predicate
+
+
 # ---- selector helpers ---------------------------------------------------
 
 
@@ -438,12 +692,17 @@ def capability_selector(capability: str) -> Callable[[Any], Optional[int]]:
 
 
 __all__ = [
+    "capture_ownership_predicate",
     "position_delta_predicate",
     "unit_count_delta_predicate",
     "health_delta_predicate",
     "build_progress_monotonic_predicate",
+    "feature_consumed_predicate",
+    "guard_proximity_predicate",
+    "repair_health_gain_predicate",
     "semantic_gate_metadata",
     "commander_selector",
     "capability_selector",
+    "unit_destroyed_predicate",
     "NotWireObservable",
 ]
