@@ -127,6 +127,22 @@ hb-ai-runner-py \
   --name-addon flank-test
 ```
 
+Run the defensive macro policy:
+
+```bash
+hb-ai-runner-py \
+  --transport uds \
+  --uds-path /tmp/hb-run/highbar-1.sock \
+  --token-file /tmp/highbar.token \
+  --ai-plugin turtle1 \
+  --name-addon turtle1-a
+```
+
+`turtle1` resolves BAR unit names through callbacks, checks each
+builder's runtime build options, then builds economy, defenses,
+factories, tech, and a mixed army near its own start area. It does not
+emit enemy-directed move, fight, patrol, or attack commands.
+
 Load a custom policy with `module:factory`:
 
 ```python

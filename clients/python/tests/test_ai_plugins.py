@@ -8,11 +8,12 @@ import pytest
 
 from highbar_client.ai_plugins import (
     MoveOnceAI,
+    Turtle1AI,
     client_id_for_plugin,
     load_ai_plugin,
     parse_plugin_config,
 )
-from highbar_client.highbar import state_pb2
+from highbar_client.highbar import callbacks_pb2, common_pb2, state_pb2
 
 
 def test_builtin_idle_loads_and_client_id_includes_safe_name_addon():
@@ -86,3 +87,107 @@ def test_plugin_contract_validation(tmp_path: Path, monkeypatch):
 
     with pytest.raises(TypeError, match="missing required attribute"):
         load_ai_plugin("bad_policy:bad")
+
+
+class _FakeHandshake:
+    def __init__(self, static_map: state_pb2.StaticMap):
+        self.static_map = static_map
+
+
+class _FakeTurtleContext:
+    def __init__(self, static_map: state_pb2.StaticMap):
+        self.handshake = _FakeHandshake(static_map)
+        self.build_options = {
+            1: {11, 12, 13, 14},
+            13: {30, 31, 32},
+        }
+
+    def invoke_callback(self, callback_id, *, request_id=1, params=(), timeout=5.0):
+        assert callback_id == callbacks_pb2.CALLBACK_UNITDEF_GET_BUILD_OPTIONS
+        def_id = tuple(params)[0].int_value
+        response = callbacks_pb2.CallbackResponse(request_id=request_id, success=True)
+        response.result.int_array_value.values.extend(sorted(self.build_options.get(def_id, ())))
+        return response
+
+    def resolve_unit_def_ids(self, wanted_names, *, timeout=5.0):
+        raise AssertionError("test supplies def_id_by_name directly")
+
+
+def _unit(unit_id: int, def_id: int, x: float, z: float):
+    return state_pb2.OwnUnit(
+        unit_id=unit_id,
+        def_id=def_id,
+        position=common_pb2.Vector3(x=x, y=0.0, z=z),
+        health=1000.0,
+        max_health=1000.0,
+        under_construction=False,
+    )
+
+
+def _left_side_map():
+    static_map = state_pb2.StaticMap(width_cells=1024, height_cells=1024)
+    static_map.start_positions.extend(
+        (
+            common_pb2.Vector3(x=1024.0, y=0.0, z=4096.0),
+            common_pb2.Vector3(x=7168.0, y=0.0, z=4096.0),
+        )
+    )
+    static_map.metal_spots.extend(
+        (
+            common_pb2.Vector3(x=900.0, y=0.0, z=3900.0),
+            common_pb2.Vector3(x=6900.0, y=0.0, z=3900.0),
+        )
+    )
+    return static_map
+
+
+def test_turtle1_loads_as_builtin():
+    plugin = load_ai_plugin(
+        "turtle1",
+        config={
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+            }
+        },
+    )
+
+    assert plugin.name == "turtle1"
+    assert client_id_for_plugin(plugin, name_addon="north base") == (
+        "hb-python-ai/turtle1/0.1.0/north-base"
+    )
+
+
+def test_turtle1_macros_without_enemy_seeking_and_stays_on_own_side():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 4,
+            "build_interval_frames": 1,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+                "armlab": 14,
+                "armfav": 30,
+                "armstump": 31,
+                "armrock": 32,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+    update = state_pb2.StateUpdate(seq=1, frame=100)
+    update.snapshot.frame_number = 100
+    update.snapshot.static_map.CopyFrom(static_map)
+    update.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+    update.snapshot.economy.metal_income = 3.0
+    update.snapshot.economy.energy_income = 30.0
+
+    batches = list(plugin.on_state(context, update))
+
+    assert batches
+    for batch in batches:
+        for command in batch.commands:
+            assert command.WhichOneof("command") == "build_unit"
+            assert command.build_unit.build_position.x <= 4096.0 - plugin.side_padding
