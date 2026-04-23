@@ -69,20 +69,28 @@ the run bundle:
   `seeded_ready`, or `resource_starved` prepared-live starts
 - `## Callback Diagnostics` in `run-report.md` for live vs cached
   callback-derived commander/bootstrap evidence
+- `## Runtime Capability Profile` in `run-report.md` for supported callback
+  ids, supported scopes, unsupported callback groups, and active map-source
+  status
 - `## Runtime Prerequisite Resolution` in `run-report.md` for shared
   callback-based prerequisite lookup status
+- `## Map Source Decisions` in `run-report.md` for live closeout and
+  standalone-probe source selection when callback map inspection is unavailable
 - `transport_provisioning` in `manifest.json` for supported variants,
   candidate chain, and affected transport commands
-- `bootstrap_readiness`, `callback_diagnostics`, and
-  `prerequisite_resolution` in `manifest.json` for the top-level 016
-  hardening evidence
+- `bootstrap_readiness`, `runtime_capability_profile`,
+  `callback_diagnostics`, `prerequisite_resolution`, and
+  `map_source_decisions` in `manifest.json` for the top-level 016 hardening
+  evidence
 - `itertesting: semantic_inventory=...` and `itertesting: semantic_gates=...`
   lines from `tests/headless/itertesting.sh` for quick terminal review
 - `itertesting: transport_status=...` and `itertesting: transport_affected_commands=...`
   lines from `tests/headless/itertesting.sh` for quick terminal review
 - `itertesting: bootstrap_readiness=...`,
-  `itertesting: callback_diagnostics=...`, and
-  `itertesting: prerequisite_resolution=...` lines from
+  `itertesting: runtime_capability_profile=...`,
+  `itertesting: callback_diagnostics=...`,
+  `itertesting: prerequisite_resolution=...`, and
+  `itertesting: map_source_decisions=...` lines from
   `tests/headless/itertesting.sh` for quick terminal review
 
 Use `tests/headless/test_itertesting_campaign.sh` to validate that chained runs emit both artifacts.

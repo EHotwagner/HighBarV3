@@ -145,6 +145,29 @@ def render_run_report(
             ]
         )
 
+    if run.runtime_capability_profile is not None:
+        profile = run.runtime_capability_profile
+        supported_callbacks = (
+            ", ".join(str(item) for item in profile.supported_callbacks)
+            if profile.supported_callbacks
+            else "none"
+        )
+        supported_scopes = ", ".join(profile.supported_scopes) or "none"
+        unsupported_groups = ", ".join(profile.unsupported_callback_groups) or "none"
+        lines.extend(
+            [
+                "## Runtime Capability Profile",
+                "",
+                f"- Profile id: `{profile.profile_id}`",
+                f"- Supported callbacks: {supported_callbacks}",
+                f"- Supported scopes: {supported_scopes}",
+                f"- Unsupported callback groups: {unsupported_groups}",
+                f"- Map data source status: {profile.map_data_source_status}",
+                f"- Notes: {profile.notes or 'none'}",
+                "",
+            ]
+        )
+
     if run.callback_diagnostics:
         lines.extend(["## Callback Diagnostics", ""])
         for snapshot in run.callback_diagnostics:
@@ -181,6 +204,20 @@ def render_run_report(
             )
         lines.append("")
 
+    if run.map_source_decisions:
+        lines.extend(["## Map Source Decisions", ""])
+        for item in run.map_source_decisions:
+            lines.extend(
+                [
+                    (
+                        f"- `{item.consumer}` — {item.selected_source} — "
+                        f"metal spots: {item.metal_spot_count}"
+                    ),
+                    f"  reason: {item.reason or 'none'}",
+                ]
+            )
+        lines.append("")
+
     if run.standalone_build_probe_outcome is not None:
         probe = run.standalone_build_probe_outcome
         resolved_def_id = (
@@ -204,9 +241,26 @@ def render_run_report(
                     "- Failure reason: "
                     f"{probe.failure_reason or 'none'}"
                 ),
+                (
+                    "- Capability limits: "
+                    f"{probe.capability_limit_summary or 'none'}"
+                ),
                 "",
             ]
         )
+        if probe.map_source_decision is not None:
+            lines.extend(
+                [
+                    "### Standalone Probe Map Source",
+                    "",
+                    (
+                        f"- Source: {probe.map_source_decision.selected_source} "
+                        f"(metal spots: {probe.map_source_decision.metal_spot_count})"
+                    ),
+                    f"- Reason: {probe.map_source_decision.reason or 'none'}",
+                    "",
+                ]
+            )
 
     if run.fixture_profile is not None and run.fixture_provisioning is not None:
         refreshed = [

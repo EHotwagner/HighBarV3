@@ -56,7 +56,9 @@ from .itertesting_types import (
     ItertestingCampaign,
     ItertestingRun,
     LiveFixtureProfile,
+    MapDataSourceDecision,
     RetryIntensityName,
+    RuntimeCapabilityProfile,
     RunProgressSnapshot,
     RunComparison,
     RunSummary,
@@ -963,6 +965,50 @@ def _callback_diagnostics_for_run(
     )
 
 
+def _runtime_capability_profile_for_run(
+    live_rows: list[dict] | None,
+) -> RuntimeCapabilityProfile:
+    recorded_at = format_timestamp(utc_now())
+    metadata = _metadata_rows(live_rows, "__runtime_capability_profile__")
+    if metadata:
+        payload = metadata[-1]
+        return RuntimeCapabilityProfile(
+            profile_id=payload.get("profile_id", "runtime-capability-profile"),
+            supported_callbacks=tuple(payload.get("supported_callbacks", ())),
+            supported_scopes=tuple(payload.get("supported_scopes", ())),
+            unsupported_callback_groups=tuple(
+                payload.get("unsupported_callback_groups", ())
+            ),
+            map_data_source_status=payload.get("map_data_source_status", "missing"),
+            notes=payload.get("notes", ""),
+            recorded_at=payload.get("recorded_at", recorded_at),
+        )
+    if not live_rows:
+        return RuntimeCapabilityProfile(
+            profile_id="runtime-capability-synthetic",
+            supported_callbacks=(),
+            supported_scopes=(),
+            unsupported_callback_groups=(),
+            map_data_source_status="missing",
+            notes="synthetic run without live capability metadata",
+            recorded_at=recorded_at,
+        )
+    has_prerequisite_lookup = bool(_metadata_rows(live_rows, "__prerequisite_resolution__"))
+    return RuntimeCapabilityProfile(
+        profile_id="runtime-capability-implicit",
+        supported_callbacks=(40, 47) if has_prerequisite_lookup else (),
+        supported_scopes=(
+            ("unit_def_lookup", "unit_def_name")
+            if has_prerequisite_lookup
+            else ()
+        ),
+        unsupported_callback_groups=(),
+        map_data_source_status="missing",
+        notes="live rows did not include runtime capability metadata",
+        recorded_at=recorded_at,
+    )
+
+
 def _prerequisite_resolution_for_run(
     live_rows: list[dict] | None,
 ) -> tuple[RuntimePrerequisiteResolutionRecord, ...]:
@@ -979,6 +1025,37 @@ def _prerequisite_resolution_for_run(
             recorded_at=payload.get("recorded_at", recorded_at),
         )
         for payload in metadata
+    )
+
+
+def _map_source_decisions_for_run(
+    live_rows: list[dict] | None,
+) -> tuple[MapDataSourceDecision, ...]:
+    recorded_at = format_timestamp(utc_now())
+    metadata = _metadata_rows(live_rows, "__map_source_decision__")
+    if metadata:
+        return tuple(
+            MapDataSourceDecision(
+                consumer=payload.get("consumer", "live_closeout"),
+                selected_source=payload.get("selected_source", "missing"),
+                metal_spot_count=payload.get("metal_spot_count", 0),
+                reason=payload.get("reason", ""),
+                recorded_at=payload.get("recorded_at", recorded_at),
+            )
+            for payload in metadata
+        )
+    if not live_rows:
+        reason = "synthetic run without live map-source metadata"
+    else:
+        reason = "live rows did not include map-source metadata"
+    return (
+        MapDataSourceDecision(
+            consumer="live_closeout",
+            selected_source="missing",
+            metal_spot_count=0,
+            reason=reason,
+            recorded_at=recorded_at,
+        ),
     )
 
 
@@ -1002,7 +1079,25 @@ def _standalone_build_probe_outcome_for_run(
         probe_id=payload.get("probe_id", "behavioral-build"),
         prerequisite_name=payload.get("prerequisite_name", "armmex"),
         resolution_record=resolution,
+        map_source_decision=(
+            MapDataSourceDecision(
+                consumer=payload.get("map_source_consumer", "behavioral_build_probe"),
+                selected_source=payload.get("map_source_selected_source", "missing"),
+                metal_spot_count=payload.get("map_source_metal_spot_count", 0),
+                reason=payload.get("map_source_reason", ""),
+                recorded_at=payload.get(
+                    "map_source_recorded_at",
+                    payload.get("recorded_at", format_timestamp(utc_now())),
+                ),
+            )
+            if (
+                payload.get("map_source_selected_source") is not None
+                or payload.get("map_source_reason") is not None
+            )
+            else None
+        ),
         dispatch_result=payload.get("dispatch_result", "blocked"),
+        capability_limit_summary=payload.get("capability_limit_summary"),
         failure_reason=payload.get("failure_reason"),
         completed_at=payload.get("completed_at", format_timestamp(utc_now())),
     )
@@ -1828,8 +1923,10 @@ def build_run(
             live_rows=actual_live_rows,
         )
     bootstrap_readiness = _bootstrap_readiness_for_run(run_id, live_rows)
+    runtime_capability_profile = _runtime_capability_profile_for_run(live_rows)
     callback_diagnostics = _callback_diagnostics_for_run(live_rows)
     prerequisite_resolution = _prerequisite_resolution_for_run(live_rows)
+    map_source_decisions = _map_source_decisions_for_run(live_rows)
     standalone_build_probe_outcome = _standalone_build_probe_outcome_for_run(live_rows)
     channel_health = _channel_health_for_run(run_id, command_records, actual_live_rows)
     failure_classifications = _failure_classifications_for_run(
@@ -1906,8 +2003,10 @@ def build_run(
         fixture_provisioning=fixture_provisioning,
         transport_provisioning=transport_provisioning,
         bootstrap_readiness=bootstrap_readiness,
+        runtime_capability_profile=runtime_capability_profile,
         callback_diagnostics=callback_diagnostics,
         prerequisite_resolution=prerequisite_resolution,
+        map_source_decisions=map_source_decisions,
         standalone_build_probe_outcome=standalone_build_probe_outcome,
         channel_health=channel_health,
         verification_rules=verification_rules,

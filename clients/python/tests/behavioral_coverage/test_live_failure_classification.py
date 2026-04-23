@@ -268,6 +268,95 @@ def test_resource_starved_bootstrap_detail_stays_distinct_from_behavioral_failur
     assert classification.supporting_detail.startswith("bootstrap readiness blocker:")
 
 
+def test_capability_limited_diagnostics_stay_distinct_from_relay_loss():
+    record = CommandVerificationRecord(
+        command_id="cmd-build-unit",
+        command_name="build_unit",
+        category="channel_a_command",
+        attempt_status="inconclusive",
+        verification_mode="natural",
+        evidence_kind="dispatch-only",
+        verified=False,
+        source_run_id="run-1",
+        blocking_reason=(
+            "capability_limited: unsupported_callback_group=unitdef_except_name "
+            "runtime_capability_profile=callback-limited"
+        ),
+    )
+    fixture = FixtureProvisioningResult(
+        run_id="run-1",
+        profile_id="default-live-fixture-profile",
+        provisioned_fixture_classes=("commander", "resource_baseline"),
+        missing_fixture_classes=(),
+        affected_command_ids=(),
+        completed_at="2026-04-22T10:15:00Z",
+    )
+    channel = ChannelHealthOutcome(
+        run_id="run-1",
+        status="healthy",
+        first_failure_stage=None,
+        failure_signal="",
+        commands_attempted_before_failure=0,
+        recovery_attempted=False,
+        finalized_at="2026-04-22T10:16:00Z",
+    )
+    rule = {item.command_id: item for item in default_verification_rules()}["cmd-build-unit"]
+
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
+
+    assert classification.primary_cause == "predicate_or_evidence_gap"
+    assert classification.supporting_detail.startswith("capability-limited diagnostics:")
+
+
+def test_missing_session_start_map_stays_distinct_from_unsupported_callback_map():
+    record = CommandVerificationRecord(
+        command_id="cmd-build-unit",
+        command_name="build_unit",
+        category="channel_a_command",
+        attempt_status="inconclusive",
+        verification_mode="natural",
+        evidence_kind="dispatch-only",
+        verified=False,
+        source_run_id="run-1",
+        blocking_reason="selected_source=missing map_source_reason=session-start map payload unavailable",
+    )
+    fixture = FixtureProvisioningResult(
+        run_id="run-1",
+        profile_id="default-live-fixture-profile",
+        provisioned_fixture_classes=("commander", "resource_baseline"),
+        missing_fixture_classes=(),
+        affected_command_ids=(),
+        completed_at="2026-04-22T10:15:00Z",
+    )
+    channel = ChannelHealthOutcome(
+        run_id="run-1",
+        status="healthy",
+        first_failure_stage=None,
+        failure_signal="",
+        commands_attempted_before_failure=0,
+        recovery_attempted=False,
+        finalized_at="2026-04-22T10:16:00Z",
+    )
+    rule = {item.command_id: item for item in default_verification_rules()}["cmd-build-unit"]
+
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
+
+    assert classification.primary_cause == "predicate_or_evidence_gap"
+    assert classification.supporting_detail.startswith("map-source missing:")
+
+
 def test_authoritative_class_statuses_drive_missing_fixture_classification():
     record = CommandVerificationRecord(
         command_id="cmd-load-units",

@@ -90,6 +90,14 @@ assert_wrapper_semantic_inventory() {
         echo "test_itertesting_campaign: wrapper did not emit callback diagnostics" >&2
         exit 1
     fi
+    if [[ "$output" != *"runtime_capability_profile="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit runtime capability profile" >&2
+        exit 1
+    fi
+    if [[ "$output" != *"map_source_decisions="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit map source summary" >&2
+        exit 1
+    fi
     if [[ "$output" != *"prerequisite_resolution="* ]]; then
         echo "test_itertesting_campaign: wrapper did not emit prerequisite resolution" >&2
         exit 1

@@ -154,8 +154,10 @@ with open(manifest_path, "r", encoding="utf-8") as handle:
 fixture = manifest.get("fixture_provisioning") or {}
 transport = manifest.get("transport_provisioning") or {}
 bootstrap = manifest.get("bootstrap_readiness") or {}
+runtime_capability_profile = manifest.get("runtime_capability_profile") or {}
 callback_diagnostics = manifest.get("callback_diagnostics") or []
 prerequisite_resolution = manifest.get("prerequisite_resolution") or []
+map_source_decisions = manifest.get("map_source_decisions") or []
 class_statuses = fixture.get("class_statuses") or []
 if not class_statuses:
     raise SystemExit(1)
@@ -198,6 +200,13 @@ print(
     else "itertesting: callback_diagnostics=none"
 )
 print(
+    "itertesting: runtime_capability_profile="
+    + (
+        f"callbacks={','.join(str(item) for item in runtime_capability_profile.get('supported_callbacks', ())) or 'none'} "
+        f"map={runtime_capability_profile.get('map_data_source_status', 'none')}"
+    )
+)
+print(
     "itertesting: prerequisite_resolution="
     + ",".join(
         f"{item.get('prerequisite_name')}:{item.get('resolution_status')}"
@@ -205,6 +214,15 @@ print(
     )
     if prerequisite_resolution
     else "itertesting: prerequisite_resolution=none"
+)
+print(
+    "itertesting: map_source_decisions="
+    + ",".join(
+        f"{item.get('consumer')}:{item.get('selected_source')}"
+        for item in map_source_decisions
+    )
+    if map_source_decisions
+    else "itertesting: map_source_decisions=none"
 )
 report_path = Path(manifest_path).with_name("run-report.md")
 semantic_inventory = []

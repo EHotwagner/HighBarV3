@@ -83,8 +83,10 @@ class BootstrapContext:
     transport_build_requests: dict[str, str] = None           # type: ignore[assignment]
     transport_diagnostics: list[str] = None                   # type: ignore[assignment]
     bootstrap_readiness: dict[str, Any] | None = None
+    runtime_capability_profile: dict[str, Any] | None = None
     callback_diagnostics: list[dict[str, Any]] = None         # type: ignore[assignment]
     prerequisite_resolution_records: list[dict[str, Any]] = None  # type: ignore[assignment]
+    map_source_decisions: list[dict[str, Any]] = None        # type: ignore[assignment]
 
     def __post_init__(self):
         if self.capability_units is None:
@@ -107,6 +109,8 @@ class BootstrapContext:
             self.callback_diagnostics = []
         if self.prerequisite_resolution_records is None:
             self.prerequisite_resolution_records = []
+        if self.map_source_decisions is None:
+            self.map_source_decisions = []
 
 
 # ---- manifest computation -----------------------------------------------

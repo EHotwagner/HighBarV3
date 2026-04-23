@@ -450,6 +450,24 @@ def classify_failure_cause(
             source_scope="verification_rule",
         )
 
+    if "capability_limited" in lowered_detail or "unsupported_callback_group=" in lowered_detail:
+        return FailureCauseClassification(
+            command_id=record.command_id,
+            run_id=record.source_run_id,
+            primary_cause="predicate_or_evidence_gap",
+            supporting_detail=f"capability-limited diagnostics: {detail}",
+            source_scope="verification_rule",
+        )
+
+    if "selected_source=missing" in lowered_detail or "map_source_reason=" in lowered_detail:
+        return FailureCauseClassification(
+            command_id=record.command_id,
+            run_id=record.source_run_id,
+            primary_cause="predicate_or_evidence_gap",
+            supporting_detail=f"map-source missing: {detail}",
+            source_scope="verification_rule",
+        )
+
     if record.attempt_status == "inconclusive" or verification_rule.fallback_classification == "predicate_or_evidence_gap":
         if "callback_diagnostics=missing" in lowered_detail:
             detail = f"callback diagnostics unavailable: {detail}"

@@ -116,6 +116,7 @@ CallbackDiagnosticSource = Literal[
     "preserved_earlier_capture",
     "not_available",
 ]
+MapDataSourceStatus = Literal["hello_static_map", "callback_map", "missing"]
 RuntimePrerequisiteConsumer = Literal["live_closeout", "behavioral_build_probe"]
 StandaloneBuildDispatchResult = Literal["verified", "blocked", "failed", "skipped"]
 FixtureClassState = Literal[
@@ -366,6 +367,17 @@ class CallbackDiagnosticSnapshot:
 
 
 @dataclass(frozen=True)
+class RuntimeCapabilityProfile:
+    profile_id: str
+    supported_callbacks: tuple[int, ...]
+    supported_scopes: tuple[str, ...]
+    unsupported_callback_groups: tuple[str, ...]
+    map_data_source_status: MapDataSourceStatus
+    notes: str
+    recorded_at: str
+
+
+@dataclass(frozen=True)
 class RuntimePrerequisiteResolutionRecord:
     prerequisite_name: str
     consumer: RuntimePrerequisiteConsumer
@@ -377,11 +389,22 @@ class RuntimePrerequisiteResolutionRecord:
 
 
 @dataclass(frozen=True)
+class MapDataSourceDecision:
+    consumer: RuntimePrerequisiteConsumer
+    selected_source: MapDataSourceStatus
+    metal_spot_count: int
+    reason: str
+    recorded_at: str
+
+
+@dataclass(frozen=True)
 class StandaloneBuildProbeOutcome:
     probe_id: str
     prerequisite_name: str
     resolution_record: RuntimePrerequisiteResolutionRecord
+    map_source_decision: MapDataSourceDecision | None
     dispatch_result: StandaloneBuildDispatchResult
+    capability_limit_summary: str | None
     failure_reason: str | None
     completed_at: str
 
@@ -615,8 +638,10 @@ class ItertestingRun:
     fixture_provisioning: FixtureProvisioningResult | None = None
     transport_provisioning: TransportProvisioningResult | None = None
     bootstrap_readiness: BootstrapReadinessAssessment | None = None
+    runtime_capability_profile: RuntimeCapabilityProfile | None = None
     callback_diagnostics: tuple[CallbackDiagnosticSnapshot, ...] = ()
     prerequisite_resolution: tuple[RuntimePrerequisiteResolutionRecord, ...] = ()
+    map_source_decisions: tuple[MapDataSourceDecision, ...] = ()
     standalone_build_probe_outcome: StandaloneBuildProbeOutcome | None = None
     channel_health: ChannelHealthOutcome | None = None
     verification_rules: tuple[ArmVerificationRule, ...] = ()
@@ -833,6 +858,20 @@ def _callback_diagnostic_snapshot_from_dict(
     )
 
 
+def _runtime_capability_profile_from_dict(
+    payload: dict[str, Any],
+) -> RuntimeCapabilityProfile:
+    return RuntimeCapabilityProfile(
+        profile_id=payload["profile_id"],
+        supported_callbacks=tuple(payload.get("supported_callbacks", ())),
+        supported_scopes=tuple(payload.get("supported_scopes", ())),
+        unsupported_callback_groups=tuple(payload.get("unsupported_callback_groups", ())),
+        map_data_source_status=payload.get("map_data_source_status", "missing"),
+        notes=payload.get("notes", ""),
+        recorded_at=payload["recorded_at"],
+    )
+
+
 def _runtime_prerequisite_resolution_from_dict(
     payload: dict[str, Any],
 ) -> RuntimePrerequisiteResolutionRecord:
@@ -847,6 +886,18 @@ def _runtime_prerequisite_resolution_from_dict(
     )
 
 
+def _map_source_decision_from_dict(
+    payload: dict[str, Any],
+) -> MapDataSourceDecision:
+    return MapDataSourceDecision(
+        consumer=payload.get("consumer", "live_closeout"),
+        selected_source=payload.get("selected_source", "missing"),
+        metal_spot_count=payload.get("metal_spot_count", 0),
+        reason=payload.get("reason", ""),
+        recorded_at=payload["recorded_at"],
+    )
+
+
 def _standalone_build_probe_outcome_from_dict(
     payload: dict[str, Any],
 ) -> StandaloneBuildProbeOutcome:
@@ -856,7 +907,13 @@ def _standalone_build_probe_outcome_from_dict(
         resolution_record=_runtime_prerequisite_resolution_from_dict(
             payload["resolution_record"]
         ),
+        map_source_decision=(
+            _map_source_decision_from_dict(payload["map_source_decision"])
+            if payload.get("map_source_decision")
+            else None
+        ),
         dispatch_result=payload.get("dispatch_result", "blocked"),
+        capability_limit_summary=payload.get("capability_limit_summary"),
         failure_reason=payload.get("failure_reason"),
         completed_at=payload["completed_at"],
     )
@@ -1108,6 +1165,11 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
             if payload.get("bootstrap_readiness")
             else None
         ),
+        runtime_capability_profile=(
+            _runtime_capability_profile_from_dict(payload["runtime_capability_profile"])
+            if payload.get("runtime_capability_profile")
+            else None
+        ),
         callback_diagnostics=tuple(
             _callback_diagnostic_snapshot_from_dict(item)
             for item in payload.get("callback_diagnostics", ())
@@ -1115,6 +1177,10 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
         prerequisite_resolution=tuple(
             _runtime_prerequisite_resolution_from_dict(item)
             for item in payload.get("prerequisite_resolution", ())
+        ),
+        map_source_decisions=tuple(
+            _map_source_decision_from_dict(item)
+            for item in payload.get("map_source_decisions", ())
         ),
         standalone_build_probe_outcome=(
             _standalone_build_probe_outcome_from_dict(

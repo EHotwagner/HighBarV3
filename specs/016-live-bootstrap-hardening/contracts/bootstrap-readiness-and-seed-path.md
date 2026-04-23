@@ -12,7 +12,7 @@ Define the boundary for deciding whether prepared live closeout can start comman
 2. A resource-starved prepared state must be reported explicitly as a bootstrap-readiness outcome rather than collapsing into a later generic build timeout.
 3. If the workflow uses a non-natural readiness path to make bootstrap viable, that path must be maintainer-visible and reported distinctly from ordinary prepared-state readiness.
 4. Bootstrap-readiness reporting must remain inside the existing run bundle and must not require a separate ad-hoc artifact.
-5. A seeded-readiness path must not hide unrelated command-behavior or fixture failures once bootstrap proceeds.
+5. A seeded-readiness path must not hide unsupported runtime inspection limits, unrelated command-behavior failures, or fixture failures once bootstrap proceeds.
 
 ## Required Record Shape
 
@@ -29,7 +29,7 @@ Define the boundary for deciding whether prepared live closeout can start comman
 ## Review Expectations
 
 - Reviewers can tell from one bundle whether bootstrap was naturally viable.
-- Resource starvation is distinguishable from later fixture or behavior failures.
+- Resource starvation is distinguishable from later fixture, capability-limit, or behavior failures.
 - Any explicit readiness seed remains visible rather than masquerading as normal natural bootstrap.
 
 ## Non-Goals

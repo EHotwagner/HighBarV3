@@ -44,6 +44,8 @@ fixture_provisioning = manifest.get("fixture_provisioning") or {}
 transport_provisioning = manifest.get("transport_provisioning") or {}
 bootstrap_readiness = manifest.get("bootstrap_readiness") or {}
 callback_diagnostics = manifest.get("callback_diagnostics") or []
+runtime_capability_profile = manifest.get("runtime_capability_profile") or {}
+map_source_decisions = manifest.get("map_source_decisions") or []
 channel_health = manifest.get("channel_health") or {}
 verification_rules = {
     item["command_id"]: item for item in manifest.get("verification_rules", [])
@@ -64,6 +66,9 @@ assert "cmd-load-units" in transport_provisioning.get("affected_command_ids", []
 assert bootstrap_readiness.get("readiness_status") == "unknown"
 assert bootstrap_readiness.get("readiness_path") == "unavailable"
 assert callback_diagnostics
+assert runtime_capability_profile.get("map_data_source_status") == "missing"
+assert map_source_decisions
+assert map_source_decisions[0].get("selected_source") == "missing"
 assert channel_health.get("status") == "healthy"
 assert verification_rules["cmd-move-unit"]["rule_mode"] == "movement_tuned"
 assert verification_rules["cmd-fight"]["rule_mode"] == "combat_tuned"
@@ -75,7 +80,9 @@ assert any(item["fixture_class"] == "commander" for item in shared_instances)
 for section in (
     "## Fixture Provisioning",
     "## Bootstrap Readiness",
+    "## Runtime Capability Profile",
     "## Callback Diagnostics",
+    "## Map Source Decisions",
     "### Transport Provisioning",
     "## Command Semantic Inventory",
     "## Channel Health",

@@ -9,6 +9,24 @@ from highbar_client.behavioral_coverage.registry import REGISTRY
 def _hardening_live_rows():
     return [
         {
+            "arm_name": "__runtime_capability_profile__",
+            "profile_id": "cap-40-47-hello-static-map",
+            "supported_callbacks": [40, 47],
+            "supported_scopes": [
+                "unit_def_lookup",
+                "unit_def_name",
+                "session_start_map",
+            ],
+            "unsupported_callback_groups": [
+                "unit",
+                "unitdef_except_name",
+                "map",
+            ],
+            "map_data_source_status": "hello_static_map",
+            "notes": "callback-limited host preserved unit-def lookup and session-start map payload",
+            "recorded_at": "2026-04-23T02:42:47Z",
+        },
+        {
             "arm_name": "__bootstrap_readiness__",
             "readiness_status": "seeded_ready",
             "readiness_path": "explicit_seed",
@@ -36,6 +54,30 @@ def _hardening_live_rows():
             "resolution_status": "resolved",
             "reason": "resolved runtime def id for armmex during live bootstrap",
             "recorded_at": "2026-04-23T02:42:47Z",
+        },
+        {
+            "arm_name": "__map_source_decision__",
+            "consumer": "live_closeout",
+            "selected_source": "hello_static_map",
+            "metal_spot_count": 14,
+            "reason": "used HelloResponse.static_map because callback map inspection is unsupported on this host",
+            "recorded_at": "2026-04-23T02:42:47Z",
+        },
+        {
+            "arm_name": "__standalone_build_probe__",
+            "probe_id": "behavioral-build",
+            "prerequisite_name": "armmex",
+            "callback_path": "InvokeCallback/armmex",
+            "resolved_def_id": 42,
+            "resolution_status": "resolved",
+            "resolution_reason": "resolved runtime def id for armmex",
+            "map_source_consumer": "behavioral_build_probe",
+            "map_source_selected_source": "hello_static_map",
+            "map_source_metal_spot_count": 14,
+            "map_source_reason": "used HelloResponse.static_map because callback map inspection is unsupported on this host",
+            "capability_limit_summary": "deeper commander/build-option diagnostics are capability-limited on this host",
+            "dispatch_result": "verified",
+            "completed_at": "2026-04-23T02:42:52Z",
         },
         {
             "arm_name": "attack",
@@ -159,10 +201,15 @@ def test_report_renders_bootstrap_callback_and_resolution_sections(tmp_path):
 
     assert "## Bootstrap Readiness" in rendered
     assert "- Status: seeded_ready" in rendered
+    assert "## Runtime Capability Profile" in rendered
+    assert "hello_static_map" in rendered
     assert "## Callback Diagnostics" in rendered
     assert "preserved_earlier_capture" in rendered
     assert "## Runtime Prerequisite Resolution" in rendered
     assert "InvokeCallback/armmex" in rendered
+    assert "## Map Source Decisions" in rendered
+    assert "## Standalone Build Probe" in rendered
+    assert "Capability limits: deeper commander/build-option diagnostics are capability-limited on this host" in rendered
 
 
 def test_report_renders_blocked_contract_health_for_fixture_blocked_runs(tmp_path):

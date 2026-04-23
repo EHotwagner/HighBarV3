@@ -1086,6 +1086,10 @@ def test_execute_live_bootstrap_records_resource_starved_readiness(monkeypatch):
     assert err.ctx.bootstrap_readiness["readiness_status"] == "resource_starved"
     assert err.ctx.bootstrap_readiness["first_required_step"] == "armmex"
     assert err.ctx.prerequisite_resolution_records[0]["prerequisite_name"] == "armmex"
+    assert err.ctx.runtime_capability_profile is not None
+    assert 47 in err.ctx.runtime_capability_profile["supported_callbacks"]
+    assert 40 in err.ctx.runtime_capability_profile["supported_callbacks"]
+    assert err.ctx.map_source_decisions[0]["selected_source"] == "missing"
 
 
 def test_execute_live_bootstrap_reuses_existing_ready_plan_units(monkeypatch):

@@ -152,10 +152,19 @@ def _bootstrap_metadata_rows(ctx: BootstrapContext | None) -> list[dict[str, Any
                 **ctx.bootstrap_readiness,
             )
         )
+    if ctx.runtime_capability_profile:
+        rows.append(
+            _metadata_row(
+                "__runtime_capability_profile__",
+                **ctx.runtime_capability_profile,
+            )
+        )
     for item in ctx.callback_diagnostics:
         rows.append(_metadata_row("__callback_diagnostic__", **item))
     for item in ctx.prerequisite_resolution_records:
         rows.append(_metadata_row("__prerequisite_resolution__", **item))
+    for item in ctx.map_source_decisions:
+        rows.append(_metadata_row("__map_source_decision__", **item))
     return rows
 
 
@@ -915,6 +924,59 @@ def _record_callback_diagnostic(
     )
 
 
+def _runtime_capability_notes(payload: dict[str, Any]) -> str:
+    scopes = ", ".join(payload.get("supported_scopes", ())) or "none"
+    unsupported = ", ".join(payload.get("unsupported_callback_groups", ())) or "none"
+    map_status = payload.get("map_data_source_status", "missing")
+    return (
+        f"supported scopes: {scopes}; "
+        f"unsupported groups: {unsupported}; "
+        f"map source: {map_status}"
+    )
+
+
+def _update_runtime_capability_profile(
+    ctx: BootstrapContext,
+    *,
+    supported_callbacks: tuple[int, ...] = (),
+    supported_scopes: tuple[str, ...] = (),
+    unsupported_callback_groups: tuple[str, ...] = (),
+    map_data_source_status: str | None = None,
+    notes: str | None = None,
+) -> None:
+    payload = dict(ctx.runtime_capability_profile or {})
+    payload.setdefault("profile_id", "runtime-capability-profile")
+    payload["supported_callbacks"] = sorted(
+        {
+            *(payload.get("supported_callbacks", ())),
+            *supported_callbacks,
+        }
+    )
+    payload["supported_scopes"] = sorted(
+        {
+            *(payload.get("supported_scopes", ())),
+            *supported_scopes,
+        }
+    )
+    payload["unsupported_callback_groups"] = sorted(
+        {
+            *(payload.get("unsupported_callback_groups", ())),
+            *unsupported_callback_groups,
+        }
+    )
+    if map_data_source_status is not None:
+        payload["map_data_source_status"] = map_data_source_status
+    else:
+        payload.setdefault("map_data_source_status", "missing")
+    payload["notes"] = notes or _runtime_capability_notes(payload)
+    payload["recorded_at"] = _utc_now_iso()
+    callbacks = "-".join(str(item) for item in payload["supported_callbacks"]) or "none"
+    payload["profile_id"] = (
+        f"runtime-capability-{callbacks}-{payload['map_data_source_status']}"
+    )
+    ctx.runtime_capability_profile = payload
+
+
 def _record_prerequisite_resolution(
     ctx: BootstrapContext,
     *,
@@ -938,6 +1000,61 @@ def _record_prerequisite_resolution(
     )
 
 
+def _record_map_source_decision(
+    ctx: BootstrapContext,
+    *,
+    consumer: str,
+    selected_source: str,
+    metal_spot_count: int,
+    reason: str,
+) -> None:
+    ctx.map_source_decisions.append(
+        {
+            "consumer": consumer,
+            "selected_source": selected_source,
+            "metal_spot_count": metal_spot_count,
+            "reason": reason,
+            "recorded_at": _utc_now_iso(),
+        }
+    )
+
+
+def _record_live_closeout_map_source(
+    ctx: BootstrapContext,
+    *,
+    static_map: Any | None,
+) -> None:
+    metal_spots = tuple(getattr(static_map, "metal_spots", ()) or ())
+    if metal_spots:
+        _record_map_source_decision(
+            ctx,
+            consumer="live_closeout",
+            selected_source="hello_static_map",
+            metal_spot_count=len(metal_spots),
+            reason=(
+                "used HelloResponse.static_map because callback map inspection is "
+                "unsupported or unnecessary on this host"
+            ),
+        )
+        _update_runtime_capability_profile(
+            ctx,
+            supported_scopes=("session_start_map",),
+            map_data_source_status="hello_static_map",
+        )
+        return
+    _record_map_source_decision(
+        ctx,
+        consumer="live_closeout",
+        selected_source="missing",
+        metal_spot_count=0,
+        reason="session-start map payload unavailable for live bootstrap targeting",
+    )
+    _update_runtime_capability_profile(
+        ctx,
+        map_data_source_status="missing",
+    )
+
+
 def _capture_callback_diagnostic(
     stub: Any,
     shared: dict,
@@ -953,6 +1070,14 @@ def _capture_callback_diagnostic(
         token=token,
     )
     if summary.startswith("commander_diag_error="):
+        _update_runtime_capability_profile(
+            ctx,
+            unsupported_callback_groups=("unit", "unitdef_except_name"),
+            notes=(
+                "callback-limited host preserved unit-def lookup while commander "
+                "and build-option diagnostics were unavailable"
+            ),
+        )
         if ctx.callback_diagnostics:
             _record_callback_diagnostic(
                 ctx,
@@ -972,6 +1097,11 @@ def _capture_callback_diagnostic(
             summary=summary,
         )
         return
+    _update_runtime_capability_profile(
+        ctx,
+        supported_callbacks=(23, 42),
+        supported_scopes=("unit", "unitdef_build_options"),
+    )
     _record_callback_diagnostic(
         ctx,
         capture_stage=capture_stage,
@@ -1514,6 +1644,11 @@ def _execute_live_bootstrap(
     )
     try:
         _resolve_bootstrap_defs(stub, ctx, token=token)
+        _update_runtime_capability_profile(
+            ctx,
+            supported_callbacks=(47, 40),
+            supported_scopes=("unit_def_lookup", "unit_def_name"),
+        )
     except Exception as exc:  # noqa: BLE001
         _record_prerequisite_resolution(
             ctx,
@@ -1552,6 +1687,7 @@ def _execute_live_bootstrap(
     ctx.commander_unit_id = commander.unit_id
     ctx.commander_position = _vector3_from_position(commander.position)
     ctx.capability_units["commander"] = commander.unit_id
+    _record_live_closeout_map_source(ctx, static_map=static_map)
     readiness_status, readiness_path, first_required_step, readiness_reason = _assess_bootstrap_readiness(
         starting_snapshot,
         ctx,

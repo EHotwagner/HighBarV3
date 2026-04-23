@@ -31,5 +31,5 @@
 
 ## Notes
 
-- Validation pass completed against the feature prompt and the 015 follow-up issue evidence on 2026-04-23.
-- No clarification markers were required; scope is bounded to bootstrap readiness, callback-diagnostic stability, and runtime prerequisite resolution for the standalone build probe.
+- Validation pass completed against the April 23, 2026 callback-capability probe and the prepared live follow-up evidence.
+- No clarification markers were required; scope is bounded to bootstrap readiness, capability-limited live diagnostics, and supported-source alignment for the standalone build probe.

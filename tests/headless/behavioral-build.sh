@@ -147,7 +147,8 @@ metadata = [("x-highbar-ai-token", token)] if token else None
 
 
 def emit_outcome(*, prerequisite_name, callback_path, resolved_def_id,
-                 resolution_status, resolution_reason, dispatch_result,
+                 resolution_status, resolution_reason, map_source_decision,
+                 dispatch_result, capability_limit_summary=None,
                  failure_reason=None):
     payload = {
         "probe_id": "behavioral-build",
@@ -161,7 +162,9 @@ def emit_outcome(*, prerequisite_name, callback_path, resolved_def_id,
             "reason": resolution_reason,
             "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         },
+        "map_source_decision": map_source_decision,
         "dispatch_result": dispatch_result,
+        "capability_limit_summary": capability_limit_summary,
         "failure_reason": failure_reason,
         "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -272,6 +275,28 @@ def choose_build_position(def_name, commander, static_map, snapshot):
     )
 
 
+def select_map_source_decision(static_map):
+    metal_spots = tuple(getattr(static_map, "metal_spots", ()) or ())
+    if metal_spots:
+        return {
+            "consumer": "behavioral_build_probe",
+            "selected_source": "hello_static_map",
+            "metal_spot_count": len(metal_spots),
+            "reason": (
+                "used HelloResponse.static_map because callback map inspection is "
+                "unsupported or unnecessary on this host"
+            ),
+            "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+    return {
+        "consumer": "behavioral_build_probe",
+        "selected_source": "missing",
+        "metal_spot_count": 0,
+        "reason": "session-start map payload unavailable for standalone probe targeting",
+        "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
 def candidate_summary(unit, target):
     return (
         f"id={unit.unit_id} def={unit.def_id} "
@@ -369,6 +394,10 @@ resp = stub.Hello(service_pb2.HelloRequest(
     role=service_pb2.Role.ROLE_AI,
 ), metadata=metadata, timeout=5)
 static_map = getattr(resp, "static_map", None)
+map_source_decision = select_map_source_decision(static_map)
+capability_limit_summary = (
+    "deeper commander/build-option diagnostics are capability-limited on this host"
+)
 print(f"[bbuild] Hello OK session={resp.session_id}", flush=True)
 
 shared = {"snapshots": [], "stop": False, "err": None}
@@ -467,7 +496,9 @@ if armmex_def_id is None:
         resolved_def_id=None,
         resolution_status=resolution_status,
         resolution_reason=resolution_reason,
+        map_source_decision=map_source_decision,
         dispatch_result="blocked",
+        capability_limit_summary=capability_limit_summary,
         failure_reason="runtime prerequisite resolution unavailable",
     )
     print("[bbuild] runtime prerequisite resolution blocker", flush=True)
@@ -528,7 +559,9 @@ for label, frame in sample_frames:
             resolved_def_id=armmex_def_id,
             resolution_status=resolution_status,
             resolution_reason=resolution_reason,
+            map_source_decision=map_source_decision,
             dispatch_result="failed",
+            capability_limit_summary=capability_limit_summary,
             failure_reason=f"{label} snapshot stall",
         )
         print(f"[bbuild] {label} snapshot stall — fail", flush=True)
@@ -544,7 +577,9 @@ if selected is None:
         resolved_def_id=armmex_def_id,
         resolution_status=resolution_status,
         resolution_reason=resolution_reason,
+        map_source_decision=map_source_decision,
         dispatch_result="failed",
+        capability_limit_summary=capability_limit_summary,
         failure_reason="build not started in sample window",
     )
     print("[bbuild] no new construction candidate identified in sample window — fail",
@@ -560,7 +595,9 @@ if (
         resolved_def_id=armmex_def_id,
         resolution_status=resolution_status,
         resolution_reason=resolution_reason,
+        map_source_decision=map_source_decision,
         dispatch_result="failed",
+        capability_limit_summary=capability_limit_summary,
         failure_reason=(
             "no construction candidate near requested build position "
             f"(closest_distance={selected['best_distance']:.1f})"
@@ -587,7 +624,9 @@ if not selected["ever_under_construction"]:
         resolved_def_id=armmex_def_id,
         resolution_status=resolution_status,
         resolution_reason=resolution_reason,
+        map_source_decision=map_source_decision,
         dispatch_result="failed",
+        capability_limit_summary=capability_limit_summary,
         failure_reason="construction candidate never entered under_construction state",
     )
     print("[bbuild] construction candidate never entered under_construction state — fail", flush=True)
@@ -608,7 +647,9 @@ if len(progress_samples) < 2:
         resolved_def_id=armmex_def_id,
         resolution_status=resolution_status,
         resolution_reason=resolution_reason,
+        map_source_decision=map_source_decision,
         dispatch_result="failed",
+        capability_limit_summary=capability_limit_summary,
         failure_reason="construction candidate did not persist long enough for verification",
     )
     print("[bbuild] construction candidate did not persist long enough for verification — fail", flush=True)
@@ -627,7 +668,9 @@ if end_progress <= start_progress:
         resolved_def_id=armmex_def_id,
         resolution_status=resolution_status,
         resolution_reason=resolution_reason,
+        map_source_decision=map_source_decision,
         dispatch_result="failed",
+        capability_limit_summary=capability_limit_summary,
         failure_reason=(
             "build_progress not monotonic: "
             f"{start_label}={start_progress:.3f} "
@@ -649,7 +692,9 @@ emit_outcome(
     resolved_def_id=armmex_def_id,
     resolution_status=resolution_status,
     resolution_reason=resolution_reason,
+    map_source_decision=map_source_decision,
     dispatch_result="verified",
+    capability_limit_summary=capability_limit_summary,
 )
 print("[bbuild] PASS")
 sys.exit(0)
