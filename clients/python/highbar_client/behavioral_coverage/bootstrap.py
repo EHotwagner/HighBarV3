@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from .itertesting_types import (
@@ -114,6 +115,57 @@ class BootstrapContext:
             self.prerequisite_resolution_records = []
         if self.map_source_decisions is None:
             self.map_source_decisions = []
+
+
+def _utc_now_iso() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def append_prerequisite_resolution_record(
+    ctx: BootstrapContext,
+    *,
+    prerequisite_name: str,
+    consumer: str,
+    callback_path: str,
+    resolved_def_id: int | None,
+    resolution_status: str,
+    reason: str,
+) -> None:
+    ctx.prerequisite_resolution_records.append(
+        {
+            "prerequisite_name": prerequisite_name,
+            "consumer": consumer,
+            "callback_path": callback_path,
+            "resolved_def_id": resolved_def_id,
+            "resolution_status": resolution_status,
+            "reason": reason,
+            "recorded_at": _utc_now_iso(),
+        }
+    )
+
+
+def append_map_source_decision(
+    ctx: BootstrapContext,
+    *,
+    consumer: str,
+    selected_source: str,
+    metal_spot_count: int,
+    reason: str,
+) -> None:
+    ctx.map_source_decisions.append(
+        {
+            "consumer": consumer,
+            "selected_source": selected_source,
+            "metal_spot_count": metal_spot_count,
+            "reason": reason,
+            "recorded_at": _utc_now_iso(),
+        }
+    )
 
 
 # ---- manifest computation -----------------------------------------------

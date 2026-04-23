@@ -72,6 +72,29 @@ void DeltaBus::Unsubscribe(const std::shared_ptr<SubscriberSlot>& slot) {
 	}
 }
 
+void DeltaBus::EvictAll(EvictionReason reason) {
+	std::vector<std::shared_ptr<SubscriberSlot>> live;
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		live.reserve(slots_.size());
+		for (const auto& w : slots_) {
+			if (auto sp = w.lock()) {
+				live.push_back(std::move(sp));
+			}
+		}
+		slots_.clear();
+	}
+
+	for (auto& slot : live) {
+		slot->Evict(reason);
+	}
+	if (!live.empty() && counters_ != nullptr) {
+		counters_->subscriber_count.fetch_sub(
+			static_cast<std::uint32_t>(live.size()),
+			std::memory_order_relaxed);
+	}
+}
+
 std::size_t DeltaBus::SubscriberCount() const {
 	std::lock_guard<std::mutex> lock(mutex_);
 	std::size_t n = 0;

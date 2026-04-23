@@ -236,6 +236,28 @@ def test_report_renders_blocked_contract_health_for_fixture_blocked_runs(tmp_pat
     assert "missing fixture" in rendered.lower()
 
 
+def test_report_renders_interpretation_warnings_and_decision_trace(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "__future_runtime_fact__",
+                "recorded_at": "2026-04-23T09:32:32Z",
+                "detail": "new metadata type without an interpretation rule",
+            }
+        ],
+    )
+
+    rendered = render_run_report(run)
+
+    assert "## Interpretation Warnings" in rendered
+    assert "future_runtime_fact" in rendered
+    assert "## Decision Trace" in rendered
+    assert "Fully interpreted: no" in rendered
+
+
 def test_report_renders_fixture_class_status_and_shared_instance_detail(tmp_path):
     run = build_run(
         campaign_id="campaign-1",

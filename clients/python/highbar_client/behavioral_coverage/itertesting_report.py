@@ -359,6 +359,14 @@ def render_run_report(
                     "",
                     f"- Status: {run.transport_provisioning.status}",
                     (
+                        "- Interpreted availability: "
+                        f"{run.transport_decision.availability_status if run.transport_decision is not None else 'unknown'}"
+                    ),
+                    (
+                        "- Explicit evidence: "
+                        f"{'yes' if run.transport_decision and run.transport_decision.explicit_evidence else 'no'}"
+                    ),
+                    (
                         "- Active candidate: "
                         f"{run.transport_provisioning.active_candidate_id or 'none'}"
                     ),
@@ -414,6 +422,35 @@ def render_run_report(
                         )
                     )
             lines.append("")
+        if run.fixture_transitions:
+            lines.extend(["### Interpretation Fixture Transitions", ""])
+            for transition in run.fixture_transitions:
+                affected = ", ".join(transition.affected_commands) or "none"
+                lines.extend(
+                    [
+                        (
+                            f"- `{transition.fixture_class}` — {transition.state} — "
+                            f"{transition.observed_source}"
+                        ),
+                        f"  affected commands: {affected}",
+                        f"  detail: {transition.detail}",
+                    ]
+                )
+            lines.append("")
+
+    if run.interpretation_warnings:
+        lines.extend(
+            [
+                "## Interpretation Warnings",
+                "",
+                f"- Fully interpreted: {'yes' if run.fully_interpreted else 'no'}",
+            ]
+        )
+        for item in run.interpretation_warnings:
+            lines.append(
+                f"- `{item.record_type}` — {item.severity} — {item.message}"
+            )
+        lines.append("")
 
     inventory = all_custom_command_inventory()
     if inventory:
@@ -500,12 +537,26 @@ def render_run_report(
             )
         lines.append("")
 
+    if run.decision_trace:
+        lines.extend(["## Decision Trace", ""])
+        for item in run.decision_trace:
+            record_type = item.record_type or "n/a"
+            lines.append(
+                (
+                    f"- `{item.concern}` — {item.source_layer} — "
+                    f"record: {record_type} — owner: {item.rule_owner}"
+                )
+            )
+            lines.append(f"  detail: {item.detail}")
+        lines.append("")
+
     if run.contract_health_decision is not None:
         lines.extend(
             [
                 "## Contract Health",
                 "",
                 f"- Status: {run.contract_health_decision.decision_status}",
+                f"- Fully interpreted: {'yes' if run.fully_interpreted else 'no'}",
                 (
                     "- Stop or proceed: "
                     f"{run.contract_health_decision.stop_or_proceed}"

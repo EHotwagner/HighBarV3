@@ -177,6 +177,147 @@ def test_manifest_round_trip_preserves_bootstrap_and_probe_metadata(tmp_path):
     )
 
 
+def test_bootstrap_blocked_live_rows_do_not_claim_unbuilt_fixtures(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "__bootstrap_readiness__",
+                "readiness_status": "resource_starved",
+                "readiness_path": "unavailable",
+                "first_required_step": "armap",
+                "economy_summary": "economy=metal:0.0/0.0/1950.0",
+                "reason": "first commander-built bootstrap step armap would start from a resource-starved state",
+                "recorded_at": "2026-04-23T09:32:32Z",
+            }
+        ],
+    )
+
+    assert run.fixture_provisioning is not None
+    class_statuses = {
+        item.fixture_class: item for item in run.fixture_provisioning.class_statuses
+    }
+    assert class_statuses["commander"].status == "provisioned"
+    assert class_statuses["movement_lane"].status == "provisioned"
+    assert class_statuses["resource_baseline"].status == "provisioned"
+    assert class_statuses["builder"].status == "missing"
+    assert class_statuses["cloakable"].status == "missing"
+    assert class_statuses["hostile_target"].status == "missing"
+    provisioned = set(run.fixture_provisioning.provisioned_fixture_classes)
+    assert "builder" not in provisioned
+    assert "cloakable" not in provisioned
+    assert "hostile_target" not in provisioned
+
+
+def test_latest_fixture_transition_wins_for_transport_unit(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "transport fixture refresh_failed after payload stale event",
+                "error": "precondition_unmet",
+            },
+            {
+                "arm_name": "unload_unit",
+                "category": REGISTRY["unload_unit"].category,
+                "dispatched": "true",
+                "verified": "false",
+                "evidence": "transport fixture refreshed with payload fixture replacement",
+                "error": "effect_not_observed",
+            },
+        ],
+    )
+
+    latest_transport_transition = [
+        item for item in run.fixture_transitions if item.fixture_class == "transport_unit"
+    ][-1]
+
+    assert latest_transport_transition.state == "refreshed"
+    assert run.fixture_provisioning is not None
+    class_statuses = {
+        item.fixture_class: item for item in run.fixture_provisioning.class_statuses
+    }
+    assert class_statuses["transport_unit"].status == "refreshed"
+    assert run.transport_decision is not None
+    assert run.transport_decision.availability_status == "available"
+
+
+def test_evidence_poor_live_run_keeps_transport_unknown(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "__bootstrap_readiness__",
+                "readiness_status": "seeded_ready",
+                "readiness_path": "explicit_seed",
+                "first_required_step": "armmex",
+                "economy_summary": "economy=metal:10.0/1.0/1500.0",
+                "reason": "prepared live start already contained bootstrap fixtures",
+                "recorded_at": "2026-04-23T09:32:32Z",
+            },
+            {
+                "arm_name": "attack",
+                "category": REGISTRY["attack"].category,
+                "dispatched": "true",
+                "verified": "false",
+                "evidence": "place_target_on_ground Lua rewrite converted the unit target into map coordinates",
+                "error": "effect_not_observed",
+            },
+        ],
+    )
+
+    assert run.transport_provisioning is not None
+    assert run.transport_provisioning.status == "missing"
+    assert run.transport_decision is not None
+    assert run.transport_decision.availability_status == "unknown"
+    assert run.transport_decision.explicit_evidence is False
+
+
+def test_unknown_metadata_blocks_fully_interpreted_and_survives_manifest_round_trip(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "__future_runtime_fact__",
+                "recorded_at": "2026-04-23T09:32:32Z",
+                "detail": "new metadata type without an interpretation rule",
+            }
+        ],
+    )
+
+    assert run.fully_interpreted is False
+    assert run.interpretation_warnings
+    assert run.interpretation_warnings[0].record_type == "future_runtime_fact"
+    assert run.live_execution_capture is not None
+    assert run.live_execution_capture.metadata_records[0].record_type == "future_runtime_fact"
+    assert run.contract_health_decision is not None
+    assert run.contract_health_decision.decision_status == "blocked_foundational"
+
+    bundle = tmp_path / run.run_id
+    bundle.mkdir()
+    manifest = bundle / "manifest.json"
+    manifest.write_text(json.dumps(manifest_dict(run)), encoding="utf-8")
+
+    loaded = load_run_manifest(manifest)
+
+    assert loaded.fully_interpreted is False
+    assert loaded.interpretation_warnings[0].record_type == "future_runtime_fact"
+    assert loaded.live_execution_capture is not None
+    assert loaded.live_execution_capture.metadata_records[0].record_type == "future_runtime_fact"
+
+
 def test_run_id_collision_uses_deterministic_suffix(tmp_path):
     first = make_run_id(tmp_path)
     (tmp_path / first).mkdir()

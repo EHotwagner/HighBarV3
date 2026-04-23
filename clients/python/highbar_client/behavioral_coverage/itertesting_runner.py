@@ -16,6 +16,7 @@ from .audit_runner import deterministic_repros_for_issues
 from .bootstrap import (
     DEFAULT_LIVE_FIXTURE_CLASSES,
     OPTIONAL_LIVE_FIXTURE_CLASSES,
+    all_live_fixture_classes,
     build_fixture_class_statuses,
     build_shared_fixture_instance,
     fixture_classes_for_command,
@@ -37,6 +38,7 @@ from .itertesting_retry_policy import (
     disproportionate_intensity_warning,
     normalize_retry_policy,
 )
+from .live_execution import build_live_execution_capture
 from .itertesting_types import (
     ArmVerificationRule,
     BootstrapReadinessAssessment,
@@ -61,6 +63,7 @@ from .itertesting_types import (
     RuntimeCapabilityProfile,
     RunProgressSnapshot,
     RunComparison,
+    RunInterpretationResult,
     RunSummary,
     RuntimePrerequisiteResolutionRecord,
     StandaloneBuildProbeOutcome,
@@ -80,6 +83,7 @@ from .live_failure_classification import (
     is_channel_failure_signal,
     normalize_contract_issues,
 )
+from .run_interpretation import interpret_live_execution_capture
 from .predicates import semantic_gate_metadata
 from .registry import REGISTRY
 
@@ -258,6 +262,9 @@ _TRANSPORT_FALLBACK_TOKENS = (
     "fallback transport",
     "fallback spawn",
     "cheat-assisted transport",
+)
+_BOOTSTRAP_BLOCKED_BASELINE_FIXTURE_CLASSES = frozenset(
+    {"commander", "movement_lane", "resource_baseline"}
 )
 _TRANSPORT_PAYLOAD_INCOMPATIBLE_TOKENS = (
     "payload incompatible",
@@ -554,19 +561,41 @@ def _infer_fixture_observations(
     *,
     cheat_enabled: bool,
 ) -> tuple[set[str], set[str], set[str], set[str], dict[str, str]]:
-    provisioned = set(DEFAULT_LIVE_FIXTURE_CLASSES)
-    missing = set(OPTIONAL_LIVE_FIXTURE_CLASSES)
+    bootstrap_blocked = any(
+        row.get("arm_name") == "__bootstrap_readiness__"
+        and row.get("readiness_status") not in {"natural_ready", "seeded_ready"}
+        for row in live_rows or ()
+    )
+    if bootstrap_blocked:
+        provisioned = set(_BOOTSTRAP_BLOCKED_BASELINE_FIXTURE_CLASSES)
+        missing = set(all_live_fixture_classes()).difference(provisioned)
+        reasons: dict[str, str] = {
+            fixture_class: "baseline fixture dependency was available for the run"
+            for fixture_class in provisioned
+        }
+        reasons.update(
+            {
+                fixture_class: (
+                    "live bootstrap blocked before fixture provisioning could establish "
+                    "this dependency"
+                )
+                for fixture_class in missing
+            }
+        )
+    else:
+        provisioned = set(DEFAULT_LIVE_FIXTURE_CLASSES)
+        missing = set(OPTIONAL_LIVE_FIXTURE_CLASSES)
+        reasons = {
+            fixture_class: "baseline fixture dependency was available for the run"
+            for fixture_class in DEFAULT_LIVE_FIXTURE_CLASSES
+        }
     refreshed: set[str] = set()
     unusable: set[str] = set()
-    reasons: dict[str, str] = {
-        fixture_class: "baseline fixture dependency was available for the run"
-        for fixture_class in DEFAULT_LIVE_FIXTURE_CLASSES
-    }
 
     if cheat_enabled:
-        provisioned.update(OPTIONAL_LIVE_FIXTURE_CLASSES)
+        provisioned.update(all_live_fixture_classes())
         missing.clear()
-        for fixture_class in OPTIONAL_LIVE_FIXTURE_CLASSES:
+        for fixture_class in all_live_fixture_classes():
             reasons[fixture_class] = "fixture was provisioned through cheat-assisted live setup"
 
     for row in live_rows or ():
@@ -1695,6 +1724,7 @@ def _contract_health_for_run(
     failure_classifications: tuple[FailureCauseClassification, ...],
     semantic_gates: tuple[CommandSemanticGate, ...],
     actions: tuple[ImprovementAction, ...],
+    interpretation_result: RunInterpretationResult,
     enforce_live_closeout_gate: bool,
 ) -> tuple[ContractHealthDecision, ImprovementEligibility]:
     blocking = tuple(item for item in contract_issues if item.blocks_improvement)
@@ -1726,7 +1756,7 @@ def _contract_health_for_run(
     )
     recorded_at = format_timestamp(utc_now())
     semantic_gate_map = {item.command_id: item.gate_kind for item in semantic_gates}
-    visible_downstream_findings = tuple(
+    visible_downstream_findings = list(
         (
             f"{item.command_id}:semantic-gate:{semantic_gate_map[item.command_id]}"
             if item.command_id in semantic_gate_map
@@ -1734,6 +1764,13 @@ def _contract_health_for_run(
         )
         for item in failure_classifications
     )
+    visible_downstream_findings.extend(
+        f"interpretation-warning:{item.record_type}"
+        for item in interpretation_result.interpretation_warnings
+    )
+    if enforce_live_closeout_gate and not interpretation_result.fully_interpreted:
+        live_closeout_blockers.append("live-closeout:interpretation-warning")
+        live_closeout_reasons.append("preserved interpretation warnings")
     if needs_pattern_review and blocking:
         decision = ContractHealthDecision(
             run_id=run_id,
@@ -1748,7 +1785,7 @@ def _contract_health_for_run(
             run_id=run_id,
             contract_health_status=decision.decision_status,
             guidance_mode="withheld",
-            visible_downstream_findings=visible_downstream_findings,
+            visible_downstream_findings=tuple(visible_downstream_findings),
             normal_improvement_actions=(),
             withheld_reason="A foundational blocker has no deterministic repro and needs pattern review.",
         )
@@ -1797,7 +1834,7 @@ def _contract_health_for_run(
             run_id=run_id,
             contract_health_status=decision.decision_status,
             guidance_mode="secondary_only",
-            visible_downstream_findings=visible_downstream_findings,
+            visible_downstream_findings=tuple(visible_downstream_findings),
             normal_improvement_actions=(),
             withheld_reason=withheld_reason,
         )
@@ -1820,7 +1857,7 @@ def _contract_health_for_run(
         run_id=run_id,
         contract_health_status=decision.decision_status,
         guidance_mode="normal",
-        visible_downstream_findings=visible_downstream_findings,
+        visible_downstream_findings=tuple(visible_downstream_findings),
         normal_improvement_actions=tuple(item.details for item in actions),
     )
     return decision, eligibility
@@ -1876,7 +1913,12 @@ def build_run(
     started = utc_now()
     run_id = make_run_id(reports_dir, started)
     loaded_instructions = prior_instructions or {}
-    actual_live_rows = _actual_live_rows(live_rows)
+    capture = build_live_execution_capture(
+        run_id=run_id,
+        setup_mode="cheat-assisted" if cheat_enabled else "natural",
+        live_rows=live_rows,
+    )
+    actual_live_rows = list(capture.command_rows) or None
     fixture_profile = _fixture_profile()
     verification_rules = default_verification_rules()
     if live_rows is None:
@@ -1896,7 +1938,7 @@ def build_run(
             live_rows=None,
         )
     else:
-        row_map = {item["arm_name"]: item for item in actual_live_rows or ()}
+        row_map = {item["arm_name"]: item for item in capture.command_rows}
         command_records = tuple(
             _record_from_live_row(
                 run_id=run_id,
@@ -1917,17 +1959,23 @@ def build_run(
             )
             for arm_name in sorted(REGISTRY)
         )
-        fixture_provisioning, transport_provisioning = _fixture_provisioning_for_run(
-            run_id,
-            cheat_enabled=cheat_enabled,
-            live_rows=actual_live_rows,
-        )
-    bootstrap_readiness = _bootstrap_readiness_for_run(run_id, live_rows)
-    runtime_capability_profile = _runtime_capability_profile_for_run(live_rows)
-    callback_diagnostics = _callback_diagnostics_for_run(live_rows)
-    prerequisite_resolution = _prerequisite_resolution_for_run(live_rows)
-    map_source_decisions = _map_source_decisions_for_run(live_rows)
-    standalone_build_probe_outcome = _standalone_build_probe_outcome_for_run(live_rows)
+    (
+        run_mode_evidence_policy,
+        interpretation_result,
+        fixture_provisioning,
+        transport_provisioning,
+    ) = interpret_live_execution_capture(
+        run_id=run_id,
+        capture=capture,
+    )
+    bootstrap_readiness = interpretation_result.bootstrap_readiness
+    runtime_capability_profile = interpretation_result.runtime_capability_profile
+    callback_diagnostics = interpretation_result.callback_diagnostics
+    prerequisite_resolution = interpretation_result.prerequisite_resolution
+    map_source_decisions = interpretation_result.map_source_decisions
+    standalone_build_probe_outcome = (
+        interpretation_result.standalone_build_probe_outcome
+    )
     channel_health = _channel_health_for_run(run_id, command_records, actual_live_rows)
     failure_classifications = _failure_classifications_for_run(
         command_records,
@@ -1963,6 +2011,7 @@ def build_run(
         failure_classifications=failure_classifications,
         semantic_gates=semantic_gates,
         actions=provisional_actions,
+        interpretation_result=interpretation_result,
         enforce_live_closeout_gate=live_rows is not None,
     )
     actions = (
@@ -2008,6 +2057,13 @@ def build_run(
         prerequisite_resolution=prerequisite_resolution,
         map_source_decisions=map_source_decisions,
         standalone_build_probe_outcome=standalone_build_probe_outcome,
+        live_execution_capture=capture,
+        run_mode_evidence_policy=run_mode_evidence_policy,
+        fixture_transitions=interpretation_result.fixture_transitions,
+        transport_decision=interpretation_result.transport_decision,
+        interpretation_warnings=interpretation_result.interpretation_warnings,
+        decision_trace=interpretation_result.decision_trace,
+        fully_interpreted=interpretation_result.fully_interpreted,
         channel_health=channel_health,
         verification_rules=verification_rules,
         failure_classifications=failure_classifications,

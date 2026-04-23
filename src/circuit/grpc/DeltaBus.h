@@ -42,6 +42,11 @@ public:
 	// guaranteed not to receive further TryPush calls.
 	void Unsubscribe(const std::shared_ptr<SubscriberSlot>& slot);
 
+	// Service-shutdown path. Evicts every currently-registered slot and
+	// clears the registry so blocked StreamState pumps wake promptly and
+	// no new publishes target torn-down subscribers.
+	void EvictAll(EvictionReason reason);
+
 	// Count of currently-live subscribers.
 	std::size_t SubscriberCount() const;
 

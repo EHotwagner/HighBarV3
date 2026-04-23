@@ -27,6 +27,8 @@ from .bootstrap import (
     BootstrapContext,
     DEFAULT_BOOTSTRAP_PLAN,
     Vector3,
+    append_map_source_decision,
+    append_prerequisite_resolution_record,
     compute_bootstrap_manifest,
     compute_manifest,
     fixture_classes_for_command,
@@ -35,6 +37,7 @@ from .bootstrap import (
     supported_transport_variants,
 )
 from .live_failure_classification import is_channel_failure_signal
+from .live_execution import metadata_rows_from_bootstrap_context
 from .capabilities import CAPABILITY_TAGS
 from .registry import REGISTRY, transport_compatibility_for_command, validate_registry
 from .report import (
@@ -143,30 +146,7 @@ def _metadata_row(arm_name: str, **payload: Any) -> dict[str, Any]:
 
 
 def _bootstrap_metadata_rows(ctx: BootstrapContext | None) -> list[dict[str, Any]]:
-    if ctx is None:
-        return []
-    rows: list[dict[str, Any]] = []
-    if ctx.bootstrap_readiness:
-        rows.append(
-            _metadata_row(
-                "__bootstrap_readiness__",
-                **ctx.bootstrap_readiness,
-            )
-        )
-    if ctx.runtime_capability_profile:
-        rows.append(
-            _metadata_row(
-                "__runtime_capability_profile__",
-                **ctx.runtime_capability_profile,
-            )
-        )
-    for item in ctx.callback_diagnostics:
-        rows.append(_metadata_row("__callback_diagnostic__", **item))
-    for item in ctx.prerequisite_resolution_records:
-        rows.append(_metadata_row("__prerequisite_resolution__", **item))
-    for item in ctx.map_source_decisions:
-        rows.append(_metadata_row("__map_source_decision__", **item))
-    return rows
+    return metadata_rows_from_bootstrap_context(ctx)
 
 
 # ---- dry-run (no live engine) -------------------------------------------
@@ -1398,16 +1378,14 @@ def _record_prerequisite_resolution(
     resolution_status: str,
     reason: str,
 ) -> None:
-    ctx.prerequisite_resolution_records.append(
-        {
-            "prerequisite_name": prerequisite_name,
-            "consumer": consumer,
-            "callback_path": callback_path,
-            "resolved_def_id": resolved_def_id,
-            "resolution_status": resolution_status,
-            "reason": reason,
-            "recorded_at": _utc_now_iso(),
-        }
+    append_prerequisite_resolution_record(
+        ctx,
+        prerequisite_name=prerequisite_name,
+        consumer=consumer,
+        callback_path=callback_path,
+        resolved_def_id=resolved_def_id,
+        resolution_status=resolution_status,
+        reason=reason,
     )
 
 
@@ -1419,14 +1397,12 @@ def _record_map_source_decision(
     metal_spot_count: int,
     reason: str,
 ) -> None:
-    ctx.map_source_decisions.append(
-        {
-            "consumer": consumer,
-            "selected_source": selected_source,
-            "metal_spot_count": metal_spot_count,
-            "reason": reason,
-            "recorded_at": _utc_now_iso(),
-        }
+    append_map_source_decision(
+        ctx,
+        consumer=consumer,
+        selected_source=selected_source,
+        metal_spot_count=metal_spot_count,
+        reason=reason,
     )
 
 

@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HEADLESS_DIR="$REPO_ROOT/tests/headless"
-FEATURE_DIR="$REPO_ROOT/specs/016-live-bootstrap-hardening"
+FEATURE_DIR="$REPO_ROOT/specs/017-live-orchestration-refactor"
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "test_live_itertesting_hardening: uv missing — skip" >&2
@@ -46,6 +46,8 @@ bootstrap_readiness = manifest.get("bootstrap_readiness") or {}
 callback_diagnostics = manifest.get("callback_diagnostics") or []
 runtime_capability_profile = manifest.get("runtime_capability_profile") or {}
 map_source_decisions = manifest.get("map_source_decisions") or []
+interpretation_warnings = manifest.get("interpretation_warnings") or []
+decision_trace = manifest.get("decision_trace") or []
 channel_health = manifest.get("channel_health") or {}
 verification_rules = {
     item["command_id"]: item for item in manifest.get("verification_rules", [])
@@ -69,6 +71,9 @@ assert callback_diagnostics
 assert runtime_capability_profile.get("map_data_source_status") == "missing"
 assert map_source_decisions
 assert map_source_decisions[0].get("selected_source") == "missing"
+assert manifest.get("fully_interpreted") is True
+assert interpretation_warnings == []
+assert decision_trace
 assert channel_health.get("status") == "healthy"
 assert verification_rules["cmd-move-unit"]["rule_mode"] == "movement_tuned"
 assert verification_rules["cmd-fight"]["rule_mode"] == "combat_tuned"
@@ -82,8 +87,10 @@ for section in (
     "## Bootstrap Readiness",
     "## Runtime Capability Profile",
     "## Callback Diagnostics",
+    "## Decision Trace",
     "## Map Source Decisions",
     "### Transport Provisioning",
+    "### Interpretation Fixture Transitions",
     "## Command Semantic Inventory",
     "## Channel Health",
     "## Failure Cause Summary",
@@ -159,6 +166,7 @@ report = Path(sys.argv[2]).read_text(encoding="utf-8")
 semantic_gates = {item["command_id"]: item for item in manifest.get("semantic_gates", [])}
 fixture = manifest.get("fixture_provisioning") or {}
 transport = manifest.get("transport_provisioning") or {}
+transport_decision = manifest.get("transport_decision") or {}
 class_statuses = {item["fixture_class"]: item for item in fixture.get("class_statuses", [])}
 
 assert semantic_gates["cmd-set-wanted-max-speed"]["gate_kind"] == "mod-option"
@@ -167,20 +175,22 @@ assert semantic_gates["cmd-dgun"]["custom_command_id"] == 32102
 assert semantic_gates["cmd-attack"]["gate_kind"] == "lua-rewrite"
 assert class_statuses["transport_unit"]["status"] == "unusable"
 assert transport["status"] == "unusable"
+assert transport_decision["availability_status"] == "missing"
 assert "cmd-load-units" in transport.get("affected_command_ids", [])
 assert "## Semantic Gates" in report
+assert "## Decision Trace" in report
 assert "custom command id: 32102" in report
 PY
 
-if ! grep -Fq "Three consecutive prepared live closeout reruns either complete without the old bootstrap-readiness ambiguity" \
+if ! grep -Fq "The resulting bundle identifies whether a blocker came from execution, metadata interpretation, or existing failure classification logic." \
     "$FEATURE_DIR/quickstart.md"; then
     echo "test_live_itertesting_hardening: quickstart is missing the prepared rerun guidance" >&2
     exit 1
 fi
 
-if ! grep -Fq 'The standalone build probe must stop using the old env-var def-id injection path as its normal prerequisite mechanism.' \
-    "$FEATURE_DIR/contracts/live-bootstrap-validation-suite.md"; then
-    echo "test_live_itertesting_hardening: 016 validation contract is missing the standalone probe guidance" >&2
+if ! grep -Fq 'A preserved but unhandled metadata record must produce a visible warning and block fully interpreted success in both manifest and report surfaces.' \
+    "$FEATURE_DIR/contracts/live-orchestration-validation-suite.md"; then
+    echo "test_live_itertesting_hardening: 017 validation contract is missing the interpretation warning gate" >&2
     exit 1
 fi
 

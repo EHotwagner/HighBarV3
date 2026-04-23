@@ -206,6 +206,34 @@ StopReason = Literal[
     "interrupted",
     "foundational_blocked",
 ]
+MetadataSourceLayer = Literal[
+    "live_execution",
+    "standalone_probe",
+    "run_mode_policy",
+    "unknown",
+]
+MetadataInterpretationStatus = Literal["handled", "warning", "unhandled"]
+MetadataFallbackBehavior = Literal["warning_only", "preserve_and_block"]
+FixtureTransitionState = Literal[
+    "planned",
+    "preexisting",
+    "provisioned",
+    "refreshed",
+    "replaced",
+    "invalidated",
+    "missing",
+    "unusable",
+    "unknown",
+    "mode_qualified_non_live",
+]
+TransportAvailabilityStatus = Literal[
+    "available",
+    "missing",
+    "unproven",
+    "unknown",
+    "mode_qualified_non_live",
+]
+InterpretationWarningSeverity = Literal["warning", "blocking_warning"]
 
 
 @dataclass(frozen=True)
@@ -407,6 +435,99 @@ class StandaloneBuildProbeOutcome:
     capability_limit_summary: str | None
     failure_reason: str | None
     completed_at: str
+
+
+@dataclass(frozen=True)
+class MetadataRecordEnvelope:
+    record_type: str
+    source_layer: MetadataSourceLayer
+    sequence_index: int
+    payload: dict[str, Any]
+    recorded_at: str
+    interpretation_status: MetadataInterpretationStatus = "handled"
+
+
+@dataclass(frozen=True)
+class MetadataInterpretationRule:
+    record_type: str
+    consumer: str
+    required_fields: tuple[str, ...]
+    fallback_behavior: MetadataFallbackBehavior
+    owner_module: str
+    warning_template: str | None = None
+
+
+@dataclass(frozen=True)
+class LiveExecutionCapture:
+    run_id: str
+    setup_mode: SetupMode
+    command_rows: tuple[dict[str, Any], ...]
+    metadata_records: tuple[MetadataRecordEnvelope, ...]
+    collected_at: str
+    collection_notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RunModeEvidencePolicy:
+    setup_mode: SetupMode
+    baseline_guaranteed_fixtures: tuple[str, ...]
+    transport_default_status: TransportAvailabilityStatus
+    counts_as_live_evidence: bool
+    policy_reason: str
+
+
+@dataclass(frozen=True)
+class FixtureStateTransition:
+    fixture_class: str
+    state: FixtureTransitionState
+    observed_source: str
+    detail: str
+    affected_commands: tuple[str, ...]
+    recorded_at: str
+
+
+@dataclass(frozen=True)
+class TransportAvailabilityDecision:
+    availability_status: TransportAvailabilityStatus
+    explicit_evidence: bool
+    authoritative_transition: FixtureStateTransition | None
+    reason: str
+    diagnostic_history: tuple[FixtureStateTransition, ...]
+
+
+@dataclass(frozen=True)
+class InterpretationWarning:
+    warning_id: str
+    record_type: str
+    severity: InterpretationWarningSeverity
+    message: str
+    blocks_full_interpretation: bool
+    recorded_at: str
+
+
+@dataclass(frozen=True)
+class DecisionTraceEntry:
+    decision_id: str
+    concern: str
+    source_layer: str
+    record_type: str | None
+    rule_owner: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class RunInterpretationResult:
+    bootstrap_readiness: BootstrapReadinessAssessment | None
+    runtime_capability_profile: RuntimeCapabilityProfile | None
+    prerequisite_resolution: tuple[RuntimePrerequisiteResolutionRecord, ...]
+    map_source_decisions: tuple[MapDataSourceDecision, ...]
+    standalone_build_probe_outcome: StandaloneBuildProbeOutcome | None
+    callback_diagnostics: tuple[CallbackDiagnosticSnapshot, ...]
+    fixture_transitions: tuple[FixtureStateTransition, ...]
+    transport_decision: TransportAvailabilityDecision | None
+    interpretation_warnings: tuple[InterpretationWarning, ...]
+    decision_trace: tuple[DecisionTraceEntry, ...]
+    fully_interpreted: bool = True
 
 
 @dataclass(frozen=True)
@@ -643,6 +764,13 @@ class ItertestingRun:
     prerequisite_resolution: tuple[RuntimePrerequisiteResolutionRecord, ...] = ()
     map_source_decisions: tuple[MapDataSourceDecision, ...] = ()
     standalone_build_probe_outcome: StandaloneBuildProbeOutcome | None = None
+    live_execution_capture: LiveExecutionCapture | None = None
+    run_mode_evidence_policy: RunModeEvidencePolicy | None = None
+    fixture_transitions: tuple[FixtureStateTransition, ...] = ()
+    transport_decision: TransportAvailabilityDecision | None = None
+    interpretation_warnings: tuple[InterpretationWarning, ...] = ()
+    decision_trace: tuple[DecisionTraceEntry, ...] = ()
+    fully_interpreted: bool = True
     channel_health: ChannelHealthOutcome | None = None
     verification_rules: tuple[ArmVerificationRule, ...] = ()
     failure_classifications: tuple[FailureCauseClassification, ...] = ()
@@ -919,6 +1047,109 @@ def _standalone_build_probe_outcome_from_dict(
     )
 
 
+def _metadata_record_envelope_from_dict(
+    payload: dict[str, Any],
+) -> MetadataRecordEnvelope:
+    return MetadataRecordEnvelope(
+        record_type=payload["record_type"],
+        source_layer=payload.get("source_layer", "unknown"),
+        sequence_index=payload.get("sequence_index", 0),
+        payload=dict(payload.get("payload", {})),
+        recorded_at=payload["recorded_at"],
+        interpretation_status=payload.get("interpretation_status", "handled"),
+    )
+
+
+def _live_execution_capture_from_dict(
+    payload: dict[str, Any],
+) -> LiveExecutionCapture:
+    return LiveExecutionCapture(
+        run_id=payload["run_id"],
+        setup_mode=payload.get("setup_mode", "natural"),
+        command_rows=tuple(dict(item) for item in payload.get("command_rows", ())),
+        metadata_records=tuple(
+            _metadata_record_envelope_from_dict(item)
+            for item in payload.get("metadata_records", ())
+        ),
+        collected_at=payload["collected_at"],
+        collection_notes=tuple(payload.get("collection_notes", ())),
+    )
+
+
+def _run_mode_evidence_policy_from_dict(
+    payload: dict[str, Any],
+) -> RunModeEvidencePolicy:
+    return RunModeEvidencePolicy(
+        setup_mode=payload.get("setup_mode", "natural"),
+        baseline_guaranteed_fixtures=tuple(
+            payload.get("baseline_guaranteed_fixtures", ())
+        ),
+        transport_default_status=payload.get("transport_default_status", "unknown"),
+        counts_as_live_evidence=payload.get("counts_as_live_evidence", True),
+        policy_reason=payload.get("policy_reason", ""),
+    )
+
+
+def _fixture_state_transition_from_dict(
+    payload: dict[str, Any],
+) -> FixtureStateTransition:
+    return FixtureStateTransition(
+        fixture_class=payload["fixture_class"],
+        state=payload.get("state", "unknown"),
+        observed_source=payload.get("observed_source", "unknown"),
+        detail=payload.get("detail", ""),
+        affected_commands=tuple(payload.get("affected_commands", ())),
+        recorded_at=payload["recorded_at"],
+    )
+
+
+def _transport_availability_decision_from_dict(
+    payload: dict[str, Any],
+) -> TransportAvailabilityDecision:
+    return TransportAvailabilityDecision(
+        availability_status=payload.get("availability_status", "unknown"),
+        explicit_evidence=payload.get("explicit_evidence", False),
+        authoritative_transition=(
+            _fixture_state_transition_from_dict(payload["authoritative_transition"])
+            if payload.get("authoritative_transition")
+            else None
+        ),
+        reason=payload.get("reason", ""),
+        diagnostic_history=tuple(
+            _fixture_state_transition_from_dict(item)
+            for item in payload.get("diagnostic_history", ())
+        ),
+    )
+
+
+def _interpretation_warning_from_dict(
+    payload: dict[str, Any],
+) -> InterpretationWarning:
+    return InterpretationWarning(
+        warning_id=payload["warning_id"],
+        record_type=payload.get("record_type", "unknown"),
+        severity=payload.get("severity", "warning"),
+        message=payload.get("message", ""),
+        blocks_full_interpretation=payload.get(
+            "blocks_full_interpretation", False
+        ),
+        recorded_at=payload["recorded_at"],
+    )
+
+
+def _decision_trace_entry_from_dict(
+    payload: dict[str, Any],
+) -> DecisionTraceEntry:
+    return DecisionTraceEntry(
+        decision_id=payload["decision_id"],
+        concern=payload.get("concern", ""),
+        source_layer=payload.get("source_layer", "unknown"),
+        record_type=payload.get("record_type"),
+        rule_owner=payload.get("rule_owner", ""),
+        detail=payload.get("detail", ""),
+    )
+
+
 def _fixture_provisioning_from_dict(
     payload: dict[str, Any],
 ) -> FixtureProvisioningResult:
@@ -1189,6 +1420,36 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
             if payload.get("standalone_build_probe_outcome")
             else None
         ),
+        live_execution_capture=(
+            _live_execution_capture_from_dict(payload["live_execution_capture"])
+            if payload.get("live_execution_capture")
+            else None
+        ),
+        run_mode_evidence_policy=(
+            _run_mode_evidence_policy_from_dict(payload["run_mode_evidence_policy"])
+            if payload.get("run_mode_evidence_policy")
+            else None
+        ),
+        fixture_transitions=tuple(
+            _fixture_state_transition_from_dict(item)
+            for item in payload.get("fixture_transitions", ())
+        ),
+        transport_decision=(
+            _transport_availability_decision_from_dict(
+                payload["transport_decision"]
+            )
+            if payload.get("transport_decision")
+            else None
+        ),
+        interpretation_warnings=tuple(
+            _interpretation_warning_from_dict(item)
+            for item in payload.get("interpretation_warnings", ())
+        ),
+        decision_trace=tuple(
+            _decision_trace_entry_from_dict(item)
+            for item in payload.get("decision_trace", ())
+        ),
+        fully_interpreted=payload.get("fully_interpreted", True),
         channel_health=(
             _channel_health_from_dict(payload["channel_health"])
             if payload.get("channel_health")

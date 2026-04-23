@@ -159,6 +159,8 @@ runtime_capability_profile = manifest.get("runtime_capability_profile") or {}
 callback_diagnostics = manifest.get("callback_diagnostics") or []
 prerequisite_resolution = manifest.get("prerequisite_resolution") or []
 map_source_decisions = manifest.get("map_source_decisions") or []
+interpretation_warnings = manifest.get("interpretation_warnings") or []
+decision_trace = manifest.get("decision_trace") or []
 class_statuses = fixture.get("class_statuses") or []
 if not class_statuses:
     raise SystemExit(1)
@@ -224,6 +226,32 @@ print(
     )
     if map_source_decisions
     else "itertesting: map_source_decisions=none"
+)
+print(
+    "itertesting: fully_interpreted="
+    + ("yes" if manifest.get("fully_interpreted", True) else "no")
+)
+print(
+    "itertesting: interpretation_warnings="
+    + (
+        ",".join(
+            f"{item.get('record_type')}:{item.get('severity')}"
+            for item in interpretation_warnings
+        )
+        if interpretation_warnings
+        else "none"
+    )
+)
+print(
+    "itertesting: decision_trace="
+    + (
+        ",".join(
+            f"{item.get('concern')}:{item.get('source_layer')}"
+            for item in decision_trace[:8]
+        )
+        if decision_trace
+        else "none"
+    )
 )
 report_path = Path(manifest_path).with_name("run-report.md")
 semantic_inventory = []

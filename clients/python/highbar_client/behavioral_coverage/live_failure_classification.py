@@ -238,6 +238,17 @@ def has_explicit_inert_dispatch_signal(detail: str | None) -> bool:
     return any(signal in lowered for signal in _INERT_DISPATCH_SIGNALS)
 
 
+def transport_blocking_detail_for_command(
+    transport_provisioning: TransportProvisioningResult,
+    command_id: str,
+    default_detail: str,
+) -> str:
+    for check in transport_provisioning.compatibility_checks:
+        if check.command_id == command_id and check.blocking_reason:
+            return check.blocking_reason
+    return default_detail
+
+
 def _issue_source_scope(issue_class: str) -> str:
     if issue_class == "target_drift":
         return "validator"
@@ -419,11 +430,11 @@ def classify_failure_cause(
         )
     ):
         joined = ", ".join(unavailable_fixture_classes) or detail
-        transport_detail = detail
-        for check in transport_provisioning.compatibility_checks:
-            if check.command_id == record.command_id and check.blocking_reason:
-                transport_detail = check.blocking_reason
-                break
+        transport_detail = transport_blocking_detail_for_command(
+            transport_provisioning,
+            record.command_id,
+            detail,
+        )
         if "relay_unavailable" in lowered_detail or "resolution_status=relay_unavailable" in lowered_detail:
             transport_detail = f"prerequisite resolution unavailable: {transport_detail}"
         return FailureCauseClassification(

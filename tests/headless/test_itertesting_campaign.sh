@@ -98,6 +98,18 @@ assert_wrapper_semantic_inventory() {
         echo "test_itertesting_campaign: wrapper did not emit map source summary" >&2
         exit 1
     fi
+    if [[ "$output" != *"fully_interpreted="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit fully_interpreted state" >&2
+        exit 1
+    fi
+    if [[ "$output" != *"interpretation_warnings="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit interpretation warnings" >&2
+        exit 1
+    fi
+    if [[ "$output" != *"decision_trace="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit decision trace summary" >&2
+        exit 1
+    fi
     if [[ "$output" != *"prerequisite_resolution="* ]]; then
         echo "test_itertesting_campaign: wrapper did not emit prerequisite resolution" >&2
         exit 1
@@ -166,6 +178,8 @@ semantic_gates = {item["command_id"]: item for item in payload.get("semantic_gat
 assert semantic_gates["cmd-set-wanted-max-speed"]["gate_kind"] == "mod-option"
 assert semantic_gates["cmd-dgun"]["gate_kind"] == "unit-shape"
 assert semantic_gates["cmd-attack"]["gate_kind"] == "lua-rewrite"
+assert payload.get("fully_interpreted") is True
+assert payload.get("decision_trace")
 summary = payload.get("summary") or {}
 assert not summary.get("transport_interrupted")
 decision = payload.get("contract_health_decision") or {}

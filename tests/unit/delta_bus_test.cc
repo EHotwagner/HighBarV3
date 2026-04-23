@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <future>
 #include <memory>
 #include <string>
 #include <thread>
@@ -110,6 +111,35 @@ TEST(DeltaBus, SlowConsumerIsEvictedOthersUnaffected) {
 	EXPECT_EQ(got1.load(), 10'000u);
 	EXPECT_EQ(got2.load(), 10'000u);
 	EXPECT_EQ(got3.load(), 10'000u);
+}
+
+TEST(DeltaBus, EvictAllWakesBlockedConsumers) {
+	Counters counters;
+	DeltaBus bus(&counters);
+
+	auto s1 = bus.Subscribe();
+	auto s2 = bus.Subscribe();
+
+	auto wait_for_slot = [](const std::shared_ptr<SubscriberSlot>& slot) {
+		return std::async(std::launch::async, [slot]() {
+			std::shared_ptr<const std::string> payload;
+			return slot->BlockingPop(&payload);
+		});
+	};
+
+	auto f1 = wait_for_slot(s1);
+	auto f2 = wait_for_slot(s2);
+
+	std::this_thread::sleep_for(std::chrono::milliseconds(25));
+	bus.EvictAll(EvictionReason::kCanceled);
+
+	EXPECT_EQ(f1.wait_for(std::chrono::milliseconds(500)), std::future_status::ready);
+	EXPECT_EQ(f2.wait_for(std::chrono::milliseconds(500)), std::future_status::ready);
+	EXPECT_FALSE(f1.get());
+	EXPECT_FALSE(f2.get());
+	EXPECT_EQ(s1->Eviction(), EvictionReason::kCanceled);
+	EXPECT_EQ(s2->Eviction(), EvictionReason::kCanceled);
+	EXPECT_EQ(counters.subscriber_count.load(), 0u);
 }
 
 }  // namespace

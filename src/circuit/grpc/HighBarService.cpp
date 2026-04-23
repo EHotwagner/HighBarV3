@@ -137,9 +137,10 @@ public:
 	void Proceed(bool ok) override {
 		switch (stage_) {
 		case Stage::kCreated: {
-			// Register a replacement to accept the next Hello.
-			new HelloCallData(svc_, cq_);
 			if (!ok) { delete this; return; }
+			// Register a replacement only for a real accepted RPC. During
+			// CQ shutdown, ok=false means there is no next call to accept.
+			new HelloCallData(svc_, cq_);
 
 			// Schema-version strict equality (FR-022a).
 			if (request_.schema_version() != ::highbar::v1::kSchemaVersion) {
@@ -240,8 +241,8 @@ public:
 	void Proceed(bool ok) override {
 		switch (stage_) {
 		case Stage::kCreated: {
-			new GetRuntimeCountersCallData(svc_, cq_);
 			if (!ok) { delete this; return; }
+			new GetRuntimeCountersCallData(svc_, cq_);
 
 			// Atomic snapshot per data-model §10 invariants.
 			Counters* c = svc_->counters_;
@@ -305,15 +306,17 @@ public:
 	}
 
 	~StreamStateCallData() {
-		// Pump already exited by the time we reach kFinishing, but guard
-		// paths where ctor-time failures never spawn it.
+		if (slot_ && svc_->delta_bus_ != nullptr) {
+			svc_->delta_bus_->Unsubscribe(slot_);
+		} else if (slot_) {
+			slot_->Evict(EvictionReason::kCanceled);
+		}
+		// Wake the pump before join so a shutdown-time delete can't strand
+		// the CQ worker inside SubscriberSlot::BlockingPop().
 		if (pump_.joinable()) {
 			stop_.store(true, std::memory_order_release);
 			cv_.notify_all();
 			pump_.join();
-		}
-		if (slot_ && svc_->delta_bus_ != nullptr) {
-			svc_->delta_bus_->Unsubscribe(slot_);
 		}
 		if (observer_slot_reserved_) {
 			svc_->ReleaseObserverSlot();
@@ -322,9 +325,9 @@ public:
 
 	void Proceed(bool ok) override {
 		if (stage_ == Stage::kCreated) {
-			// Queue a replacement to accept the next StreamState.
-			new StreamStateCallData(svc_, cq_);
 			if (!ok) { delete this; return; }
+			// Queue a replacement only when a real subscribe arrived.
+			new StreamStateCallData(svc_, cq_);
 
 			// Observer cap (FR-015a) — applied here, not in Hello,
 			// because observers may skip Hello entirely (data-model §5).
@@ -429,6 +432,10 @@ private:
 						FinishWithStatus(::grpc::Status(
 							::grpc::StatusCode::RESOURCE_EXHAUSTED,
 							"slow consumer evicted"));
+					} else if (slot_->Eviction() == EvictionReason::kFault) {
+						FinishWithStatus(::grpc::Status(
+							::grpc::StatusCode::UNAVAILABLE,
+							"gateway disabled"));
 					} else {
 						FinishWithStatus(::grpc::Status::OK);
 					}
@@ -558,8 +565,8 @@ private:
 	enum class Stage { kCreated, kReading, kFinishing };
 
 	void HandleCreated(bool ok) {
-		new SubmitCommandsCallData(svc_, cq_);
 		if (!ok) { delete this; return; }
+		new SubmitCommandsCallData(svc_, cq_);
 
 		// Reject if US2 handles aren't wired (unit tests / misordered
 		// init). UNAVAILABLE instead of INTERNAL so the client can
@@ -694,8 +701,8 @@ public:
 	void Proceed(bool ok) override {
 		switch (stage_) {
 		case Stage::kCreated: {
-			new InvokeCallbackCallData(svc_, cq_);
 			if (!ok) { delete this; return; }
+			new InvokeCallbackCallData(svc_, cq_);
 			if (svc_->gateway_module_ == nullptr) {
 				Finish(::grpc::Status(::grpc::StatusCode::UNAVAILABLE,
 				                      "InvokeCallback handle not yet wired"));
@@ -753,8 +760,8 @@ public:                                                                         
 	}                                                                              \
 	void Proceed(bool ok) override {                                               \
 		if (stage_ == Stage::kCreated) {                                           \
-			new NAME##CallData(svc_, cq_);                                         \
 			if (!ok) { delete this; return; }                                      \
+			new NAME##CallData(svc_, cq_);                                         \
 			stage_ = Stage::kFinishing;                                            \
 			responder_.Finish(response_, ::grpc::Status::OK, this);                \
 			return;                                                                \
@@ -806,8 +813,8 @@ public:
 	void Proceed(bool ok) override {
 		switch (stage_) {
 		case Stage::kCreated: {
-			new RequestSnapshotCallData(svc_, cq_);
 			if (!ok) { delete this; return; }
+			new RequestSnapshotCallData(svc_, cq_);
 
 			// Health gating. If the gateway has faulted, return
 			// FAILED_PRECONDITION with scheduled_frame = 0 (the proto3
@@ -944,6 +951,9 @@ void HighBarService::Shutdown(std::chrono::milliseconds deadline) {
 	if (shutting_down_.exchange(true)) {
 		return;
 	}
+	if (delta_bus_ != nullptr) {
+		delta_bus_->EvictAll(EvictionReason::kCanceled);
+	}
 	if (server_) {
 		server_->Shutdown(std::chrono::system_clock::now() + deadline);
 	}
@@ -998,6 +1008,9 @@ void HighBarService::FaultCloseAllStreams(const std::string& subsystem,
 	// follow-up; subsystem/reason are already logged via LogFault and
 	// persisted in highbar.health for clients that read the file.
 	(void)subsystem; (void)reason;
+	if (delta_bus_ != nullptr) {
+		delta_bus_->EvictAll(EvictionReason::kFault);
+	}
 	if (server_ && !shutting_down_.exchange(true)) {
 		server_->Shutdown(std::chrono::system_clock::now()
 		                  + std::chrono::milliseconds(250));
