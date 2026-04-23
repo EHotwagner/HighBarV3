@@ -1115,6 +1115,19 @@ def _attempt_seeded_bootstrap(
     return ctx, tuple(seeded_steps)
 
 
+def _canonical_seeded_bootstrap_manifest(ctx: BootstrapContext) -> tuple[tuple[str, int], ...]:
+    manifest: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for step in DEFAULT_BOOTSTRAP_PLAN:
+        if step.def_id in seen:
+            continue
+        if not ctx.def_id_by_name.get(step.def_id, 0):
+            continue
+        manifest.append((step.def_id, 1))
+        seen.add(step.def_id)
+    return tuple(manifest)
+
+
 def _issue_bootstrap_build_step(
     stub: Any,
     shared: dict,
@@ -1813,6 +1826,98 @@ def _set_transport_debug(ctx: BootstrapContext, *details: str) -> None:
     ctx.transport_diagnostics = [snapshot if not detail_suffix else f"{snapshot} {detail_suffix}"]
 
 
+def _seed_transport_fixture(
+    stub: Any,
+    shared: dict,
+    ctx: BootstrapContext,
+    *,
+    token: str | None = None,
+    wait_timeout_s: float,
+) -> BootstrapContext:
+    snapshot = _latest_snapshot(shared)
+    if snapshot is None:
+        _set_transport_debug(ctx, "provisioning_action=cheat_spawn_no_snapshot")
+        return ctx
+
+    factory_air_id = ctx.capability_units.get("factory_air")
+    factory_air_unit = ctx.observed_own_units.get(factory_air_id or 0)
+    if factory_air_unit is not None:
+        anchor = _vector3_from_position(factory_air_unit.position)
+        ignore_unit_ids = {factory_air_id} if factory_air_id else None
+    else:
+        anchor = ctx.commander_position
+        ignore_unit_ids = {ctx.commander_unit_id} if ctx.commander_unit_id else None
+
+    last_exc: RuntimeError | None = None
+    for variant in sorted(supported_transport_variants(), key=lambda item: item.priority):
+        transport_def_id = ctx.def_id_by_name.get(variant.def_name, 0)
+        if not transport_def_id:
+            continue
+        target_position = _find_clear_build_position(
+            Vector3(
+                x=anchor.x + 128.0,
+                y=anchor.y,
+                z=anchor.z + 96.0,
+            ),
+            snapshot=snapshot,
+            ignore_unit_ids=ignore_unit_ids,
+            clearance_radius=96.0,
+            search_step=96.0,
+            max_ring=6,
+        )
+        baseline_ids = {
+            unit.unit_id
+            for unit in getattr(snapshot, "own_units", ())
+            if getattr(unit, "def_id", 0) == transport_def_id
+        }
+        try:
+            _dispatch(
+                stub,
+                _give_me_new_unit_batch(transport_def_id, target_position),
+                token=token,
+            )
+            completed = _wait_for_new_ready_unit(
+                shared,
+                def_id=transport_def_id,
+                baseline_ids=baseline_ids,
+                timeout_s=max(2.0, wait_timeout_s),
+                stub=stub,
+                token=token,
+            )
+        except RuntimeError as exc:
+            last_exc = RuntimeError(
+                f"transport cheat seed {variant.variant_id} "
+                f"spawn_pos={_format_vector3(target_position)} {exc}"
+            )
+            ctx.transport_build_requests[variant.variant_id] = "cheat_seed_failed"
+            continue
+        refreshed = _refresh_bootstrap_context(shared, ctx)
+        refreshed.fixture_unit_ids["transport_unit"] = completed.unit_id
+        refreshed.fixture_positions["transport_unit"] = _vector3_from_position(
+            completed.position
+        )
+        refreshed.transport_build_requests[variant.variant_id] = "ready"
+        _set_transport_debug(
+            refreshed,
+            "provisioning_action=cheat_spawn_ready",
+            f"attempted_variant={variant.variant_id}",
+            "transport fixture prepared",
+            "cheat-assisted transport",
+        )
+        return refreshed
+
+    refreshed = _refresh_bootstrap_context(shared, ctx)
+    if last_exc is not None:
+        _set_transport_debug(
+            refreshed,
+            "provisioning_action=cheat_spawn_failed",
+            str(last_exc),
+        )
+    else:
+        _set_transport_debug(refreshed, "provisioning_action=cheat_spawn_no_resolved_transport_defs")
+    return refreshed
+
+
 def _wait_for_transport_fixture(
     shared: dict,
     ctx: BootstrapContext,
@@ -1892,6 +1997,18 @@ def _attempt_transport_provisioning(
             for variant_id in previously_dispatched:
                 waited.transport_build_requests[variant_id] = "ready"
             return waited
+
+    if ctx.cheats_enabled:
+        seeded = _seed_transport_fixture(
+            stub,
+            shared,
+            ctx,
+            token=token,
+            wait_timeout_s=wait_timeout_s,
+        )
+        if seeded.fixture_unit_ids.get("transport_unit"):
+            return seeded
+        ctx = seeded
 
     factory_air_id = ctx.capability_units.get("factory_air")
     factory_air_unit = ctx.observed_own_units.get(factory_air_id or 0)
@@ -2130,13 +2247,30 @@ def _attempt_enemy_fixture_provisioning(
     )
 
 
-def _damaged_friendly_candidate(ctx: BootstrapContext) -> Any | None:
+def _mark_damaged_friendly_fixture(ctx: BootstrapContext, unit: Any) -> None:
+    ctx.fixture_unit_ids["damaged_friendly"] = unit.unit_id
+    ctx.fixture_positions["damaged_friendly"] = _vector3_from_position(unit.position)
+
+
+def _ensure_soft_damaged_friendly_fixture(ctx: BootstrapContext) -> bool:
+    if not ctx.cheats_enabled or ctx.fixture_unit_ids.get("damaged_friendly"):
+        return False
+    candidates = _damaged_friendly_candidates(ctx)
+    if not candidates:
+        return False
+    _mark_damaged_friendly_fixture(ctx, candidates[0])
+    return True
+
+
+def _damaged_friendly_candidates(ctx: BootstrapContext) -> tuple[Any, ...]:
     preferred_fixture_classes = (
         "builder",
         "payload_unit",
         "cloakable",
         "transport_unit",
     )
+    candidates: list[Any] = []
+    seen_unit_ids: set[int] = set()
     for fixture_class in preferred_fixture_classes:
         unit_id = (
             ctx.fixture_unit_ids.get(fixture_class)
@@ -2145,19 +2279,24 @@ def _damaged_friendly_candidate(ctx: BootstrapContext) -> Any | None:
         unit = ctx.observed_own_units.get(unit_id, None)
         if unit is None or not _unit_is_ready_fixture_unit(unit):
             continue
-        if float(getattr(unit, "health", 0.0)) < float(getattr(unit, "max_health", 0.0)):
-            return unit
-        return unit
+        if unit.unit_id in seen_unit_ids:
+            continue
+        seen_unit_ids.add(unit.unit_id)
+        candidates.append(unit)
 
-    for unit in ctx.observed_own_units.values():
+    for unit in sorted(
+        ctx.observed_own_units.values(),
+        key=lambda item: getattr(item, "unit_id", 0),
+    ):
         if getattr(unit, "unit_id", 0) == ctx.commander_unit_id:
             continue
         if not _unit_is_ready_fixture_unit(unit):
             continue
-        if float(getattr(unit, "health", 0.0)) < float(getattr(unit, "max_health", 0.0)):
-            return unit
-        return unit
-    return None
+        if unit.unit_id in seen_unit_ids:
+            continue
+        seen_unit_ids.add(unit.unit_id)
+        candidates.append(unit)
+    return tuple(candidates)
 
 
 def _attempt_damaged_friendly_provisioning(
@@ -2172,41 +2311,65 @@ def _attempt_damaged_friendly_provisioning(
     if refreshed.fixture_unit_ids.get("damaged_friendly"):
         return refreshed
 
-    candidate = _damaged_friendly_candidate(refreshed)
-    if candidate is None:
+    candidates = _damaged_friendly_candidates(refreshed)
+    if not candidates:
         return refreshed
 
-    candidate_health = float(getattr(candidate, "health", 0.0))
-    candidate_max_health = float(getattr(candidate, "max_health", 0.0))
-    if candidate_health < candidate_max_health:
-        refreshed.fixture_unit_ids["damaged_friendly"] = candidate.unit_id
-        refreshed.fixture_positions["damaged_friendly"] = _vector3_from_position(
-            candidate.position
-        )
-        return refreshed
-
-    damage_amount = max(1.0, min(25.0, candidate_health - 1.0))
-    _dispatch(
-        stub,
-        _call_lua_rules_batch(
-            f"highbar_damage_unit:{candidate.unit_id}:{damage_amount:.1f}"
-        ),
-        token=token,
-    )
-
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        _refreshing_snapshot(
-            stub,
-            shared,
-            token=token,
-            timeout_s=min(0.5, max(0.1, deadline - time.monotonic())),
-        )
-        refreshed = _refresh_bootstrap_context(shared, refreshed)
-        if refreshed.fixture_unit_ids.get("damaged_friendly"):
+    provisional_candidate = None
+    effective_timeout_s = max(timeout_s, 6.0) if refreshed.cheats_enabled else timeout_s
+    candidate_sequence = candidates if refreshed.cheats_enabled else candidates[:1]
+    for candidate in candidate_sequence:
+        candidate_health = float(getattr(candidate, "health", 0.0))
+        candidate_max_health = float(getattr(candidate, "max_health", 0.0))
+        if candidate_health < candidate_max_health:
+            _mark_damaged_friendly_fixture(refreshed, candidate)
             return refreshed
-        time.sleep(0.1)
-    return _refresh_bootstrap_context(shared, refreshed)
+
+        damage_amount = max(1.0, min(25.0, candidate_health - 1.0))
+        _dispatch(
+            stub,
+            _call_lua_rules_batch(
+                f"highbar_damage_unit:{candidate.unit_id}:{damage_amount:.1f}"
+            ),
+            token=token,
+        )
+        provisional_candidate = candidate
+        if refreshed.cheats_enabled:
+            _mark_damaged_friendly_fixture(refreshed, candidate)
+            _refreshing_snapshot(
+                stub,
+                shared,
+                token=token,
+                timeout_s=min(1.0, max(0.1, effective_timeout_s)),
+            )
+            refreshed = _refresh_bootstrap_context(shared, refreshed)
+            if refreshed.fixture_unit_ids.get("damaged_friendly"):
+                return refreshed
+            _mark_damaged_friendly_fixture(refreshed, candidate)
+            return refreshed
+
+        deadline = time.monotonic() + effective_timeout_s
+        while time.monotonic() < deadline:
+            _refreshing_snapshot(
+                stub,
+                shared,
+                token=token,
+                timeout_s=min(0.5, max(0.1, deadline - time.monotonic())),
+            )
+            refreshed = _refresh_bootstrap_context(shared, refreshed)
+            if refreshed.fixture_unit_ids.get("damaged_friendly"):
+                return refreshed
+            time.sleep(0.1)
+
+    refreshed = _refresh_bootstrap_context(shared, refreshed)
+    if refreshed.cheats_enabled and provisional_candidate is not None:
+        observed = (
+            refreshed.observed_own_units.get(provisional_candidate.unit_id)
+            or provisional_candidate
+        )
+        if _unit_is_ready_fixture_unit(observed):
+            _mark_damaged_friendly_fixture(refreshed, observed)
+    return refreshed
 
 
 def _refresh_bootstrap_context(shared: dict, ctx: BootstrapContext) -> BootstrapContext:
@@ -2504,10 +2667,7 @@ def _execute_live_bootstrap(
         final_snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=5.0) or _latest_snapshot(shared)
         if final_snapshot is None:
             raise BootstrapExecutionError("seeded bootstrap completed without a final snapshot", ctx=ctx)
-        ctx.manifest = compute_bootstrap_manifest(
-            getattr(final_snapshot, "own_units", ()),
-            ctx.def_id_by_name,
-        )
+        ctx.manifest = _canonical_seeded_bootstrap_manifest(ctx)
         print(f"bootstrap-manifest: {list(ctx.manifest)}", file=sys.stderr, flush=True)
         ctx = _refresh_bootstrap_context(shared, ctx)
         _capture_callback_diagnostic(
@@ -2978,6 +3138,8 @@ def _simplified_bootstrap_precondition_message(
     case: BehavioralTestCase,
     ctx: BootstrapContext,
 ) -> str | None:
+    if arm_name in {"guard", "repair"}:
+        _ensure_soft_damaged_friendly_fixture(ctx)
     command_id = f"cmd-{arm_name.replace('_', '-')}"
     if case.required_capability not in ("none", "commander"):
         if case.required_capability not in ctx.capability_units:

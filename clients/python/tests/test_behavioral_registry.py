@@ -215,6 +215,38 @@ def test_simplified_bootstrap_keeps_attack_dispatchable_with_hostile_target():
     assert message is None
 
 
+def test_simplified_bootstrap_softens_damaged_friendly_for_cheat_seeded_guard_and_repair():
+    builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(12.0, 0.0, 24.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42, "builder": 77},
+        fixture_unit_ids={"builder": 77},
+        observed_own_units={77: builder},
+        cheats_enabled=True,
+    )
+
+    guard_message = _simplified_bootstrap_precondition_message(
+        "guard",
+        REGISTRY["guard"],
+        ctx,
+    )
+    repair_message = _simplified_bootstrap_precondition_message(
+        "repair",
+        REGISTRY["repair"],
+        ctx,
+    )
+
+    assert guard_message is None
+    assert repair_message is None
+    assert ctx.fixture_unit_ids["damaged_friendly"] == 77
+
+
 def test_refresh_bootstrap_context_tracks_native_fixture_candidates():
     commander = FakeOwnUnit(
         unit_id=42,
@@ -521,6 +553,75 @@ def test_attempt_damaged_friendly_provisioning_damages_builder_fixture(monkeypat
         dispatched[0].commands[0].call_lua_rules.data
         == "highbar_damage_unit:106:25.0"
     )
+    assert refreshed.fixture_unit_ids["damaged_friendly"] == 106
+
+
+def test_attempt_damaged_friendly_provisioning_keeps_cheat_seeded_fixture_when_snapshot_lags(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    before = FakeSnapshot(
+        own_units=(commander, builder),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    shared = {"snapshots": [before], "deltas": []}
+    dispatched = []
+    monotonic_values = iter((0.0, 0.0, 6.1, 6.2))
+
+    def fake_monotonic():
+        return next(monotonic_values)
+
+    def fake_refreshing_snapshot(_stub, _shared, token=None, timeout_s=5.0):
+        del _stub, _shared, token, timeout_s
+        return before
+
+    def fake_dispatch(_stub, batch, token=None):
+        del _stub, token
+        dispatched.append(batch)
+        return None
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage.time.monotonic",
+        fake_monotonic,
+    )
+    monkeypatch.setattr("highbar_client.behavioral_coverage.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._refreshing_snapshot",
+        fake_refreshing_snapshot,
+    )
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fake_dispatch)
+
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42, "builder": 106},
+        fixture_unit_ids={"builder": 106},
+        observed_own_units={42: commander, 106: builder},
+        cheats_enabled=True,
+    )
+
+    refreshed = _attempt_damaged_friendly_provisioning(
+        object(),
+        shared,
+        ctx,
+        token="tok",
+        timeout_s=0.0,
+    )
+
+    assert len(dispatched) == 1
     assert refreshed.fixture_unit_ids["damaged_friendly"] == 106
 
 
@@ -943,6 +1044,101 @@ def test_attempt_transport_provisioning_does_not_duplicate_pending_build(monkeyp
     refreshed = _attempt_transport_provisioning(object(), shared, ctx, wait_timeout_s=0.0)
 
     assert "transport_unit" not in refreshed.fixture_unit_ids
+
+
+def test_attempt_transport_provisioning_seeds_cheat_transport(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    factory_air = FakeOwnUnit(
+        unit_id=51,
+        def_id=100,
+        position=FakePosition(30.0, 0.0, 40.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(12.0, 0.0, 24.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    transport = FakeOwnUnit(
+        unit_id=109,
+        def_id=200,
+        position=FakePosition(158.0, 0.0, 136.0),
+        health=265.0,
+        max_health=265.0,
+    )
+    shared = {
+        "snapshots": [
+            FakeSnapshot(
+                own_units=(commander, factory_air, builder),
+                visible_enemies=(),
+                map_features=(),
+                frame_number=10,
+            )
+        ],
+        "deltas": [],
+    }
+    pending_snapshots = []
+    dispatched = []
+
+    def fake_dispatch(_stub, batch, token=None):
+        del token
+        dispatched.append(batch)
+        command = batch.commands[0]
+        if command.give_me_new_unit.unit_def_id:
+            latest_snapshot = shared["snapshots"][-1]
+            pending_snapshots.append(
+                FakeSnapshot(
+                    own_units=tuple(getattr(latest_snapshot, "own_units", ())) + (transport,),
+                    visible_enemies=(),
+                    map_features=(),
+                    frame_number=getattr(latest_snapshot, "frame_number", 0) + 1,
+                )
+            )
+        return None
+
+    def fake_wait_for_snapshot(_shared, min_frame, timeout_s):
+        del timeout_s
+        if not pending_snapshots:
+            return None
+        for index, snapshot in enumerate(pending_snapshots):
+            if snapshot.frame_number < min_frame:
+                continue
+            del pending_snapshots[index]
+            _shared["snapshots"].append(snapshot)
+            return snapshot
+        return None
+
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fake_dispatch)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._request_snapshot", lambda _stub, token=None: 0)
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_snapshot",
+        fake_wait_for_snapshot,
+    )
+
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42},
+        def_id_by_name={"armap": 100, "armatlas": 200},
+        cheats_enabled=True,
+    )
+
+    refreshed = _attempt_transport_provisioning(object(), shared, ctx, wait_timeout_s=0.0)
+
+    assert refreshed.capability_units["factory_air"] == 51
+    assert refreshed.fixture_unit_ids["transport_unit"] == 109
+    assert "cheat-assisted transport" in " ".join(refreshed.transport_diagnostics)
+    assert len(dispatched) == 1
+    assert dispatched[0].commands[0].give_me_new_unit.unit_def_id == 200
 
 
 def test_self_destruct_builder_targets_payload_before_commander():
@@ -2106,6 +2302,15 @@ def test_execute_live_bootstrap_uses_explicit_seed_path(monkeypatch):
     assert ctx.capability_units["factory_air"] == 104
     assert ctx.capability_units["builder"] == 106
     assert ctx.capability_units["cloakable"] == 107
+    assert ctx.manifest == (
+        ("armmex", 1),
+        ("armsolar", 1),
+        ("armvp", 1),
+        ("armap", 1),
+        ("armrad", 1),
+        ("armck", 1),
+        ("armpeep", 1),
+    )
 
 
 def test_execute_live_bootstrap_provisions_enemy_fixture_after_transport(monkeypatch):
