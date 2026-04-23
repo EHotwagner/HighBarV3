@@ -243,6 +243,23 @@ PY
 
     host_startscript="$(prepare_watch_host_startscript "$REPO_ROOT/tests/headless/scripts/minimal.startscript" "18452" "HighBarV3Watch")"
     client_startscript="$(prepare_watch_client_startscript "18452" "HighBarV3Watch")"
+    ENGINE_LOG="$helper_dir/host-listener.log"
+    ENGINE_PID_FILE="$helper_dir/host-listener.pid"
+    HIGHBAR_ITERTESTING_WATCH_HOST_BIND_WAIT_SECONDS=2
+    WATCH_HOST_BIND_WAIT_SECONDS=2
+    sleep 30 &
+    local fake_host_pid=$!
+    printf '%s\n' "$fake_host_pid" > "$ENGINE_PID_FILE"
+    (
+        sleep 0.2
+        printf '%s\n' '[t=00:00:00.207469][f=-000001] [UDPListener] successfully bound socket on port 18452' > "$ENGINE_LOG"
+    ) &
+    wait_for_watch_host_listener_bound "18452" || {
+        kill -TERM "$fake_host_pid" 2>/dev/null || true
+        echo "test_live_run_viewer: watch host listener wait did not observe UDP bind" >&2
+        exit 1
+    }
+    kill -TERM "$fake_host_pid" 2>/dev/null || true
     grep -q 'MinSpeed=3.0;' "$host_startscript" || {
         echo "test_live_run_viewer: watched startscript did not rewrite MinSpeed to 3.0" >&2
         exit 1

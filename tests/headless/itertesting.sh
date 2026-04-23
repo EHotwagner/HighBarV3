@@ -45,6 +45,7 @@ EXPLICIT_CALLBACK_PROXY_ENDPOINT="${HIGHBAR_CALLBACK_PROXY_ENDPOINT:-}"
 WATCH_ENABLED="${HIGHBAR_ITERTESTING_WATCH:-false}"
 WATCH_PROFILE="${HIGHBAR_ITERTESTING_WATCH_PROFILE:-default}"
 WATCH_SPEED="${HIGHBAR_ITERTESTING_WATCH_SPEED:-}"
+WATCH_HOST_BIND_WAIT_SECONDS="${HIGHBAR_ITERTESTING_WATCH_HOST_BIND_WAIT_SECONDS:-8}"
 WATCH_ENGINE_BINARY=""
 WATCH_WINDOW_MODE_RESOLVED=""
 WATCH_WINDOW_WIDTH_RESOLVED=""
@@ -1344,6 +1345,60 @@ wait_for_gateway_startup() {
     return 1
 }
 
+wait_for_watch_host_listener_bound() {
+    local host_port="$1"
+    local deadline
+    deadline=$((SECONDS + WATCH_HOST_BIND_WAIT_SECONDS))
+    while [[ $SECONDS -le $deadline ]]; do
+        if [[ -f "$ENGINE_PID_FILE" ]] && ! kill -0 "$(cat "$ENGINE_PID_FILE")" 2>/dev/null; then
+            echo "itertesting: host engine exited before watch listener became ready" >&2
+            return 1
+        fi
+        if grep -q "\\[UDPListener\\] successfully bound socket on port $host_port" "$ENGINE_LOG" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    echo "itertesting: watch host UDP listener did not bind on port $host_port within ${WATCH_HOST_BIND_WAIT_SECONDS}s" >&2
+    return 1
+}
+
+export_watch_launch_context() {
+    local watch_viewer_engine="$1"
+    export HIGHBAR_ITERTESTING_WATCH_LAUNCHED="true"
+    export HIGHBAR_ITERTESTING_WATCH_ENGINE_MODE="graphical-client"
+    export HIGHBAR_ITERTESTING_WATCH_ENGINE_BINARY="$watch_viewer_engine"
+    export HIGHBAR_BAR_CLIENT_BINARY="$watch_viewer_engine"
+    export HIGHBAR_ITERTESTING_WATCH_STARTSCRIPT="$WATCH_VIEWER_STARTSCRIPT"
+    if [[ -f "$WATCH_VIEWER_PID_FILE" ]]; then
+        export HIGHBAR_ITERTESTING_WATCH_ENGINE_PID
+        HIGHBAR_ITERTESTING_WATCH_ENGINE_PID="$(cat "$WATCH_VIEWER_PID_FILE")"
+    fi
+}
+
+emit_watch_viewer_connection_notice() {
+    if [[ -z "$WATCH_VIEWER_LOG" || ! -f "$WATCH_VIEWER_LOG" ]]; then
+        return 0
+    fi
+    if grep -q '\[PreGame::UpdateClientNet\] server connection timeout' "$WATCH_VIEWER_LOG"; then
+        echo "itertesting: watch_viewer connection=timeout log=$WATCH_VIEWER_LOG" >&2
+        return 0
+    fi
+    if grep -q '\[Game::ClientReadNet\] added new player' "$WATCH_VIEWER_LOG"; then
+        if grep -qE '\[f=[0-9-]+\]' "$WATCH_VIEWER_LOG"; then
+            echo "itertesting: watch_viewer connection=live log=$WATCH_VIEWER_LOG" >&2
+        else
+            echo "itertesting: watch_viewer connection=joined log=$WATCH_VIEWER_LOG" >&2
+        fi
+        return 0
+    fi
+    if grep -q '\[PreGame::UpdateClientNet\] added new player' "$WATCH_VIEWER_LOG"; then
+        echo "itertesting: watch_viewer connection=pregame log=$WATCH_VIEWER_LOG" >&2
+        return 0
+    fi
+    echo "itertesting: watch_viewer connection=pending log=$WATCH_VIEWER_LOG" >&2
+}
+
 latest_stop_decision_path() {
     find "$REPORTS_DIR" -maxdepth 2 \
         \( -path "$NATURAL_SMOKE_REPORTS_DIR" -o -path "$NATURAL_SMOKE_REPORTS_DIR/*" \) -prune -o \
@@ -1650,6 +1705,17 @@ launch_live_topology() {
         return 1
     fi
 
+    if [[ -n "$watch_viewer_engine" ]]; then
+        if ! wait_for_watch_host_listener_bound "$WATCH_HOST_PORT_RESOLVED"; then
+            return 1
+        fi
+        if ! launch_watch_viewer "$watch_viewer_engine" "$WATCH_VIEWER_STARTSCRIPT"; then
+            return 1
+        fi
+        export_watch_launch_context "$watch_viewer_engine"
+        echo "itertesting: watch_viewer launched pid=${HIGHBAR_ITERTESTING_WATCH_ENGINE_PID:-unknown} port=$WATCH_HOST_PORT_RESOLVED log=$WATCH_VIEWER_LOG" >&2
+    fi
+
     if ! wait_for_gateway_startup; then
         echo "itertesting: gateway startup not seen — fail" >&2
         return 1
@@ -1663,23 +1729,9 @@ launch_live_topology() {
         return 77
     fi
 
-    if [[ -n "$watch_viewer_engine" ]]; then
-        if ! launch_watch_viewer "$watch_viewer_engine" "$WATCH_VIEWER_STARTSCRIPT"; then
-            return 1
-        fi
-    fi
-
     sleep "$BOOTSTRAP_WAIT_SECONDS"
     if [[ -n "$watch_viewer_engine" ]]; then
-        export HIGHBAR_ITERTESTING_WATCH_LAUNCHED="true"
-        export HIGHBAR_ITERTESTING_WATCH_ENGINE_MODE="graphical-client"
-        export HIGHBAR_ITERTESTING_WATCH_ENGINE_BINARY="$watch_viewer_engine"
-        export HIGHBAR_BAR_CLIENT_BINARY="$watch_viewer_engine"
-        export HIGHBAR_ITERTESTING_WATCH_STARTSCRIPT="$WATCH_VIEWER_STARTSCRIPT"
-        if [[ -f "$WATCH_VIEWER_PID_FILE" ]]; then
-            export HIGHBAR_ITERTESTING_WATCH_ENGINE_PID
-            HIGHBAR_ITERTESTING_WATCH_ENGINE_PID="$(cat "$WATCH_VIEWER_PID_FILE")"
-        fi
+        emit_watch_viewer_connection_notice
     fi
     return 0
 }
