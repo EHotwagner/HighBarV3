@@ -13,6 +13,7 @@ import pytest
 import highbar_client.behavioral_coverage as behavioral_coverage
 from highbar_client.behavioral_coverage import REGISTRY
 from highbar_client.behavioral_coverage import (
+    _assess_bootstrap_readiness,
     _attempt_transport_provisioning,
     _can_skip_bootstrap_step_failure,
     _economy_obviously_starved,
@@ -1021,6 +1022,57 @@ def test_economy_obviously_starved_requires_no_metal_and_no_income():
     assert not _economy_obviously_starved(healthy_snapshot)
 
 
+def test_assess_bootstrap_readiness_ignores_optional_missing_steps_when_downstream_units_exist():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    mex = FakeOwnUnit(101, 11, FakePosition(106.0, 0.0, 20.0), 100.0, 100.0)
+    builder = FakeOwnUnit(106, 16, FakePosition(172.0, 0.0, 118.0), 690.0, 690.0)
+    cloakable = FakeOwnUnit(107, 17, FakePosition(-148.0, 0.0, 118.0), 89.0, 89.0)
+    snapshot = FakeSnapshot(
+        own_units=(commander, mex, builder, cloakable),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+        economy=type(
+            "Economy",
+            (),
+            {
+                "metal": 0.0,
+                "metal_income": 0.0,
+                "metal_storage": 1725.0,
+                "energy": 6462.2,
+                "energy_income": 0.0,
+                "energy_storage": 8408.5,
+            },
+        )(),
+    )
+    ctx = BootstrapContext(
+        capability_units={"commander": 42, "builder": 106, "cloakable": 107},
+        fixture_unit_ids={"builder": 106, "cloakable": 107},
+        def_id_by_name={
+            "armmex": 11,
+            "armsolar": 12,
+            "armvp": 13,
+            "armap": 14,
+            "armrad": 15,
+            "armck": 16,
+            "armpeep": 17,
+        },
+    )
+
+    status, path, first_required_step, reason = _assess_bootstrap_readiness(snapshot, ctx)
+
+    assert status == "natural_ready"
+    assert path == "prepared_state"
+    assert first_required_step == "armsolar"
+    assert "optional commander-built gaps" in reason
+
+
 def test_execute_live_bootstrap_records_resource_starved_readiness(monkeypatch):
     commander = FakeOwnUnit(
         unit_id=42,
@@ -1084,7 +1136,7 @@ def test_execute_live_bootstrap_records_resource_starved_readiness(monkeypatch):
     assert err.ctx is not None
     assert err.ctx.bootstrap_readiness is not None
     assert err.ctx.bootstrap_readiness["readiness_status"] == "resource_starved"
-    assert err.ctx.bootstrap_readiness["first_required_step"] == "armmex"
+    assert err.ctx.bootstrap_readiness["first_required_step"] == "armvp"
     assert err.ctx.prerequisite_resolution_records[0]["prerequisite_name"] == "armmex"
     assert err.ctx.runtime_capability_profile is not None
     assert 47 in err.ctx.runtime_capability_profile["supported_callbacks"]
@@ -1164,6 +1216,107 @@ def test_execute_live_bootstrap_reuses_existing_ready_plan_units(monkeypatch):
     assert ctx.capability_units["cloakable"] == 107
 
 
+def test_execute_live_bootstrap_skips_commander_built_factories_when_downstream_units_preexist(
+    monkeypatch,
+):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    mex = FakeOwnUnit(101, 11, FakePosition(106.0, 0.0, 20.0), 100.0, 100.0)
+    solar = FakeOwnUnit(102, 12, FakePosition(-86.0, 0.0, 20.0), 100.0, 100.0)
+    radar = FakeOwnUnit(105, 15, FakePosition(106.0, 0.0, -76.0), 100.0, 100.0)
+    builder = FakeOwnUnit(106, 16, FakePosition(172.0, 0.0, 118.0), 690.0, 690.0)
+    cloakable = FakeOwnUnit(107, 17, FakePosition(-148.0, 0.0, 118.0), 89.0, 89.0)
+    shared = {
+        "snapshots": [
+            FakeSnapshot(
+                own_units=(commander, mex, solar, radar, builder, cloakable),
+                visible_enemies=(),
+                map_features=(),
+                frame_number=0,
+            )
+        ],
+        "deltas": [],
+    }
+    attempted_defs = []
+
+    def fake_resolve_bootstrap_defs(_stub, ctx, token=None):
+        del token
+        ctx.def_id_by_name.update(
+            {
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+                "armap": 14,
+                "armrad": 15,
+                "armck": 16,
+                "armpeep": 17,
+                "armatlas": 18,
+            }
+        )
+
+    def fake_issue_bootstrap_build_step(
+        _stub,
+        _shared,
+        _ctx,
+        step,
+        *,
+        builder_unit_id,
+        target_position,
+        baseline_ids,
+        token=None,
+        static_map=None,
+        failure_snapshot=None,
+    ):
+        del builder_unit_id, target_position, baseline_ids, token, static_map, failure_snapshot
+        attempted_defs.append(step.def_id)
+        raise RuntimeError(
+            f"{step.capability}/{step.def_id} timeout waiting for new ready unit "
+            f"def_id=999 saw_new_candidate=0"
+        )
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._resolve_bootstrap_defs",
+        fake_resolve_bootstrap_defs,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._resolve_supported_transport_defs",
+        lambda _stub, ctx, token=None: setattr(ctx, "transport_resolution_trace", ()),
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._refreshing_snapshot",
+        lambda _stub, _shared, token=None, timeout_s=5.0: shared["snapshots"][-1],
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._request_snapshot",
+        lambda _stub, token=None: 0,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_snapshot",
+        lambda _shared, min_frame, timeout_s: None,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._issue_bootstrap_build_step",
+        fake_issue_bootstrap_build_step,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
+    )
+
+    ctx = _execute_live_bootstrap(object(), shared, token="tok")
+
+    assert attempted_defs == ["armvp", "armap"]
+    assert ctx.capability_units["builder"] == 106
+    assert ctx.capability_units["cloakable"] == 107
+    assert "factory_ground" not in ctx.capability_units
+    assert "factory_air" not in ctx.capability_units
+
+
 def test_can_skip_bootstrap_step_failure_only_for_optional_no_candidate_steps():
     assert _can_skip_bootstrap_step_failure(
         DEFAULT_BOOTSTRAP_PLAN[0],
@@ -1184,6 +1337,37 @@ def test_can_skip_bootstrap_step_failure_only_for_optional_no_candidate_steps():
     assert not _can_skip_bootstrap_step_failure(
         DEFAULT_BOOTSTRAP_PLAN[2],
         RuntimeError("timeout waiting for new ready unit def_id=150 saw_new_candidate=0"),
+    )
+
+
+def test_can_skip_bootstrap_factory_failure_when_prepared_state_already_has_downstream_units():
+    ctx = BootstrapContext(
+        capability_units={"builder": 106, "cloakable": 107},
+        fixture_unit_ids={},
+    )
+    assert _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[2],
+        RuntimeError("timeout waiting for new ready unit def_id=150 saw_new_candidate=0"),
+        ctx,
+    )
+    assert _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[3],
+        RuntimeError("timeout waiting for new ready unit def_id=151 saw_new_candidate=0"),
+        ctx,
+    )
+
+
+def test_cannot_skip_bootstrap_factory_failure_without_downstream_units():
+    ctx = BootstrapContext(capability_units={}, fixture_unit_ids={})
+    assert not _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[2],
+        RuntimeError("timeout waiting for new ready unit def_id=150 saw_new_candidate=0"),
+        ctx,
+    )
+    assert not _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[3],
+        RuntimeError("timeout waiting for new ready unit def_id=151 saw_new_candidate=0"),
+        ctx,
     )
 
 

@@ -778,10 +778,32 @@ def _issue_bootstrap_build_step(
         ) from exc
 
 
-def _can_skip_bootstrap_step_failure(step: Any, exc: RuntimeError) -> bool:
-    if getattr(step, "capability", "") not in {"mex", "solar", "radar"}:
+def _can_skip_bootstrap_step_failure(
+    step: Any,
+    exc: RuntimeError,
+    ctx: BootstrapContext | None = None,
+) -> bool:
+    capability = getattr(step, "capability", "")
+    if capability in {"mex", "solar", "radar"}:
+        return "saw_new_candidate=0" in str(exc)
+
+    # Prepared live closeout can already contain the downstream units we
+    # historically built these factories for. In that state, rebuilding a
+    # missing factory is diagnostic detail, not a prerequisite for
+    # commander-centric command coverage.
+    if ctx is None:
         return False
-    return "saw_new_candidate=0" in str(exc)
+    if capability == "factory_ground":
+        return bool(
+            ctx.capability_units.get("builder")
+            or ctx.fixture_unit_ids.get("builder")
+        )
+    if capability == "factory_air":
+        return bool(
+            ctx.capability_units.get("cloakable")
+            or ctx.fixture_unit_ids.get("cloakable")
+        )
+    return False
 
 
 def _wait_for_manifest_match(
@@ -1124,11 +1146,24 @@ def _assess_bootstrap_readiness(
         for step in commander_steps
         if _ready_units_for_def(starting_snapshot, ctx.def_id_by_name.get(step.def_id, 0))
     ]
+    missing_steps = [
+        step
+        for step in commander_steps
+        if not _ready_units_for_def(starting_snapshot, ctx.def_id_by_name.get(step.def_id, 0))
+    ]
     first_missing_step = next(
+        iter(missing_steps),
+        None,
+    )
+    first_required_step = next(
         (
             step
-            for step in commander_steps
-            if not _ready_units_for_def(starting_snapshot, ctx.def_id_by_name.get(step.def_id, 0))
+            for step in missing_steps
+            if not _can_skip_bootstrap_step_failure(
+                step,
+                RuntimeError("timeout waiting for new ready unit def_id=0 saw_new_candidate=0"),
+                ctx,
+            )
         ),
         None,
     )
@@ -1145,18 +1180,29 @@ def _assess_bootstrap_readiness(
                 else "prepared live start already satisfied commander-built bootstrap requirements"
             ),
         )
+    if first_required_step is None:
+        optional_missing = ", ".join(step.def_id for step in missing_steps)
+        return (
+            "natural_ready",
+            "prepared_state",
+            first_missing_step.def_id,
+            (
+                "prepared live state can continue despite optional commander-built gaps: "
+                f"{optional_missing}"
+            ),
+        )
     if _economy_obviously_starved(starting_snapshot):
         return (
             "resource_starved",
             "unavailable",
-            first_missing_step.def_id,
-            f"first commander-built bootstrap step {first_missing_step.def_id} would start from a resource-starved state",
+            first_required_step.def_id,
+            f"first commander-built bootstrap step {first_required_step.def_id} would start from a resource-starved state",
         )
     return (
         "natural_ready",
         "prepared_state",
-        first_missing_step.def_id,
-        f"prepared live state can start commander bootstrap at {first_missing_step.def_id}",
+        first_required_step.def_id,
+        f"prepared live state can start commander bootstrap at {first_required_step.def_id}",
     )
 
 
@@ -1687,6 +1733,7 @@ def _execute_live_bootstrap(
     ctx.commander_unit_id = commander.unit_id
     ctx.commander_position = _vector3_from_position(commander.position)
     ctx.capability_units["commander"] = commander.unit_id
+    ctx = _refresh_bootstrap_context(shared, ctx)
     _record_live_closeout_map_source(ctx, static_map=static_map)
     readiness_status, readiness_path, first_required_step, readiness_reason = _assess_bootstrap_readiness(
         starting_snapshot,
@@ -1757,7 +1804,7 @@ def _execute_live_bootstrap(
                 static_map=static_map,
             )
         except RuntimeError as exc:
-            if _can_skip_bootstrap_step_failure(step, exc):
+            if _can_skip_bootstrap_step_failure(step, exc, ctx):
                 print(f"bootstrap-optional-skip: {exc}", file=sys.stderr, flush=True)
                 continue
             _capture_callback_diagnostic(
@@ -1803,16 +1850,30 @@ def _execute_live_bootstrap(
         builder_unit = ctx.observed_own_units.get(builder_unit_id)
         if builder_unit is None or not _unit_is_ready_fixture_unit(builder_unit):
             raise BootstrapExecutionError(f"builder capability {step.builder_capability} is not ready", ctx=ctx)
-        completed = _issue_bootstrap_build_step(
-            stub,
-            shared,
-            ctx,
-            step,
-            builder_unit_id=builder_unit_id,
-            target_position=_vector3_from_position(builder_unit.position),
-            baseline_ids=baseline_ids_by_step[step.capability],
-            token=token,
-        )
+        try:
+            completed = _issue_bootstrap_build_step(
+                stub,
+                shared,
+                ctx,
+                step,
+                builder_unit_id=builder_unit_id,
+                target_position=_vector3_from_position(builder_unit.position),
+                baseline_ids=baseline_ids_by_step[step.capability],
+                token=token,
+            )
+        except RuntimeError as exc:
+            if _can_skip_bootstrap_step_failure(step, exc, ctx):
+                print(f"bootstrap-optional-skip: {exc}", file=sys.stderr, flush=True)
+                ctx = _refresh_bootstrap_context(shared, ctx)
+                continue
+            _capture_callback_diagnostic(
+                stub,
+                shared,
+                ctx,
+                capture_stage="bootstrap_failure",
+                token=token,
+            )
+            raise BootstrapExecutionError(str(exc), ctx=ctx) from exc
         ctx.capability_units[step.capability] = completed.unit_id
         ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
         ctx = _refresh_bootstrap_context(shared, ctx)

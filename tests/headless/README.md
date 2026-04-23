@@ -3,6 +3,10 @@
 `tests/headless/itertesting.sh` is the maintainer entrypoint for the Itertesting CLI from the repo root.
 The live wrappers prefer a Unix-socket coordinator endpoint and fall back to
 loopback TCP when the local gRPC runtime cannot bind `unix:` endpoints.
+The live Itertesting wrapper now defaults to `enable_builtin=false` so prepared
+closeout bootstrap runs against the external control path instead of a BARb
+economy that has already been consumed by the built-in planner. Override with
+`HIGHBAR_ITERTESTING_ENABLE_BUILTIN=true` if you explicitly want the mixed mode.
 
 The command-contract completion suite also depends on the standard
 build-root CTest entrypoints:

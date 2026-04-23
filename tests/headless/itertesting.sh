@@ -38,6 +38,7 @@ THRESHOLD="${HIGHBAR_BEHAVIORAL_THRESHOLD:-0.50}"
 GAMESEED="${HIGHBAR_GAMESEED:-0x42424242}"
 MAX_RUNS="${HIGHBAR_ITERTESTING_MAX_IMPROVEMENT_RUNS:-}"
 BOOTSTRAP_WAIT_SECONDS="${HIGHBAR_ITERTESTING_BOOTSTRAP_WAIT_SECONDS:-12}"
+ENABLE_BUILTIN="${HIGHBAR_ITERTESTING_ENABLE_BUILTIN:-false}"
 # The maintainer-facing live path is documented as a default single run.
 # Keep profile-driven defaults for synthetic campaign validation, but
 # clamp the live wrapper to one run unless the maintainer explicitly
@@ -323,6 +324,7 @@ launch_live_topology() {
     LAUNCH_OUT=$("$HEADLESS_DIR/_launch.sh" \
         --start-script "$START_SCRIPT" \
         --coordinator "$COORD_ENDPOINT" \
+        --enable-builtin "$ENABLE_BUILTIN" \
         --runtime-dir "$ACTIVE_RUN_DIR" 2>&1)
     LAUNCH_RC=$?
     if [[ $LAUNCH_RC -eq 77 ]]; then
