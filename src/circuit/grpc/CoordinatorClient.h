@@ -14,7 +14,10 @@
 #include "highbar/commands.pb.h"
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -44,11 +47,10 @@ public:
 	// Engine-thread-only — no background threads.
 	bool SendHeartbeat(std::uint32_t frame);
 
-	// Phase B — stream a StateUpdate to the coordinator. Lazily opens
-	// the client-streaming RPC on first call. Non-blocking (as
-	// non-blocking as gRPC's client writer; flow-control may pause
-	// briefly under extreme backpressure — call from the engine thread
-	// but don't rely on bounded completion time).
+	// Phase B — enqueue a StateUpdate for the coordinator. Engine-thread
+	// callers never perform gRPC I/O here; the push worker owns the
+	// client-streaming RPC and drops oldest queued updates under
+	// sustained backpressure.
 	bool PushStateUpdate(const ::highbar::v1::StateUpdate& update);
 
 	// Phase C — open the server-streaming command channel. Spawns a
@@ -66,6 +68,7 @@ public:
 private:
 	void OpenPushStateStream();   // lazy; idempotent.
 	void ClosePushStateStream();  // called from dtor; safe if stream never opened.
+	void PushWorkerLoop();
 
 	::circuit::CCircuitAI* ai_;
 	std::string endpoint_;
@@ -79,12 +82,21 @@ private:
 	std::atomic<std::uint64_t> ok_count_{0};
 	std::atomic<std::uint64_t> err_count_{0};
 
-	// PushState stream — one per lifetime, opened lazily.
-	std::unique_ptr<::grpc::ClientContext> push_ctx_;
+	// PushState stream — owned by push_thread_ so engine-thread callers
+	// never block on coordinator I/O.
+	std::shared_ptr<::grpc::ClientContext> push_ctx_;
 	::highbar::v1::PushAck push_ack_;
 	std::unique_ptr<::grpc::ClientWriter<::highbar::v1::StateUpdate>> push_writer_;
 	std::atomic<bool> push_stream_open_{false};
 	std::atomic<std::uint64_t> pushed_count_{0};
+	std::thread push_thread_;
+	std::atomic<bool> push_stopping_{false};
+	std::mutex push_queue_mutex_;
+	std::condition_variable push_queue_cv_;
+	std::deque<::highbar::v1::StateUpdate> push_queue_;
+	std::atomic<std::uint64_t> push_dropped_count_{0};
+	std::mutex push_ctx_mutex_;
+	static constexpr std::size_t kMaxQueuedPushUpdates = 256;
 
 	// OpenCommandChannel reader — background thread. Owned lifetime
 	// flows: StartCommandChannel starts it, dtor cancels + joins.

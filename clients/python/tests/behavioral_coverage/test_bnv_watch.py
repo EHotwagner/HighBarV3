@@ -132,6 +132,9 @@ def test_launch_viewer_returns_available_record(tmp_path, monkeypatch):
         "apply_watch_mouse_capture",
         lambda enabled: None,
     )
+    monkeypatch.setattr(bnv_watch, "apply_watch_force_start", lambda: None)
+    monkeypatch.setattr(bnv_watch, "apply_watch_pause", lambda paused: None)
+    monkeypatch.setattr(bnv_watch, "_pid_is_running", lambda pid: True)
 
     access = launch_viewer(
         profile,
@@ -155,9 +158,12 @@ def test_launch_viewer_applies_watch_speed_when_configured(tmp_path, monkeypatch
     )
     monkeypatch.setenv("HIGHBAR_ITERTESTING_WATCH_LAUNCHED", "true")
     monkeypatch.setenv("HIGHBAR_ITERTESTING_WATCH_ENGINE_PID", "322")
+    monkeypatch.setattr(bnv_watch, "_pid_is_running", lambda pid: True)
 
     seen: list[float] = []
     seen_grab: list[bool] = []
+    seen_start: list[bool] = []
+    seen_pause: list[bool] = []
 
     def fake_apply(speed: float) -> str | None:
         seen.append(speed)
@@ -167,8 +173,18 @@ def test_launch_viewer_applies_watch_speed_when_configured(tmp_path, monkeypatch
         seen_grab.append(enabled)
         return None
 
+    def fake_apply_start() -> str | None:
+        seen_start.append(True)
+        return None
+
+    def fake_apply_pause(paused: bool) -> str | None:
+        seen_pause.append(paused)
+        return None
+
     monkeypatch.setattr(bnv_watch, "apply_watch_speed", fake_apply)
     monkeypatch.setattr(bnv_watch, "apply_watch_mouse_capture", fake_apply_grab)
+    monkeypatch.setattr(bnv_watch, "apply_watch_force_start", fake_apply_start)
+    monkeypatch.setattr(bnv_watch, "apply_watch_pause", fake_apply_pause)
 
     access = launch_viewer(
         profile,
@@ -177,9 +193,13 @@ def test_launch_viewer_applies_watch_speed_when_configured(tmp_path, monkeypatch
     )
 
     assert seen_grab == [False]
+    assert seen_start == [True]
     assert seen == [3.0]
+    assert seen_pause == [False]
     assert "mouse capture disabled" in access.reason
+    assert "watch start forced" in access.reason
     assert "watch speed set to 3" in access.reason
+    assert "watch pause cleared" in access.reason
 
 
 def test_disconnect_and_expire_transitions_preserve_launch_context(tmp_path, monkeypatch):
@@ -190,12 +210,15 @@ def test_disconnect_and_expire_transitions_preserve_launch_context(tmp_path, mon
     )
     monkeypatch.setenv("HIGHBAR_ITERTESTING_WATCH_LAUNCHED", "true")
     monkeypatch.setenv("HIGHBAR_ITERTESTING_WATCH_ENGINE_PID", "323")
+    monkeypatch.setattr(bnv_watch, "_pid_is_running", lambda pid: True)
     monkeypatch.setattr(bnv_watch, "apply_watch_speed", lambda speed: None)
     monkeypatch.setattr(
         bnv_watch,
         "apply_watch_mouse_capture",
         lambda enabled: None,
     )
+    monkeypatch.setattr(bnv_watch, "apply_watch_force_start", lambda: None)
+    monkeypatch.setattr(bnv_watch, "apply_watch_pause", lambda paused: None)
     available = launch_viewer(
         profile,
         run_id="run-1",
@@ -218,3 +241,24 @@ def test_disconnect_and_expire_transitions_preserve_launch_context(tmp_path, mon
     assert expired.availability_state == "expired"
     assert expired.launch_command == available.launch_command
     assert expired.expires_at == "2026-04-23T10:05:00Z"
+
+
+def test_launch_viewer_reports_exited_process_unavailable(tmp_path, monkeypatch):
+    binary = _fake_bnv_binary(tmp_path)
+    profile = parse_watch_profile(
+        "default",
+        environ={"HIGHBAR_BAR_CLIENT_BINARY": str(binary)},
+    )
+    monkeypatch.setenv("HIGHBAR_ITERTESTING_WATCH_LAUNCHED", "true")
+    monkeypatch.setenv("HIGHBAR_ITERTESTING_WATCH_ENGINE_PID", "404")
+    monkeypatch.setattr(bnv_watch, "_pid_is_running", lambda pid: False)
+
+    access = launch_viewer(
+        profile,
+        run_id="run-1",
+        reports_dir=tmp_path,
+    )
+
+    assert access.availability_state == "unavailable"
+    assert access.viewer_pid == 404
+    assert "exited before watch controls could attach" in access.reason

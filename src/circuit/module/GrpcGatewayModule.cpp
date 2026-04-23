@@ -87,6 +87,12 @@ std::uint64_t NowMicros() {
 		duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
 }
 
+std::uint32_t FrameForWire(CCircuitAI* ai) {
+	if (ai == nullptr) return 0u;
+	const int frame = ai->GetLastFrame();
+	return frame >= 0 ? static_cast<std::uint32_t>(frame) : 0u;
+}
+
 bool IsGameWideCommand(const ::highbar::v1::AICommand& cmd) {
 	return grpc::IsGameWideCommand(cmd);
 }
@@ -240,9 +246,11 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 		const std::string transport_name =
 			endpoint.transport == grpc::Transport::kUds ? "uds" : "tcp";
 		if (client_mode_enabled) {
-			bound_address_ = "client-mode-only";
+			deferred_service_bind_endpoint_ = endpoint;
+			bound_address_ = "client-mode-deferred-bind";
 		} else {
 			service_->Bind(endpoint, &bound_address_);
+			service_bound_ = true;
 		}
 
 		// T023 — startup banner now includes engine pin so the pin is
@@ -263,10 +271,14 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 			const std::string coord_endpoint = coord_env;
 			const int owner_skirmish_ai_id = CoordinatorOwnerSkirmishAiId();
 			if (ai->GetSkirmishAIId() == owner_skirmish_ai_id) {
-				coordinator_client_ = std::make_unique<grpc::CoordinatorClient>(
-					ai, coord_endpoint,
-					/*plugin_id=*/std::string("highbar-") + short_sha,
-					/*engine_sha256=*/grpc::kEngineSha256);
+				coordinator_endpoint_ = coord_endpoint;
+				coordinator_plugin_id_ = std::string("highbar-") + short_sha;
+				coordinator_engine_sha256_ = grpc::kEngineSha256;
+				grpc::LogError(
+					ai,
+					"GrpcGatewayModule",
+					"deferring coordinator client-mode until first live frame for owner skirmishAIId="
+					+ std::to_string(owner_skirmish_ai_id));
 			} else {
 				grpc::LogError(
 					ai,
@@ -311,6 +323,46 @@ void CGrpcGatewayModule::DrainPendingFault() {
 	}
 }
 
+void CGrpcGatewayModule::EnsureLocalServiceBound(const char* reason) {
+	if (service_bound_ || !deferred_service_bind_endpoint_.has_value() || !service_) return;
+	AppendCoordinatorTrace(
+		std::string("local service bind reason=")
+		+ (reason != nullptr ? reason : "unknown")
+		+ " frame=" + std::to_string(circuit != nullptr ? circuit->GetLastFrame() : -1));
+	service_->Bind(*deferred_service_bind_endpoint_, &bound_address_);
+	service_bound_ = true;
+}
+
+void CGrpcGatewayModule::EnsureCoordinatorClientStarted(const char* reason) {
+	if (coordinator_client_ || coordinator_endpoint_.empty()) return;
+	AppendCoordinatorTrace(
+		std::string("coordinator start reason=")
+		+ (reason != nullptr ? reason : "unknown")
+		+ " frame=" + std::to_string(circuit != nullptr ? circuit->GetLastFrame() : -1));
+	coordinator_client_ = std::make_unique<grpc::CoordinatorClient>(
+		circuit, coordinator_endpoint_, coordinator_plugin_id_,
+		coordinator_engine_sha256_);
+	if (!coordinator_command_channel_started_) {
+		coordinator_client_->StartCommandChannel(command_queue_.get());
+		coordinator_command_channel_started_ = true;
+	}
+}
+
+void CGrpcGatewayModule::MaybeEmitInitialCoordinatorSnapshot(const char* reason) {
+	if (coordinator_initial_snapshot_sent_ || coordinator_endpoint_.empty()) return;
+	if (circuit == nullptr || circuit->GetLastFrame() < 0) return;
+	if (circuit->GetTeamUnits().empty()) return;
+	EnsureCoordinatorClientStarted(reason);
+	if (!coordinator_client_) return;
+	coordinator_initial_snapshot_sent_ = true;
+	AppendCoordinatorTrace(
+		std::string("initial snapshot reason=")
+		+ (reason != nullptr ? reason : "unknown")
+		+ " frame=" + std::to_string(circuit->GetLastFrame())
+		+ " own_units=" + std::to_string(circuit->GetTeamUnits().size()));
+	BroadcastSnapshot(/*effective_cadence_frames=*/1);
+}
+
 // T011 — ordered side effects per data-model.md §2 and
 // contracts/gateway-fault.md. Engine-thread only. Idempotent.
 void CGrpcGatewayModule::TransitionToDisabled(const std::string& subsystem,
@@ -322,8 +374,7 @@ void CGrpcGatewayModule::TransitionToDisabled(const std::string& subsystem,
 		return;  // already Disabling or Disabled
 	}
 
-	const std::uint32_t frame = (circuit != nullptr)
-		? static_cast<std::uint32_t>(circuit->GetLastFrame()) : 0u;
+	const std::uint32_t frame = FrameForWire(circuit);
 
 	// (1) Structured fault-log line.
 	grpc::LogFault(circuit, subsystem, reason, detail, frame);
@@ -427,6 +478,7 @@ int CGrpcGatewayModule::UnitCreated(CCircuitUnit* unit, CCircuitUnit* builder) {
 		ev->set_unit_id(static_cast<std::int32_t>(unit->GetId()));
 		ev->set_builder_id(
 			builder != nullptr ? static_cast<std::int32_t>(builder->GetId()) : 0);
+		MaybeEmitInitialCoordinatorSnapshot("unit_created");
 		return 0;
 	});
 }
@@ -436,6 +488,7 @@ int CGrpcGatewayModule::UnitFinished(CCircuitUnit* unit) {
 		if (unit == nullptr) return 0;
 		auto* ev = current_frame_delta_.add_events()->mutable_unit_finished();
 		ev->set_unit_id(static_cast<std::int32_t>(unit->GetId()));
+		MaybeEmitInitialCoordinatorSnapshot("unit_finished");
 		return 0;
 	});
 }
@@ -619,16 +672,21 @@ void CGrpcGatewayModule::OnFrameTick() {
 	try {
 		if (service_) service_->AdvanceFrame();
 
+		// Client-mode starts after pregame. Constructing gRPC client
+		// channels during Spring's pregame network join path can prevent
+		// graphical spectators from attaching; wait until the first live
+		// frame so watched runs get their attach window first.
+		++frame_counter_;
+		const auto live_frame = circuit != nullptr ? circuit->GetLastFrame() : -1;
+		if (live_frame >= 0) {
+			EnsureLocalServiceBound("live_frame");
+		}
+		if (!coordinator_client_ && live_frame >= 0) {
+			EnsureCoordinatorClientStarted("live_frame");
+		}
+		MaybeEmitInitialCoordinatorSnapshot("frame_tick");
 		// Client-mode heartbeat. Engine-thread; CoordinatorClient's
 		// SendHeartbeat has a 250ms deadline so stalls are bounded.
-		++frame_counter_;
-		if (coordinator_client_ && !coordinator_command_channel_started_) {
-			const auto live_frame = circuit != nullptr ? circuit->GetLastFrame() : -1;
-			if (live_frame >= 0) {
-				coordinator_client_->StartCommandChannel(command_queue_.get());
-				coordinator_command_channel_started_ = true;
-			}
-		}
 		if (coordinator_client_ && (frame_counter_ % kHeartbeatEveryNFrames) == 0) {
 			coordinator_client_->SendHeartbeat(frame_counter_);
 		}
@@ -648,8 +706,7 @@ void CGrpcGatewayModule::OnFrameTick() {
 		// (a single branch on next_snapshot_frame_), so unconditional
 		// invocation is fine.
 		{
-			const std::uint32_t frame = circuit != nullptr
-				? static_cast<std::uint32_t>(circuit->GetLastFrame()) : 0u;
+			const std::uint32_t frame = FrameForWire(circuit);
 			current_frame_.store(frame, std::memory_order_release);
 			const std::size_t own_units_count = circuit != nullptr
 				? circuit->GetTeamUnits().size() : 0;
@@ -696,7 +753,7 @@ void CGrpcGatewayModule::FlushDelta() {
 
 		::highbar::v1::StateUpdate update;
 		update.set_seq(++seq_);
-		update.set_frame(static_cast<std::uint32_t>(circuit->GetLastFrame()));
+		update.set_frame(FrameForWire(circuit));
 		*update.mutable_delta() = std::move(current_frame_delta_);
 		current_frame_delta_.Clear();
 
@@ -736,7 +793,7 @@ void CGrpcGatewayModule::EmitKeepAlive() {
 	try {
 		::highbar::v1::StateUpdate update;
 		update.set_seq(++seq_);
-		update.set_frame(static_cast<std::uint32_t>(circuit->GetLastFrame()));
+		update.set_frame(FrameForWire(circuit));
 		update.mutable_keepalive();
 
 		auto payload = std::make_shared<std::string>();
@@ -779,7 +836,7 @@ void CGrpcGatewayModule::BroadcastSnapshot(std::uint32_t effective_cadence_frame
 
 		::highbar::v1::StateUpdate update;
 		update.set_seq(++seq_);
-		update.set_frame(static_cast<std::uint32_t>(circuit->GetLastFrame()));
+		update.set_frame(FrameForWire(circuit));
 
 		// Build the snapshot. BuildIncremental omits StaticMap — it was
 		// already delivered in HelloResponse and on any StreamState
@@ -787,7 +844,7 @@ void CGrpcGatewayModule::BroadcastSnapshot(std::uint32_t effective_cadence_frame
 		auto* snap = update.mutable_snapshot();
 		*snap = snapshot_->BuildIncremental();
 		snap->set_effective_cadence_frames(effective_cadence_frames);
-		snap->set_frame_number(static_cast<std::uint32_t>(circuit->GetLastFrame()));
+		snap->set_frame_number(FrameForWire(circuit));
 
 		// Constitution V: stamp CLOCK_MONOTONIC_ns at the moment we hand
 		// the frame to the fan-out. Same pattern as CoordinatorClient.

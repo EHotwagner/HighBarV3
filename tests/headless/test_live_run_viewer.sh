@@ -30,7 +30,7 @@ export HIGHBAR_BAR_CLIENT_BINARY="$FAKE_SPRING"
 export HIGHBAR_ITERTESTING_WATCH_LAUNCHED=true
 export HIGHBAR_ITERTESTING_WATCH_ENGINE_MODE=graphical-client
 export HIGHBAR_ITERTESTING_WATCH_ENGINE_BINARY="$FAKE_SPRING"
-export HIGHBAR_ITERTESTING_WATCH_ENGINE_PID=777
+export HIGHBAR_ITERTESTING_WATCH_ENGINE_PID=$$
 export HIGHBAR_ITERTESTING_WATCH_STARTSCRIPT=tests/headless/scripts/minimal.startscript
 export HIGHBAR_WRITE_DIR="$TMPDIR/write"
 export HIGHBAR_FAKE_SPRING_LOG="$TMPDIR/fake-spring.log"
@@ -243,8 +243,8 @@ PY
 
     host_startscript="$(prepare_watch_host_startscript "$REPO_ROOT/tests/headless/scripts/minimal.startscript" "18452" "HighBarV3Watch")"
     client_startscript="$(prepare_watch_client_startscript "18452" "HighBarV3Watch")"
-    grep -q 'MinSpeed=0.0;' "$host_startscript" || {
-        echo "test_live_run_viewer: watched startscript did not rewrite MinSpeed to 0.0" >&2
+    grep -q 'MinSpeed=3.0;' "$host_startscript" || {
+        echo "test_live_run_viewer: watched startscript did not rewrite MinSpeed to 3.0" >&2
         exit 1
     }
     grep -q 'MaxSpeed=10.0;' "$host_startscript" || {
@@ -255,24 +255,24 @@ PY
         echo "test_live_run_viewer: watched host startscript did not set HostPort" >&2
         exit 1
     }
-    grep -q '\[PLAYER1\]' "$host_startscript" || {
-        echo "test_live_run_viewer: watched host startscript did not add viewer player" >&2
+    ! grep -q '\[PLAYER1\]' "$host_startscript" || {
+        echo "test_live_run_viewer: watched host startscript should not predeclare viewer player" >&2
         exit 1
     }
-    grep -q 'Name=HighBarV3Watch;' "$host_startscript" || {
-        echo "test_live_run_viewer: watched host startscript did not add expected viewer player name" >&2
+    ! grep -q 'Name=HighBarV3Watch;' "$host_startscript" || {
+        echo "test_live_run_viewer: watched host startscript should keep viewer name out of host players" >&2
         exit 1
     }
     grep -q 'Name=NullAI;' "$host_startscript" || {
         echo "test_live_run_viewer: watched host startscript did not rewrite AI0 name to NullAI" >&2
         exit 1
     }
-    grep -q 'Name=BARb;' "$host_startscript" || {
-        echo "test_live_run_viewer: watched host startscript did not rewrite AI1 name to BARb" >&2
+    grep -q 'Name=highBar;' "$host_startscript" || {
+        echo "test_live_run_viewer: watched host startscript did not rewrite AI1 name to highBar" >&2
         exit 1
     }
-    grep -q 'NumPlayers=2;' "$host_startscript" || {
-        echo "test_live_run_viewer: watched host startscript did not bump NumPlayers" >&2
+    grep -q 'NumPlayers=1;' "$host_startscript" || {
+        echo "test_live_run_viewer: watched host startscript changed host player count" >&2
         exit 1
     }
     grep -q 'IsHost=0;' "$client_startscript" || {
@@ -483,8 +483,16 @@ PY
         echo "test_live_run_viewer: AI Bridge widget was not patched with grab_input handler" >&2
         exit 1
     }
+    grep -q 'force_start = function(msg) handleForceStart(msg) end' "$widget_path" || {
+        echo "test_live_run_viewer: AI Bridge widget was not patched with force_start handler" >&2
+        exit 1
+    }
     grep -q 'Spring.SendCommands("GrabInput " .. (msg.enabled and "1" or "0"))' "$widget_path" || {
         echo "test_live_run_viewer: AI Bridge widget was not patched to forward GrabInput" >&2
+        exit 1
+    }
+    grep -q 'Spring.SendCommands("forcestart")' "$widget_path" || {
+        echo "test_live_run_viewer: AI Bridge widget was not patched to force start" >&2
         exit 1
     }
     restore_watch_ai_bridge_widget

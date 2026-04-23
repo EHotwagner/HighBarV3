@@ -14,7 +14,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <deque>
 #include <mutex>
+#include <utility>
 
 namespace {
 
@@ -75,11 +77,18 @@ CoordinatorClient::CoordinatorClient(::circuit::CCircuitAI* ai,
 	cmd_stub_ = ::highbar::v1::HighBarCoordinator::NewStub(cmd_channel_);
 	AppendCoordinatorTrace(plugin_id_, "ctor connected");
 	LogConnect(ai_, plugin_id_, endpoint_, "client-mode");
+	push_thread_ = std::thread(&CoordinatorClient::PushWorkerLoop, this);
 }
 
 CoordinatorClient::~CoordinatorClient() {
 	AppendCoordinatorTrace(plugin_id_, "dtor begin");
-	ClosePushStateStream();
+	push_stopping_.store(true, std::memory_order_release);
+	push_queue_cv_.notify_all();
+	{
+		std::lock_guard<std::mutex> lock(push_ctx_mutex_);
+		if (push_ctx_) push_ctx_->TryCancel();
+	}
+	if (push_thread_.joinable()) push_thread_.join();
 
 	// Cancel + join the command reader if running.
 	cmd_stopping_.store(true, std::memory_order_release);
@@ -133,13 +142,25 @@ bool CoordinatorClient::SendHeartbeat(std::uint32_t frame) {
 
 void CoordinatorClient::OpenPushStateStream() {
 	if (push_stream_open_.load(std::memory_order_acquire)) return;
-	push_ctx_ = std::make_unique<::grpc::ClientContext>();
+	auto ctx = std::make_shared<::grpc::ClientContext>();
 	// Unlike unary Heartbeat, the stream is long-lived. We only set a
 	// generous per-write deadline (60 min); a hard deadline would have
 	// to be refreshed every match.
-	push_ctx_->set_deadline(std::chrono::system_clock::now()
-	                        + std::chrono::minutes(60));
-	push_writer_ = stub_->PushState(push_ctx_.get(), &push_ack_);
+	ctx->set_deadline(std::chrono::system_clock::now()
+	                  + std::chrono::minutes(60));
+	{
+		std::lock_guard<std::mutex> lock(push_ctx_mutex_);
+		push_ctx_ = ctx;
+	}
+	if (push_stopping_.load(std::memory_order_acquire)) {
+		ctx->TryCancel();
+	}
+	push_writer_ = stub_->PushState(ctx.get(), &push_ack_);
+	if (!push_writer_) {
+		std::lock_guard<std::mutex> lock(push_ctx_mutex_);
+		push_ctx_.reset();
+		return;
+	}
 	push_stream_open_.store(true, std::memory_order_release);
 	AppendCoordinatorTrace(plugin_id_, "push open");
 	LogConnect(ai_, plugin_id_, endpoint_, "client-mode-push-stream");
@@ -172,7 +193,10 @@ void CoordinatorClient::ClosePushStateStream() {
 		}
 	}
 	push_writer_.reset();
-	push_ctx_.reset();
+	{
+		std::lock_guard<std::mutex> lock(push_ctx_mutex_);
+		push_ctx_.reset();
+	}
 }
 
 void CoordinatorClient::StartCommandChannel(CommandQueue* sink) {
@@ -280,41 +304,75 @@ void CoordinatorClient::CommandReaderLoop(CommandQueue* sink) {
 	AppendCoordinatorTrace(plugin_id_, "cmd loop exit");
 }
 
-bool CoordinatorClient::PushStateUpdate(const ::highbar::v1::StateUpdate& update) {
-	if (!push_stream_open_.load(std::memory_order_acquire)) {
-		OpenPushStateStream();
-	}
-	if (!push_writer_) return false;
+void CoordinatorClient::PushWorkerLoop() {
+	while (!push_stopping_.load(std::memory_order_acquire)) {
+		::highbar::v1::StateUpdate update;
+		{
+			std::unique_lock<std::mutex> lock(push_queue_mutex_);
+			push_queue_cv_.wait(lock, [this] {
+				return push_stopping_.load(std::memory_order_acquire)
+					|| !push_queue_.empty();
+			});
+			if (push_stopping_.load(std::memory_order_acquire)) break;
+			update = std::move(push_queue_.front());
+			push_queue_.pop_front();
+		}
 
-	// Constitution V instrumentation: stamp CLOCK_MONOTONIC_ns at the
-	// moment we hand the frame to gRPC. The proto field is uint64
-	// send_monotonic_ns; external clients diff against their recv
-	// time for p99 round-trip (tests/bench/latency-*.sh).
-	::highbar::v1::StateUpdate stamped(update);
-	{
+		if (push_stopping_.load(std::memory_order_acquire)) break;
+		if (!push_stream_open_.load(std::memory_order_acquire)) {
+			OpenPushStateStream();
+		}
+		if (!push_writer_) continue;
+		if (push_stopping_.load(std::memory_order_acquire)) break;
+
+		// Constitution V instrumentation: stamp CLOCK_MONOTONIC_ns at the
+		// moment the push worker hands the frame to gRPC.
 		struct timespec ts;
 		clock_gettime(CLOCK_MONOTONIC, &ts);
-		stamped.set_send_monotonic_ns(
+		update.set_send_monotonic_ns(
 			static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ULL
 			+ static_cast<std::uint64_t>(ts.tv_nsec));
+
+		// gRPC ClientWriter::Write can block under backpressure, so this
+		// path intentionally runs off the Spring engine thread.
+		if (!push_writer_->Write(update)) {
+			const std::uint64_t pushed = pushed_count_.load();
+			AppendCoordinatorTrace(plugin_id_,
+			                      "push write failed after="
+			                      + std::to_string(pushed));
+			ClosePushStateStream();
+			LogError(ai_, "CoordinatorClient",
+			         "PushState stream broken after "
+			         + std::to_string(pushed) + " messages");
+			continue;
+		}
+		pushed_count_.fetch_add(1, std::memory_order_relaxed);
 	}
 
-	// gRPC ClientWriter::Write returns false if the RPC is already
-	// broken; handle by closing the stream and letting the caller's
-	// next frame re-open lazily (if endpoint is back up).
-	if (!push_writer_->Write(stamped)) {
-		const std::uint64_t pushed = pushed_count_.load();
-		AppendCoordinatorTrace(plugin_id_,
-		                      "push write failed after="
-		                      + std::to_string(pushed));
-		ClosePushStateStream();
-		LogError(ai_, "CoordinatorClient",
-		         "PushState stream broken after "
-		         + std::to_string(pushed) + " messages");
-		return false;
+	ClosePushStateStream();
+}
+
+bool CoordinatorClient::PushStateUpdate(const ::highbar::v1::StateUpdate& update) {
+	if (push_stopping_.load(std::memory_order_acquire)) return false;
+	std::uint64_t dropped = 0;
+	{
+		std::lock_guard<std::mutex> lock(push_queue_mutex_);
+		if (push_queue_.size() >= kMaxQueuedPushUpdates) {
+			push_queue_.pop_front();
+			dropped = push_dropped_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+		}
+		push_queue_.push_back(update);
 	}
-	pushed_count_.fetch_add(1, std::memory_order_relaxed);
-	return true;
+	push_queue_cv_.notify_one();
+	if (dropped != 0 && (dropped == 1 || (dropped & (dropped - 1)) == 0)) {
+		AppendCoordinatorTrace(plugin_id_,
+		                      "push queue dropped_oldest total="
+		                      + std::to_string(dropped));
+		LogError(ai_, "CoordinatorClient",
+		         "PushState queue backpressure; dropped_oldest total="
+		         + std::to_string(dropped));
+	}
+	return dropped == 0;
 }
 
 }  // namespace circuit::grpc

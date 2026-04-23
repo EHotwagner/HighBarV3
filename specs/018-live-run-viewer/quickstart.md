@@ -65,7 +65,7 @@ tests/headless/itertesting.sh
 Expected behavior:
 
 - The wrapper still starts the existing live topology, but a watched run now uses BAR's normal graphical client instead of a separate viewer sidecar.
-- The default watched viewer speed target is `3x`. Watched launches rewrite the BAR startscript bounds to `MinSpeed=0` and `MaxSpeed=10`, while pause remains a separate control.
+- The default watched viewer speed target is `3x`. Watched launches set the host startscript `MinSpeed` to the resolved watch speed and `MaxSpeed` to at least `10`, while pause remains a separate control.
 - If `HIGHBAR_ITERTESTING_WATCH_SPEED` is set, it overrides the default target after launch through the local AI Bridge.
 - On success, stdout reports the run id, campaign id, reports directory, and watch availability.
 - On failure, the run stops with a watch-specific reason before consuming live execution time.

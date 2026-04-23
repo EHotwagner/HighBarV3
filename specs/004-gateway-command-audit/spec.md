@@ -266,7 +266,7 @@ whether the previously-failing Step 4 MoveUnit now passes.
   be ranked when more than one applies.
 - **FR-004**: Every audit row classified `verified` MUST cite either
   (a) a snapshot-diff excerpt of the same shape used in
-  `reports/003-macro-build-live-run.md` §4.3, or (b) an engine log
+  `reports/2026-04-22-06h06min-003-macro-build-live-run.md` §4.3, or (b) an engine log
   line excerpt with the engine pin recorded.
 - **FR-005**: The audit MUST include reproduction recipes — runnable
   shell command lines — for every `verified` row, sufficient that a
@@ -312,7 +312,7 @@ whether the previously-failing Step 4 MoveUnit now passes.
   `/tmp/*.py` ad-hoc files.
 - **FR-013**: Reproduction recipes MUST run in Phase-1 mode by
   default (matching the design requirement of 003 — snapshot diffs
-  must work with built-in AI active per `reports/003-macro-build-live-run.md`
+  must work with built-in AI active per `reports/2026-04-22-06h06min-003-macro-build-live-run.md`
   §1). Phase-2 recipes MUST be explicitly flagged.
 - **FR-014**: For every arm classified `dispatched-only` because the
   effect is not wire-observable, the audit MUST cite the specific
@@ -373,7 +373,7 @@ whether the previously-failing Step 4 MoveUnit now passes.
   repository tree (not in `/tmp`), is invoked by checked-in shell
   scripts, and produces evidence files into `build/reports/`
   (gitignored) — matching the established convention of
-  `reports/003-macro-build-live-run.md` §7.
+  `reports/2026-04-22-06h06min-003-macro-build-live-run.md` §7.
 - **SC-008**: Re-running the audit's evidence-collection step
   against the same engine pin and gametype produces the same
   outcome bucket for at least 90% of rows (the non-determinism
@@ -427,8 +427,8 @@ whether the previously-failing Step 4 MoveUnit now passes.
   mechanism, and the SnapshotBuilder fix that makes
   `under_construction` / `build_progress` observable on the wire.
 - **Existing live-run reports**:
-  `reports/003-macro-build-live-run.md` and
-  `reports/003-macro-build-live-run-2.md` are the baseline evidence
+  `reports/2026-04-22-06h06min-003-macro-build-live-run.md` and
+  `reports/2026-04-22-06h58min-003-macro-build-live-run-2.md` are the baseline evidence
   the audit extends.
 - **HighBarV2 reports tree** at
   `/home/developer/projects/HighBarV2/reports/` is the source of

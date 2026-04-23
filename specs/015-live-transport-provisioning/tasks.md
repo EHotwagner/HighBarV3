@@ -125,7 +125,7 @@
 - [X] T039 Run targeted pytest transport coverage in `clients/python/tests/behavioral_coverage/test_live_failure_classification.py`, `clients/python/tests/behavioral_coverage/test_itertesting_runner.py`, `clients/python/tests/behavioral_coverage/test_itertesting_report.py`, and `clients/python/tests/test_behavioral_registry.py`
 - [X] T040 Run synthetic and campaign validation in `tests/headless/test_live_itertesting_hardening.sh` and `tests/headless/test_itertesting_campaign.sh`
 - [ ] T041 Run three prepared live closeout reruns via `tests/headless/itertesting.sh`
-- [ ] T042 Compare `reports/itertesting/<run-id>/manifest.json`, `reports/itertesting/<run-id>/run-report.md`, and `reports/itertesting/<run-id>/campaign-stop-decision.json` against `reports/014-transport-provisioning-status-2026-04-22.md` to confirm SC-001 through SC-006
+- [ ] T042 Compare `reports/itertesting/<run-id>/manifest.json`, `reports/itertesting/<run-id>/run-report.md`, and `reports/itertesting/<run-id>/campaign-stop-decision.json` against `reports/2026-04-22-22h06min-014-transport-provisioning-status.md` to confirm SC-001 through SC-006
 - [ ] T043 Confirm supported-variant evidence for `armatlas` and `armhvytrans` using `tests/headless/audit/def-id-resolver.py` and the latest `reports/itertesting/<run-id>/` artifacts to satisfy SC-007
 
 ---

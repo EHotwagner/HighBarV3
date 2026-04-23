@@ -37,6 +37,7 @@
 
 #include "highbar/callbacks.pb.h"
 #include "highbar/state.pb.h"
+#include "grpc/Config.h"
 #include "grpc/SnapshotTick.h"
 
 namespace circuit::grpc {
@@ -208,11 +209,17 @@ private:
 	std::unique_ptr<grpc::RingBuffer> ring_;
 	std::unique_ptr<grpc::CommandQueue> command_queue_;
 	std::unique_ptr<grpc::HighBarService> service_;
+	std::optional<grpc::TransportEndpoint> deferred_service_bind_endpoint_;
+	bool service_bound_ = false;
 	// Client-mode: plugin dials out to an external coordinator. See
 	// specs/.../investigations/hello-rpc-deadline-exceeded.md for why
 	// client-mode exists alongside the server-mode HighBarService.
 	std::unique_ptr<grpc::CoordinatorClient> coordinator_client_;
+	std::string coordinator_endpoint_;
+	std::string coordinator_plugin_id_;
+	std::string coordinator_engine_sha256_;
 	bool coordinator_command_channel_started_ = false;
+	bool coordinator_initial_snapshot_sent_ = false;
 	static constexpr std::uint32_t kHeartbeatEveryNFrames = 30;
 	std::uint32_t frame_counter_ = 0;
 
@@ -256,6 +263,11 @@ private:
 	// Pull a deferred fault (if any) and run TransitionToDisabled on
 	// the engine thread. Called at the top of OnFrameTick.
 	void DrainPendingFault();
+	// Client-mode startup is deferred out of Spring's spectator join
+	// path, but can be safely started once gameplay callbacks begin.
+	void EnsureLocalServiceBound(const char* reason);
+	void EnsureCoordinatorClientStarted(const char* reason);
+	void MaybeEmitInitialCoordinatorSnapshot(const char* reason);
 
 	// 003-snapshot-arm-coverage T011 — engine-thread snapshot
 	// serializer + fan-out. Called from OnFrameTick when

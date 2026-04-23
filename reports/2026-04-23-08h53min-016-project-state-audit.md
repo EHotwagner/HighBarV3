@@ -62,9 +62,9 @@ So the C++ test sources exist, but root `ctest` is not runnable from the current
 The last meaningful feature sequence is coherent:
 
 - `013` / `4f51b71e Harden live coordinator command dispatch`
-  This was the turning point from "maybe transport is broken" to "the engine/plugin dispatch path was being wedged by malformed payloads." The investigation report in [reports/013-itertesting-live-runtime-investigation-2026-04-22.md](./013-itertesting-live-runtime-investigation-2026-04-22.md) shows that UDS vs TCP was not the root issue; the real bug was unsafe payload handling causing engine-thread loss of progress.
+  This was the turning point from "maybe transport is broken" to "the engine/plugin dispatch path was being wedged by malformed payloads." The investigation report in [reports/2026-04-22-18h42min-013-itertesting-live-runtime-investigation.md](./2026-04-22-18h42min-013-itertesting-live-runtime-investigation.md) shows that UDS vs TCP was not the root issue; the real bug was unsafe payload handling causing engine-thread loss of progress.
 - `014` / `a1a5ddbe 014 fixture bootstrap simplification`
-  This reduced false fixture blockers, improved fixture classification, and recovered some previously missing fixture evidence such as `wreck_target`. The checked-in status report in [reports/014-transport-provisioning-status-2026-04-22.md](./014-transport-provisioning-status-2026-04-22.md) shows the blocker narrowed down to real transport provisioning rather than general fixture ambiguity.
+  This reduced false fixture blockers, improved fixture classification, and recovered some previously missing fixture evidence such as `wreck_target`. The checked-in status report in [reports/2026-04-22-22h06min-014-transport-provisioning-status.md](./2026-04-22-22h06min-014-transport-provisioning-status.md) shows the blocker narrowed down to real transport provisioning rather than general fixture ambiguity.
 - `015` / `2c029a77 Land 015 live transport provisioning`
   This added transport provisioning semantics, supported transport variants, callback relay usage for runtime def resolution, and stronger reporting around transport-specific failures.
 - `016` / `217f8329` and `277044b1`

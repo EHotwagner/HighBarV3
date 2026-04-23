@@ -80,7 +80,7 @@ OR one RPC (from `proto/highbar/service.proto` HighBarProxy service).
 | `outcome` | `OutcomeBucket` | yes | Per §OutcomeBucket decision procedure. |
 | `dispatch_citation` | string | yes | `file:line_start-line_end`. AICommand arms cite `src/circuit/grpc/CommandDispatch.cpp` line ranges (FR-002). RPCs cite `src/circuit/grpc/HighBarService.cpp`. |
 | `evidence_shape` | enum | yes | `snapshot_diff` \| `engine_log` \| `not_wire_observable` \| `dispatch_ack_only`. |
-| `evidence_excerpt` | markdown block | required for `verified`; optional otherwise | For `snapshot_diff`: the same shape as `reports/003-macro-build-live-run.md` §4.3. For `engine_log`: excerpt with engine pin. For `not_wire_observable`: a one-line reason referencing a channel name. |
+| `evidence_excerpt` | markdown block | required for `verified`; optional otherwise | For `snapshot_diff`: the same shape as `reports/2026-04-22-06h06min-003-macro-build-live-run.md` §4.3. For `engine_log`: excerpt with engine pin. For `not_wire_observable`: a one-line reason referencing a channel name. |
 | `channel` | enum | required when `outcome=dispatched-only` | `channel_a_command` \| `channel_b_query` \| `channel_c_lua` \| `team_global` \| `drawer_only`. Vocabulary matches `clients/python/highbar_client/behavioral_coverage/registry.py` (FR-014). |
 | `hypothesis_class` | `HypothesisClass` | required when `outcome ∈ {blocked, broken}` | Per §HypothesisClass. |
 | `hypothesis_summary` | one-sentence string | required when `outcome ∈ {blocked, broken}` | Instantiates the hypothesis for this specific arm (e.g., "Phase-1 BARb re-issues move command to factory-produced unit on the next frame, overriding the external MoveUnit"). |

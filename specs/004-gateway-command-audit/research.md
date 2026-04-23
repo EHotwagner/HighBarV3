@@ -430,7 +430,7 @@ The new script:
 2. Overrides the `grpc.json` with `enable_builtin=false` (passed
    through config, not a source edit).
 3. Dispatches the exact 4-step chain documented in
-   `reports/003-macro-build-live-run.md` §4 (commander builds lab,
+   `reports/2026-04-22-06h06min-003-macro-build-live-run.md` §4 (commander builds lab,
    lab builds mobile, mobile moves, mobile attacks).
 4. Emits a per-step PASS/FAIL table to
    `reports/004-phase2-smoke.md` (FR-008, SC-006).
@@ -480,7 +480,7 @@ Phase 1 artifact design:
   affect 003's validation (registry import-time validation still
   passes).
 - **Snapshot builder**: 003 shipped the `under_construction` +
-  `build_progress` wire fix (`reports/003-macro-build-live-run.md`
+  `build_progress` wire fix (`reports/2026-04-22-06h06min-003-macro-build-live-run.md`
   §2). The audit consumes this already-working surface.
 - **Authentication + token file**: 001's `x-highbar-ai-token`
   mechanism at `$writeDir/highbar.token` mode 0600. The Hello-RPC

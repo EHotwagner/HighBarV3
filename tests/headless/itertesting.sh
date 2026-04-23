@@ -51,7 +51,7 @@ WATCH_WINDOW_WIDTH_RESOLVED=""
 WATCH_WINDOW_HEIGHT_RESOLVED=""
 WATCH_MOUSE_CAPTURE_RESOLVED=""
 WATCH_SPEED_RESOLVED=""
-WATCH_SPEED_MIN_RESOLVED="0.0"
+WATCH_SPEED_MIN_RESOLVED="3.0"
 WATCH_SPEED_MAX_RESOLVED="10.0"
 WATCH_PLAYER_NAME_RESOLVED="${HIGHBAR_ITERTESTING_WATCH_PLAYER_NAME:-HighBarV3Watch}"
 WATCH_HOST_PORT_RESOLVED=""
@@ -212,13 +212,21 @@ else:
     raise SystemExit(1)
 
 original_handlers = '  set_speed  = function(msg) handleSetSpeed(msg) end,\n  pause      = function(msg) handlePause(msg) end,\n'
-patched_handlers = (
+grab_handlers = (
     '  set_speed  = function(msg) handleSetSpeed(msg) end,\n'
     '  grab_input = function(msg) handleGrabInput(msg) end,\n'
     '  pause      = function(msg) handlePause(msg) end,\n'
 )
+patched_handlers = (
+    '  set_speed  = function(msg) handleSetSpeed(msg) end,\n'
+    '  grab_input = function(msg) handleGrabInput(msg) end,\n'
+    '  force_start = function(msg) handleForceStart(msg) end,\n'
+    '  pause      = function(msg) handlePause(msg) end,\n'
+)
 if original_handlers in text:
     text = text.replace(original_handlers, patched_handlers, 1)
+elif grab_handlers in text:
+    text = text.replace(grab_handlers, patched_handlers, 1)
 elif patched_handlers in text:
     pass
 else:
@@ -229,14 +237,23 @@ original_forward = (
     'local handlePause\n'
     'local handleClientDisconnect\n'
 )
-patched_forward = (
+grab_forward = (
     'local handleSetSpeed\n'
     'local handleGrabInput\n'
     'local handlePause\n'
     'local handleClientDisconnect\n'
 )
+patched_forward = (
+    'local handleSetSpeed\n'
+    'local handleGrabInput\n'
+    'local handleForceStart\n'
+    'local handlePause\n'
+    'local handleClientDisconnect\n'
+)
 if original_forward in text:
     text = text.replace(original_forward, patched_forward, 1)
+elif grab_forward in text:
+    text = text.replace(grab_forward, patched_forward, 1)
 elif patched_forward in text:
     pass
 else:
@@ -261,6 +278,10 @@ patched_pause = (
     '  Spring.SendCommands("GrabInput " .. (msg.enabled and "1" or "0"))\n'
     '  sendMessage({ type = "ok", id = msg.id })\n'
     'end\n\n'
+    'handleForceStart = function(msg)\n'
+    '  Spring.SendCommands("forcestart")\n'
+    '  sendMessage({ type = "ok", id = msg.id })\n'
+    'end\n\n'
     'handlePause = function(msg)\n'
     '  if type(msg.paused) ~= "boolean" then\n'
     '    sendError(msg.id, "invalid_message", "Missing or invalid paused (expected boolean)")\n'
@@ -272,6 +293,16 @@ patched_pause = (
 )
 if original_pause in text:
     text = text.replace(original_pause, patched_pause, 1)
+elif 'handleGrabInput = function(msg)' in text and 'handleForceStart = function(msg)' not in text:
+    text = text.replace(
+        'handlePause = function(msg)\n',
+        'handleForceStart = function(msg)\n'
+        '  Spring.SendCommands("forcestart")\n'
+        '  sendMessage({ type = "ok", id = msg.id })\n'
+        'end\n\n'
+        'handlePause = function(msg)\n',
+        1,
+    )
 elif 'handleGrabInput = function(msg)' in text:
     pass
 else:
@@ -1140,13 +1171,17 @@ import sys
 from highbar_client.behavioral_coverage.bnv_watch import parse_watch_profile
 
 profile = parse_watch_profile(sys.argv[1], environ=os.environ)
+watch_speed = profile.watch_speed if profile.watch_speed is not None else 3.0
+watch_speed_max = max(10.0, float(watch_speed))
 for key, value in (
     ("WATCH_ENGINE_BINARY", profile.viewer_binary),
     ("WATCH_WINDOW_MODE_RESOLVED", profile.window_mode),
     ("WATCH_WINDOW_WIDTH_RESOLVED", str(profile.window_width)),
     ("WATCH_WINDOW_HEIGHT_RESOLVED", str(profile.window_height)),
     ("WATCH_MOUSE_CAPTURE_RESOLVED", "true" if profile.mouse_capture else "false"),
-    ("WATCH_SPEED_RESOLVED", str(profile.watch_speed if profile.watch_speed is not None else 3.0)),
+    ("WATCH_SPEED_RESOLVED", str(watch_speed)),
+    ("WATCH_SPEED_MIN_RESOLVED", str(watch_speed)),
+    ("WATCH_SPEED_MAX_RESOLVED", str(watch_speed_max)),
 ):
     print(f"{key}={shlex.quote(value)}")
 PY
@@ -1193,35 +1228,6 @@ for key, value in (("MinSpeed", min_speed), ("MaxSpeed", max_speed), ("HostPort"
     if count == 0:
         raise SystemExit(f"missing {key} in {source}")
     text = updated
-
-player_block = (
-    "\n\t[PLAYER1]\n"
-    "\t{\n"
-    f"\t\tName={viewer_player_name};\n"
-    "\t\tTeam=0;\n"
-    "\t\tIsFromDemo=0;\n"
-    "\t\tSpectator=1;\n"
-    "\t}\n"
-)
-if "[PLAYER1]" not in text:
-    text, count = re.subn(
-        r"(\n\t\[AI0\]\n)",
-        player_block + r"\1",
-        text,
-        count=1,
-    )
-    if count == 0:
-        raise SystemExit(f"missing AI0 insertion point in {source}")
-
-text, count = re.subn(
-    r"(^\s*NumPlayers\s*=)\s*\d+;",
-    r"\g<1>2;",
-    text,
-    count=1,
-    flags=re.MULTILINE,
-)
-if count == 0:
-    raise SystemExit(f"missing NumPlayers in {source}")
 
 ai_block_pattern = re.compile(r"(?P<header>\n\t\[AI\d+\]\n\t\{\n)(?P<body>.*?)(?P<footer>\n\t\})", re.DOTALL)
 
@@ -1313,29 +1319,6 @@ launch_watch_viewer() {
             return 1
         }
 
-    if [[ "$WATCH_MOUSE_CAPTURE_RESOLVED" == "false" || "$WATCH_MOUSE_CAPTURE_RESOLVED" == "0" ]]; then
-        (
-            sleep 2
-            HIGHBAR_BNV_BRIDGE_TIMEOUT_SECONDS=2 \
-                uv run --project "$REPO_ROOT/clients/python" python - <<'PY' >/dev/null 2>&1 || true
-from highbar_client.behavioral_coverage.bnv_watch import apply_watch_mouse_capture
-raise SystemExit(0 if apply_watch_mouse_capture(False) is None else 1)
-PY
-            sleep 3
-            HIGHBAR_BNV_BRIDGE_TIMEOUT_SECONDS=2 \
-                uv run --project "$REPO_ROOT/clients/python" python - <<'PY' >/dev/null 2>&1 || true
-from highbar_client.behavioral_coverage.bnv_watch import apply_watch_mouse_capture
-raise SystemExit(0 if apply_watch_mouse_capture(False) is None else 1)
-PY
-            sleep 10
-            HIGHBAR_BNV_BRIDGE_TIMEOUT_SECONDS=2 \
-                uv run --project "$REPO_ROOT/clients/python" python - <<'PY' >/dev/null 2>&1 || true
-from highbar_client.behavioral_coverage.bnv_watch import apply_watch_mouse_capture
-raise SystemExit(0 if apply_watch_mouse_capture(False) is None else 1)
-PY
-        ) &
-        WATCH_VIEWER_HELPER_PID=$!
-    fi
     return 0
 }
 

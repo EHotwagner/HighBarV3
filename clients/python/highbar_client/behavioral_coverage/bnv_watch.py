@@ -304,6 +304,15 @@ def launch_viewer(
     )
     pid_value = env.get(WATCH_ENGINE_PID_ENV, "").strip()
     viewer_pid = int(pid_value) if pid_value.isdigit() else None
+    if viewer_pid is not None and not _pid_is_running(viewer_pid):
+        return ViewerAccessRecord(
+            availability_state="unavailable",
+            reason="graphical BAR client exited before watch controls could attach",
+            launch_command=command,
+            launched_at=timestamp,
+            viewer_pid=viewer_pid,
+            last_transition_at=timestamp,
+        )
     reason = (
         "attached to the existing graphical BAR client for the active watched run"
         if attach
@@ -318,6 +327,11 @@ def launch_viewer(
                 f"{reason}; mouse capture disable not applied: "
                 f"{grab_error}"
             )
+    start_error = apply_watch_force_start()
+    if start_error is None:
+        reason = f"{reason}; watch start forced"
+    else:
+        reason = f"{reason}; watch start force not applied: {start_error}"
     if profile.watch_speed is not None:
         speed_error = apply_watch_speed(profile.watch_speed)
         if speed_error is None:
@@ -327,6 +341,11 @@ def launch_viewer(
                 f"{reason}; watch speed target {profile.watch_speed:g} not applied: "
                 f"{speed_error}"
             )
+    pause_error = apply_watch_pause(False)
+    if pause_error is None:
+        reason = f"{reason}; watch pause cleared"
+    else:
+        reason = f"{reason}; watch pause clear not applied: {pause_error}"
     return ViewerAccessRecord(
         availability_state="attached" if attach else "available",
         reason=reason,
@@ -335,6 +354,16 @@ def launch_viewer(
         viewer_pid=viewer_pid,
         last_transition_at=timestamp,
     )
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _bridge_connection_settings() -> tuple[str, int, int, float]:
@@ -371,6 +400,10 @@ def _send_bridge_message(sock: socket.socket, payload: dict[str, object]) -> Non
     sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
 
 
+def _is_bridge_busy_error(message: str) -> bool:
+    return "already connected" in message.lower()
+
+
 def _send_bridge_request(
     payload: dict[str, object],
     *,
@@ -401,7 +434,12 @@ def _send_bridge_request(
                 )
                 handshake = _read_bridge_message(sock, deadline=deadline)
                 if handshake.get("type") == "error":
-                    return str(handshake.get("message", "AI Bridge handshake failed"))
+                    message = str(handshake.get("message", "AI Bridge handshake failed"))
+                    if _is_bridge_busy_error(message):
+                        last_error = ConnectionError(message)
+                        time.sleep(0.1)
+                        continue
+                    return message
                 request_payload = dict(payload)
                 request_payload.setdefault("id", "watch-request")
                 _send_bridge_message(sock, request_payload)
@@ -409,7 +447,12 @@ def _send_bridge_request(
                 if response.get("type") == ok_type:
                     return None
                 if response.get("type") == "error":
-                    return str(response.get("message", error_message))
+                    message = str(response.get("message", error_message))
+                    if _is_bridge_busy_error(message):
+                        last_error = ConnectionError(message)
+                        time.sleep(0.1)
+                        continue
+                    return message
                 return f"unexpected AI Bridge response type '{response.get('type')}'"
         except (ConnectionError, OSError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
             last_error = exc
@@ -438,6 +481,27 @@ def apply_watch_mouse_capture(enabled: bool) -> str | None:
             "enabled": enabled,
         },
         error_message="AI Bridge rejected grab_input",
+    )
+
+
+def apply_watch_force_start() -> str | None:
+    return _send_bridge_request(
+        {
+            "type": "force_start",
+            "id": "watch-force-start",
+        },
+        error_message="AI Bridge rejected force_start",
+    )
+
+
+def apply_watch_pause(paused: bool) -> str | None:
+    return _send_bridge_request(
+        {
+            "type": "pause",
+            "id": "watch-pause",
+            "paused": paused,
+        },
+        error_message="AI Bridge rejected pause",
     )
 
 

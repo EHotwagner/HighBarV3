@@ -34,6 +34,12 @@ void SetVec3(::highbar::v1::Vector3* dst, const springai::AIFloat3& src) {
 	dst->set_z(src.z);
 }
 
+std::uint32_t FrameForWire(const CCircuitAI* ai) {
+	if (ai == nullptr) return 0u;
+	const int frame = ai->GetLastFrame();
+	return frame >= 0 ? static_cast<std::uint32_t>(frame) : 0u;
+}
+
 }  // namespace
 
 SnapshotBuilder::SnapshotBuilder(CCircuitAI* ai) : ai_(ai) {}
@@ -47,7 +53,7 @@ SnapshotBuilder::SnapshotBuilder(CCircuitAI* ai) : ai_(ai) {}
 ::highbar::v1::StateSnapshot SnapshotBuilder::BuildIncremental() const {
 	::highbar::v1::StateSnapshot out;
 	if (ai_ == nullptr) return out;
-	out.set_frame_number(static_cast<std::uint32_t>(ai_->GetLastFrame()));
+	out.set_frame_number(FrameForWire(ai_));
 	FillOwnUnits(&out);
 	FillEnemies(&out);
 	FillFeatures(&out);

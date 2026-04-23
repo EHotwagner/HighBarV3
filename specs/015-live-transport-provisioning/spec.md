@@ -3,7 +3,7 @@
 **Feature Branch**: `[015-live-transport-provisioning]`  
 **Created**: 2026-04-22  
 **Status**: Draft  
-**Input**: User description: "create specs for reports/014-transport-provisioning-status-2026-04-22.md"
+**Input**: User description: "create specs for reports/2026-04-22-22h06min-014-transport-provisioning-status.md"
 
 ## User Scenarios & Testing *(mandatory)*
 

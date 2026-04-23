@@ -16,9 +16,13 @@ Confirmed findings:
 1. There was a real plugin bug in `highBar`: the native plugin still bound the local in-process `HighBarService` even when running in coordinator client-mode.
 2. That bug is now fixed in the working tree by making client-mode runs skip `HighBarService::Bind()` entirely.
 3. After that fix, spectator attach succeeds in controlled repros as long as `highBar` is not also the active coordinator owner.
-4. A second bug remains: when `highBar` is the active coordinator owner, the spectator attach still times out.
+4. A second bug remained: when `highBar` is the active coordinator owner, the spectator attach still timed out.
+5. Follow-up fixes applied:
+   - coordinator `PushState` writes now run on a bounded background queue instead of the Spring engine thread
+   - active coordinator client construction is deferred until the first live frame, keeping gRPC client channel setup out of Spring's pregame spectator join window
+6. Graphical watched attach has now been validated end-to-end: the host accepted `HighBarV3Watch` and logged the spectator as ingame.
 
-This means the watched-run failure is now narrowed to the active coordinator client-mode path, not to:
+This means the watched-run failure was narrowed to the active coordinator client-mode path, not to:
 
 - BNV itself
 - watch speed `3`
@@ -288,43 +292,32 @@ Other relevant uncommitted work already present in the tree from the earlier mac
 
 ## 12. Best current explanation
 
-The best-supported explanation at the end of this investigation is:
+The best-supported explanation after the follow-up fixes is:
 
 1. The old all-`highBar` viewer attach failure was partly caused by the plugin still performing the known-bad in-process server bind in client-mode.
-2. After fixing that, a second bug remains.
-3. That second bug is triggered when `highBar` is also the active coordinator owner and client-mode relay is live.
+2. After fixing that, the remaining failure was triggered when `highBar` was also the active coordinator owner and client-mode relay was live.
+3. The final matching mechanism was active coordinator client setup happening during Spring's pregame network join path. Deferring coordinator client construction until live frame startup keeps that path clear for graphical spectator attach.
 
-The most likely remaining hot path is one of:
+The hot paths addressed by the follow-up fixes are:
 
-- `CoordinatorClient::SendHeartbeat(...)`
-- `CoordinatorClient::StartCommandChannel(...)`
 - `CoordinatorClient::PushStateUpdate(...)`
-- some interaction between owner-side relay activity and the headless host's responsiveness to remote spectator joins
+- `CoordinatorClient` construction
+- `CGrpcGatewayModule::FlushDelta(...)`
+- `CGrpcGatewayModule::EmitKeepAlive(...)`
+- `CGrpcGatewayModule::BroadcastSnapshot(...)`
+- `CGrpcGatewayModule::OnFrameTick(...)`
 
-This report does **not** prove which of those is the exact mechanism. It does prove the narrower failure envelope.
+The graphical attach fix is now proven end-to-end on the local viewer-capable host. The watched run still ended with `bootstrap_failed: no commander within 30s`, which is separate from the spectator attach failure.
 
 ## 13. Recommended next steps
 
-The next debugging pass should target the active coordinator-owner path directly.
+The next debugging pass should target the live coverage/bootstrap path, not BNV attach.
 
 Recommended sequence:
 
-1. Add temporary tracing around:
-   - `CoordinatorClient::SendHeartbeat`
-   - `CoordinatorClient::StartCommandChannel`
-   - `CoordinatorClient::PushStateUpdate`
-2. Re-run the two matched cases:
-   - `highBar` loaded, no active owner
-   - `highBar` loaded, active owner
-3. Compare:
-   - engine responsiveness during the first 10 seconds
-   - relay call cadence
-   - whether the plugin blocks in a synchronous coordinator RPC before the spectator join window completes
-4. Only after that decide whether the fix belongs in:
-   - `CoordinatorClient`
-   - `OnFrameTick`
-   - `FlushDelta`
-   - the coordinator example relay itself
+1. Investigate why watched Itertesting still reports `bootstrap_failed: no commander within 30s`.
+2. Compare coordinator stream startup and game-frame advancement after the deferred coordinator-client change.
+3. Decide whether the live workflow needs an earlier coordinator connection phase that still stays out of pregame spectator attach, or whether the bootstrap issue is in the cheat startscript/provisioning path.
 
 ## 14. Bottom line
 
@@ -334,6 +327,36 @@ The accurate version is:
 
 - the rename changed the active slot and ownership topology
 - that exposed a real plugin bug, which is now fixed in the working tree
-- and it exposed a second, still-open bug in the active coordinator-owner path
+- and it exposed a second bug in the active coordinator-owner path, now addressed by moving coordinator push I/O off the engine thread and deferring coordinator client construction until after pregame
 
 That is the current state of the evidence.
+
+## 15. Follow-up fixes
+
+The active coordinator-owner path had two issues:
+
+1. `CGrpcGatewayModule` pushed state updates from engine-thread flush paths into `CoordinatorClient::PushStateUpdate(...)`, and that method performed synchronous gRPC `ClientWriter::Write(...)` calls. Under coordinator backpressure, stream setup, or write blocking, the host engine thread could stall.
+2. `CoordinatorClient` itself was constructed during Spring's pregame load/join path. In the active-owner case, that was enough to make the graphical spectator timeout before the host logged a remote connection attempt.
+
+Fixes applied:
+
+- `CoordinatorClient::PushStateUpdate(...)` now only enqueues the state update into a bounded in-memory queue.
+- A dedicated push worker owns the long-lived `PushState` client-streaming RPC and performs `Write(...)` calls off the Spring engine thread.
+- The queue drops the oldest pending update under sustained backpressure instead of blocking the host loop.
+- Shutdown cancels the active push context and joins the worker before coordinator teardown.
+- `CGrpcGatewayModule` records the coordinator endpoint during construction but defers active `CoordinatorClient` construction until `OnFrameTick(...)` observes the first live frame.
+
+Validation performed after the fixes:
+
+- `cmake --build ~/recoil-engine/build --target BARb -j2` passed.
+- `uv run --project clients/python pytest clients/python/tests/behavioral_coverage/test_bnv_watch.py clients/python/tests/behavioral_coverage/test_watch_registry.py clients/python/tests/behavioral_coverage/test_itertesting_runner.py clients/python/tests/behavioral_coverage/test_itertesting_report.py` passed: 76 tests.
+- `tests/headless/test_live_run_viewer.sh` passed after updating its stale `BARb` assertion to the current `highBar` slot name.
+- `HIGHBAR_ITERTESTING_WATCH=true HIGHBAR_ITERTESTING_MAX_IMPROVEMENT_RUNS=0 tests/headless/itertesting.sh` passed as a wrapper command and validated graphical attach:
+  - host log: `Connection attempt from HighBarV3Watch`
+  - host log: `Spectator HighBarV3Watch finished loading and is now ingame`
+  - viewer log: `received local player number 1`
+  - manifest: `viewer_access.availability_state=available`
+
+Remaining non-attach issue:
+
+- The same watched Itertesting run still ended with `bootstrap_failed: no commander within 30s`; the viewer attach problem is fixed, but live command coverage still has a bootstrap/provisioning blocker.

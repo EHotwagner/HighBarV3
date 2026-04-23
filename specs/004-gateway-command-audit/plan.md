@@ -96,7 +96,7 @@ tracked locations and one build-output location:
   per FR-012 — reproduction MUST NOT depend on ad-hoc `/tmp/*.py`).
 - **Build output**: `build/reports/004-*.{md,csv,log}` — reproduced
   evidence files cited by the audit rows. Gitignored per the 003
-  convention (`reports/003-macro-build-live-run.md` §7 and SC-007).
+  convention (`reports/2026-04-22-06h06min-003-macro-build-live-run.md` §7 and SC-007).
 
 No persistent state on the plugin side — the feature is audit-only.
 
@@ -364,7 +364,7 @@ tests/headless/scripts/cheats.startscript         # NEW — copy of minimal.star
 # Phase-2 smoke-run report (FR-008 artifact)
 build/reports/004-phase2-smoke.md                # NEW — companion to reports/003-macro-
                                                  #        build-live-run.md and
-                                                 #        003-macro-build-live-run-2.md.
+                                                 #        2026-04-22-06h58min-003-macro-build-live-run-2.md.
                                                  #        Records the enable_builtin=false
                                                  #        Phase-2 run of the report-1 §4
                                                  #        4-step chain with per-step

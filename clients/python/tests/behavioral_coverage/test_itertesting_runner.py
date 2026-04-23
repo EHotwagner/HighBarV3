@@ -139,6 +139,7 @@ def _seed_graphical_watch_context(monkeypatch, binary: Path, *, pid: str = "101"
         "tests/headless/scripts/minimal.startscript",
     )
     monkeypatch.setenv("HIGHBAR_WRITE_DIR", "/tmp/highbar-write")
+    monkeypatch.setattr(bnv_watch, "_pid_is_running", lambda checked_pid: True)
 
 
 def _active_watch_session(run_id: str) -> WatchedRunSession:

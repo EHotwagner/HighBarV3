@@ -51,6 +51,7 @@ class Relay:
         # Per-subscriber Queue, unbounded (best-effort; real impl would bound).
         self._state_subs_lock = threading.Lock()
         self._state_subs = []  # list[queue.Queue[state_pb2.StateUpdate]]
+        self._latest_snapshot = None
         # Command forward: SubmitCommands pushes here, OpenCommandChannel pulls.
         # One central queue for now (future: per-plugin-session).
         self.cmd_forward = queue.Queue()
@@ -64,6 +65,11 @@ class Relay:
         q = queue.Queue(maxsize=8192)
         with self._state_subs_lock:
             self._state_subs.append(q)
+            if self._latest_snapshot is not None:
+                try:
+                    q.put_nowait(self._latest_snapshot)
+                except queue.Full:
+                    pass
         return q
 
     def remove_state_subscriber(self, q):
@@ -78,6 +84,8 @@ class Relay:
         if update.seq > self.max_seq_seen:
             self.max_seq_seen = update.seq
         with self._state_subs_lock:
+            if update.HasField("snapshot"):
+                self._latest_snapshot = update
             for q in self._state_subs:
                 try:
                     q.put_nowait(update)
