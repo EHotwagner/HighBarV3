@@ -24,6 +24,8 @@
 #include "spring/SpringCallback.h"
 
 #include <climits>
+#include <exception>
+#include <string>
 
 namespace circuit::grpc {
 
@@ -86,6 +88,63 @@ int TimeoutOf(const ::highbar::v1::AICommand& cmd) {
 	}
 	return t <= 0 ? INT_MAX : t;
 }
+
+class ScopedCheatEnable {
+public:
+	ScopedCheatEnable(::circuit::CCircuitAI* ai, const char* command_name)
+		: ai_(ai)
+		, cheats_((ai != nullptr) ? ai->GetCheats() : nullptr)
+		, command_name_(command_name)
+	{}
+
+	bool EnsureActive() {
+		if (cheats_ == nullptr) {
+			return false;
+		}
+		try {
+			was_enabled_ = cheats_->IsEnabled();
+			if (!was_enabled_) {
+				if (!cheats_->SetEnabled(true)) {
+					LogError(ai_, "CommandDispatch",
+					         std::string(command_name_) + ": unable to enable cheats");
+					return false;
+				}
+				restore_disabled_ = true;
+			}
+			return true;
+		} catch (const std::exception& e) {
+			LogError(ai_, "CommandDispatch",
+			         std::string(command_name_) + ": cheat enable failed: " + e.what());
+			return false;
+		} catch (...) {
+			LogError(ai_, "CommandDispatch",
+			         std::string(command_name_) + ": cheat enable failed: unknown exception");
+			return false;
+		}
+	}
+
+	~ScopedCheatEnable() {
+		if (!restore_disabled_ || cheats_ == nullptr) {
+			return;
+		}
+		try {
+			(void)cheats_->SetEnabled(false);
+		} catch (const std::exception& e) {
+			LogError(ai_, "CommandDispatch",
+			         std::string(command_name_) + ": cheat disable failed: " + e.what());
+		} catch (...) {
+			LogError(ai_, "CommandDispatch",
+			         std::string(command_name_) + ": cheat disable failed: unknown exception");
+		}
+	}
+
+private:
+	::circuit::CCircuitAI* ai_ = nullptr;
+	springai::Cheats* cheats_ = nullptr;
+	const char* command_name_ = "";
+	bool was_enabled_ = false;
+	bool restore_disabled_ = false;
+};
 
 }  // namespace
 
@@ -556,24 +615,42 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 		// Cheats::SetMyIncomeMultiplier — only applies under cheats.
 		auto* c = ai->GetCheats();
 		if (c == nullptr) return false;
-		if (!ai->IsCheating()) {
-			LogError(ai, "CommandDispatch",
-			         "set_my_income_share_direct: cheats disabled");
+		ScopedCheatEnable cheat_scope(ai, "set_my_income_share_direct");
+		if (!cheat_scope.EnsureActive()) {
 			return false;
 		}
-		c->SetMyIncomeMultiplier(cmd.set_my_income_share_direct().share());
+		try {
+			c->SetMyIncomeMultiplier(cmd.set_my_income_share_direct().share());
+		} catch (const std::exception& e) {
+			LogError(ai, "CommandDispatch",
+			         std::string("set_my_income_share_direct: ") + e.what());
+			return false;
+		} catch (...) {
+			LogError(ai, "CommandDispatch",
+			         "set_my_income_share_direct: unknown exception");
+			return false;
+		}
 		return true;
 	}
 	case C::kSetShareLevel: {
 		// Same situation as set_my_income_share_direct. Pass through.
 		auto* c = ai->GetCheats();
 		if (c == nullptr) return false;
-		if (!ai->IsCheating()) {
-			LogError(ai, "CommandDispatch",
-			         "set_share_level: cheats disabled");
+		ScopedCheatEnable cheat_scope(ai, "set_share_level");
+		if (!cheat_scope.EnsureActive()) {
 			return false;
 		}
-		c->SetMyIncomeMultiplier(cmd.set_share_level().share_level());
+		try {
+			c->SetMyIncomeMultiplier(cmd.set_share_level().share_level());
+		} catch (const std::exception& e) {
+			LogError(ai, "CommandDispatch",
+			         std::string("set_share_level: ") + e.what());
+			return false;
+		} catch (...) {
+			LogError(ai, "CommandDispatch",
+			         "set_share_level: unknown exception");
+			return false;
+		}
 		return true;
 	}
 
@@ -702,6 +779,10 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 	case C::kGiveMeNewUnit: {
 		auto* c = ai->GetCheats();
 		if (c == nullptr) return false;
+		ScopedCheatEnable cheat_scope(ai, "give_me_new_unit");
+		if (!cheat_scope.EnsureActive()) {
+			return false;
+		}
 		const auto def_id = cmd.give_me_new_unit().unit_def_id();
 		if (def_id <= 0) {
 			LogError(ai, "CommandDispatch",
@@ -711,8 +792,24 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 		auto* def = ai->GetCircuitDefSafe(
 			static_cast<CCircuitDef::Id>(def_id));
 		if (def == nullptr || def->GetDef() == nullptr) return false;
-		(void)c->GiveMeUnit(def->GetDef(),
-		                    ToFloat3(cmd.give_me_new_unit().position()));
+		try {
+			const int spawned_unit_id = c->GiveMeUnit(
+				def->GetDef(),
+				ToFloat3(cmd.give_me_new_unit().position()));
+			if (spawned_unit_id <= 0) {
+				LogError(ai, "CommandDispatch",
+				         "give_me_new_unit: engine returned unit_id <= 0");
+				return false;
+			}
+		} catch (const std::exception& e) {
+			LogError(ai, "CommandDispatch",
+			         std::string("give_me_new_unit: ") + e.what());
+			return false;
+		} catch (...) {
+			LogError(ai, "CommandDispatch",
+			         "give_me_new_unit: unknown exception");
+			return false;
+		}
 		return true;
 	}
 
@@ -737,6 +834,10 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 	case C::kGiveMe: {
 		auto* c = ai->GetCheats();
 		if (c == nullptr) return false;
+		ScopedCheatEnable cheat_scope(ai, "give_me");
+		if (!cheat_scope.EnsureActive()) {
+			return false;
+		}
 		if (cmd.give_me().amount() <= 0.0f) {
 			LogError(ai, "CommandDispatch",
 			         "give_me: invalid amount <= 0");
@@ -748,7 +849,19 @@ bool DispatchCommand(::circuit::CCircuitAI* ai,
 		                   ? "Metal" : "Energy";
 		auto* res = cb->GetResourceByName(name);
 		if (res == nullptr) return false;
-		c->GiveMeResource(res, cmd.give_me().amount());
+		try {
+			c->GiveMeResource(res, cmd.give_me().amount());
+		} catch (const std::exception& e) {
+			delete res;
+			LogError(ai, "CommandDispatch",
+			         std::string("give_me: ") + e.what());
+			return false;
+		} catch (...) {
+			delete res;
+			LogError(ai, "CommandDispatch",
+			         "give_me: unknown exception");
+			return false;
+		}
 		delete res;
 		return true;
 	}

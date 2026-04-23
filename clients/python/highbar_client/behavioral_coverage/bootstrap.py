@@ -133,6 +133,24 @@ def compute_manifest(own_units: Iterable[Any],
     return tuple(sorted(counts.items(), key=lambda kv: kv[0]))
 
 
+def compute_bootstrap_manifest(
+    own_units: Iterable[Any],
+    def_id_by_name: dict[str, int],
+) -> tuple[tuple[str, int], ...]:
+    """Return only the bootstrap-plan unit counts needed for reset.
+
+    Seeded live runs can include many incidental or preexisting units.
+    Reset only knows how to reissue the explicit bootstrap plan, so the
+    stored manifest must be limited to those def names.
+    """
+    allowed = {step.def_id for step in DEFAULT_BOOTSTRAP_PLAN}
+    return tuple(
+        (name, count)
+        for name, count in compute_manifest(own_units, def_id_by_name)
+        if name in allowed
+    )
+
+
 def manifest_shortages(current: tuple[tuple[str, int], ...],
                         target: tuple[tuple[str, int], ...]) -> dict[str, int]:
     """Diff `current` against `target` manifest. Returns {def_name:
@@ -554,6 +572,7 @@ __all__ = [
     "DEFAULT_BOOTSTRAP_PLAN",
     "BootstrapContext",
     "compute_manifest",
+    "compute_bootstrap_manifest",
     "manifest_shortages",
     "critical_path_seconds",
     "validate_plan",

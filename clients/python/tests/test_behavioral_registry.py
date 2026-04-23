@@ -27,6 +27,7 @@ from highbar_client.behavioral_coverage.bootstrap import (
     BootstrapContext,
     DEFAULT_BOOTSTRAP_PLAN,
     Vector3,
+    compute_bootstrap_manifest,
 )
 from highbar_client.behavioral_coverage.capabilities import CAPABILITY_TAGS
 from highbar_client.behavioral_coverage.registry import (
@@ -1348,6 +1349,30 @@ def test_execute_live_bootstrap_uses_explicit_seed_path(monkeypatch):
     assert ctx.capability_units["cloakable"] == 107
 
 
+def test_compute_bootstrap_manifest_excludes_non_bootstrap_units():
+    units = (
+        FakeOwnUnit(101, 11, FakePosition(106.0, 0.0, 20.0), 100.0, 100.0),
+        FakeOwnUnit(102, 12, FakePosition(-86.0, 0.0, 20.0), 100.0, 100.0),
+        FakeOwnUnit(103, 13, FakePosition(170.0, 0.0, 116.0), 2050.0, 2050.0),
+        FakeOwnUnit(104, 999, FakePosition(200.0, 0.0, 200.0), 50.0, 50.0),
+    )
+
+    manifest = compute_bootstrap_manifest(
+        units,
+        {
+            "armmex": 11,
+            "armsolar": 12,
+            "armvp": 13,
+            "armap": 14,
+            "armrad": 15,
+            "armck": 16,
+            "armpeep": 17,
+        },
+    )
+
+    assert manifest == (("armmex", 1), ("armsolar", 1), ("armvp", 1))
+
+
 def test_execute_live_bootstrap_skips_commander_built_factories_when_downstream_units_preexist(
     monkeypatch,
 ):
@@ -1586,6 +1611,89 @@ def test_reset_live_context_to_manifest_reissues_missing_builder(monkeypatch):
     assert len(dispatched) == 1
     assert dispatched[0].target_unit_id == 103
     assert dispatched[0].commands[0].build_unit.to_build_unit_def_id == 16
+    assert refreshed.capability_units["builder"] == 106
+
+
+def test_reset_live_context_to_manifest_uses_seeded_reissue_when_cheats_enabled(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    factory_ground = FakeOwnUnit(
+        unit_id=103,
+        def_id=13,
+        position=FakePosition(170.0, 0.0, 116.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    current = FakeSnapshot(
+        own_units=(commander, factory_ground),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    restored_builder = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    restored = FakeSnapshot(
+        own_units=(commander, factory_ground, restored_builder),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=11,
+    )
+    shared = {"snapshots": [current], "deltas": []}
+    pending_snapshots = [restored]
+    seeded_steps = []
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42, "factory_ground": 103},
+        manifest=(("armck", 1), ("armvp", 1)),
+        cheats_enabled=True,
+        def_id_by_name={"armvp": 13, "armck": 16},
+        observed_own_units={42: commander, 103: factory_ground},
+    )
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._refreshing_snapshot",
+        lambda _stub, _shared, token=None, timeout_s=3.0: shared["snapshots"][-1],
+    )
+
+    def fake_issue_bootstrap_seed_step(
+        _stub,
+        _shared,
+        _ctx,
+        step,
+        *,
+        baseline_ids,
+        token=None,
+        static_map=None,
+        snapshot=None,
+    ):
+        del baseline_ids, token, static_map, snapshot
+        seeded_steps.append(step.def_id)
+        shared["snapshots"].append(pending_snapshots.pop(0))
+        return restored_builder
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._issue_bootstrap_seed_step",
+        fake_issue_bootstrap_seed_step,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, refreshed_ctx, wait_timeout_s=0.0, token=None: refreshed_ctx,
+    )
+
+    refreshed = _reset_live_context_to_manifest(object(), shared, ctx, timeout_s=10.0, token="tok")
+
+    assert seeded_steps == ["armck"]
     assert refreshed.capability_units["builder"] == 106
 
 

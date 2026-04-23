@@ -982,9 +982,20 @@ void CGrpcGatewayModule::DrainCommandQueue() {
 				"dispatch end kind=" + std::string(CommandKind(cmd))
 				+ " target=" + std::to_string(*target_id));
 		} catch (...) {
+			const std::string reason = grpc::ReasonCodeFor(std::current_exception());
+			std::string detail =
+				"dispatch_threw kind=" + std::string(CommandKind(cmd))
+				+ " target=" + std::to_string(*target_id);
+			try {
+				std::rethrow_exception(std::current_exception());
+			} catch (const std::exception& e) {
+				detail += " what=" + std::string(e.what());
+			} catch (...) {
+				detail += " what=unknown";
+			}
 			TransitionToDisabled("dispatch",
-				grpc::ReasonCodeFor(std::current_exception()),
-				"dispatch_threw");
+				reason,
+				detail);
 			return;
 		}
 	}

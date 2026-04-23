@@ -27,6 +27,7 @@ from .bootstrap import (
     BootstrapContext,
     DEFAULT_BOOTSTRAP_PLAN,
     Vector3,
+    compute_bootstrap_manifest,
     compute_manifest,
     fixture_classes_for_command,
     is_transport_dependent_command,
@@ -1000,6 +1001,8 @@ def _wait_for_manifest_match(
     deadline = time.monotonic() + timeout_s
     latest = _latest_snapshot(shared)
     min_frame = (getattr(latest, "frame_number", 0) if latest is not None else 0) + 1
+    last_current: tuple[tuple[str, int], ...] = ()
+    last_shortages: dict[str, int] = {}
     while time.monotonic() < deadline:
         snapshot = _wait_for_snapshot(
             shared,
@@ -1012,9 +1015,16 @@ def _wait_for_manifest_match(
             continue
         min_frame = getattr(snapshot, "frame_number", 0) + 1
         current = compute_manifest(getattr(snapshot, "own_units", ()), ctx.def_id_by_name)
-        if not manifest_shortages(current, ctx.manifest):
+        shortages = manifest_shortages(current, ctx.manifest)
+        last_current = current
+        last_shortages = shortages
+        if not shortages:
             return snapshot
-    raise RuntimeError("timeout waiting for bootstrap manifest to be restored")
+    raise RuntimeError(
+        "timeout waiting for bootstrap manifest to be restored "
+        f"remaining_shortages={last_shortages} current_manifest={list(last_current)} "
+        f"target_manifest={list(ctx.manifest)}"
+    )
 
 
 def _invoke_callback(
@@ -1549,6 +1559,23 @@ def _attempt_transport_provisioning(
         )
         return ctx
 
+    previously_dispatched = {
+        variant_id
+        for variant_id, state in ctx.transport_build_requests.items()
+        if state in {"dispatched", "dispatched_waited_no_ready_transport"}
+    }
+    if previously_dispatched and wait_timeout_s > 0.0:
+        _set_transport_debug(
+            ctx,
+            "provisioning_action=wait_prior_dispatch",
+            f"attempted_variants={','.join(sorted(previously_dispatched))}",
+        )
+        waited = _wait_for_transport_fixture(shared, ctx, wait_timeout_s)
+        if waited.fixture_unit_ids.get("transport_unit"):
+            for variant_id in previously_dispatched:
+                waited.transport_build_requests[variant_id] = "ready"
+            return waited
+
     factory_air_id = ctx.capability_units.get("factory_air")
     factory_air_unit = ctx.observed_own_units.get(factory_air_id or 0)
     if factory_air_unit is None or not _unit_is_ready_fixture_unit(factory_air_unit):
@@ -1561,11 +1588,9 @@ def _attempt_transport_provisioning(
         if not transport_def_id:
             continue
         if ctx.transport_build_requests.get(variant.variant_id) in {
-            "dispatched",
             "pending",
             "ready",
             "dispatch_failed",
-            "dispatched_waited_no_ready_transport",
         }:
             continue
         try:
@@ -1925,6 +1950,7 @@ def _execute_live_bootstrap(
         starting_snapshot,
         ctx,
     )
+    seeded_bootstrap_completed = False
     if enable_seeded_path and readiness_status != "seeded_ready":
         try:
             ctx, seeded_steps = _attempt_seeded_bootstrap(
@@ -1958,6 +1984,7 @@ def _execute_live_bootstrap(
         ctx = _refresh_bootstrap_context(shared, ctx)
         readiness_status = "seeded_ready"
         readiness_path = "explicit_seed"
+        seeded_bootstrap_completed = True
         readiness_reason = (
             "explicit seed path provisioned bootstrap readiness via cheat-backed setup: "
             + (", ".join(seeded_steps) if seeded_steps else "economy_seed_only")
@@ -1985,6 +2012,31 @@ def _execute_live_bootstrap(
                 f"{readiness_reason} {_economy_debug_string(starting_snapshot)}"
             ),
             ctx=ctx,
+        )
+
+    if seeded_bootstrap_completed:
+        final_snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=5.0) or _latest_snapshot(shared)
+        if final_snapshot is None:
+            raise BootstrapExecutionError("seeded bootstrap completed without a final snapshot", ctx=ctx)
+        ctx.manifest = compute_bootstrap_manifest(
+            getattr(final_snapshot, "own_units", ()),
+            ctx.def_id_by_name,
+        )
+        print(f"bootstrap-manifest: {list(ctx.manifest)}", file=sys.stderr, flush=True)
+        ctx = _refresh_bootstrap_context(shared, ctx)
+        _capture_callback_diagnostic(
+            stub,
+            shared,
+            ctx,
+            capture_stage="late_refresh",
+            token=token,
+        )
+        return _attempt_transport_provisioning(
+            stub,
+            shared,
+            ctx,
+            wait_timeout_s=6.0,
+            token=token,
         )
 
     commander_steps = tuple(
@@ -2104,7 +2156,10 @@ def _execute_live_bootstrap(
     final_snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=5.0) or _latest_snapshot(shared)
     if final_snapshot is None:
         raise BootstrapExecutionError("bootstrap completed without a final snapshot", ctx=ctx)
-    ctx.manifest = compute_manifest(getattr(final_snapshot, "own_units", ()), ctx.def_id_by_name)
+    ctx.manifest = compute_bootstrap_manifest(
+        getattr(final_snapshot, "own_units", ()),
+        ctx.def_id_by_name,
+    )
     print(f"bootstrap-manifest: {list(ctx.manifest)}", file=sys.stderr, flush=True)
     ctx = _refresh_bootstrap_context(shared, ctx)
     _capture_callback_diagnostic(
@@ -2114,7 +2169,13 @@ def _execute_live_bootstrap(
         capture_stage="late_refresh",
         token=token,
     )
-    return _attempt_transport_provisioning(stub, shared, ctx, token=token)
+    return _attempt_transport_provisioning(
+        stub,
+        shared,
+        ctx,
+        wait_timeout_s=6.0,
+        token=token,
+    )
 
 
 def _reissue_manifest_shortages(
@@ -2134,6 +2195,27 @@ def _reissue_manifest_shortages(
         if not resolved_def_id:
             raise RuntimeError(f"runtime def id for {def_name} was not resolved")
         for _ in range(shortages[def_name]):
+            if ctx.cheats_enabled:
+                snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=3.0) or _latest_snapshot(shared)
+                if snapshot is None:
+                    raise RuntimeError("no live snapshot available for seeded manifest reset")
+                completed = _issue_bootstrap_seed_step(
+                    stub,
+                    shared,
+                    ctx,
+                    step,
+                    baseline_ids={
+                        unit.unit_id
+                        for unit in getattr(snapshot, "own_units", ())
+                        if getattr(unit, "def_id", 0) == resolved_def_id
+                    },
+                    token=token,
+                    snapshot=snapshot,
+                )
+                ctx.capability_units[step.capability] = completed.unit_id
+                ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+                ctx = _refresh_bootstrap_context(shared, ctx)
+                continue
             if step.builder_capability == "commander":
                 if ctx.commander_unit_id <= 0:
                     raise RuntimeError("commander_lost")
@@ -2199,7 +2281,13 @@ def _reset_live_context_to_manifest(
     ctx = _reissue_manifest_shortages(stub, shared, ctx, shortages, token=token)
     _wait_for_manifest_match(shared, ctx, timeout_s=timeout_s)
     refreshed = _refresh_bootstrap_context(shared, ctx)
-    return _attempt_transport_provisioning(stub, shared, refreshed, token=token)
+    return _attempt_transport_provisioning(
+        stub,
+        shared,
+        refreshed,
+        wait_timeout_s=min(timeout_s, 6.0),
+        token=token,
+    )
 
 
 def _has_fixture_unit(ctx: BootstrapContext, fixture_class: str) -> bool:
