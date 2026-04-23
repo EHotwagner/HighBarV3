@@ -1302,6 +1302,21 @@ def _economy_obviously_starved(snapshot: Any | None) -> bool:
     return metal < 1.0 and metal_income <= 0.0
 
 
+def _bootstrap_readiness_is_obviously_starved(
+    snapshot: Any | None,
+    ctx: BootstrapContext,
+    first_required_step: Any | None,
+) -> bool:
+    if not _economy_obviously_starved(snapshot):
+        return False
+    if first_required_step is None:
+        return False
+    if getattr(first_required_step, "def_id", "") == "armmex":
+        return True
+    mex_def_id = ctx.def_id_by_name.get("armmex", 0)
+    return not bool(_ready_units_for_def(snapshot, mex_def_id))
+
+
 def _record_bootstrap_readiness(
     ctx: BootstrapContext,
     *,
@@ -1579,7 +1594,11 @@ def _assess_bootstrap_readiness(
                 f"{optional_missing}"
             ),
         )
-    if _economy_obviously_starved(starting_snapshot):
+    if _bootstrap_readiness_is_obviously_starved(
+        starting_snapshot,
+        ctx,
+        first_required_step,
+    ):
         return (
             "resource_starved",
             "unavailable",
@@ -1931,7 +1950,12 @@ def _attempt_enemy_fixture_provisioning(
 ) -> BootstrapContext:
     refreshed = _refresh_bootstrap_context(shared, ctx)
     if refreshed.enemy_seed_id is not None:
-        return refreshed
+        return _attempt_damaged_friendly_provisioning(
+            stub,
+            shared,
+            refreshed,
+            token=token,
+        )
 
     snapshot = (
         _refreshing_snapshot(stub, shared, token=token, timeout_s=min(5.0, timeout_s))
@@ -1945,7 +1969,12 @@ def _attempt_enemy_fixture_provisioning(
         for enemy in getattr(snapshot, "visible_enemies", ())
     }
     if baseline_enemy_ids:
-        return refreshed
+        return _attempt_damaged_friendly_provisioning(
+            stub,
+            shared,
+            refreshed,
+            token=token,
+        )
 
     target_position = _find_clear_build_position(
         Vector3(
@@ -1988,7 +2017,91 @@ def _attempt_enemy_fixture_provisioning(
             "enemy_fixture_provision_failed: "
             f"spawn_pos={_format_vector3(target_position)} visible enemy did not refresh"
         )
-    return refreshed
+    return _attempt_damaged_friendly_provisioning(
+        stub,
+        shared,
+        refreshed,
+        token=token,
+    )
+
+
+def _damaged_friendly_candidate(ctx: BootstrapContext) -> Any | None:
+    preferred_fixture_classes = (
+        "builder",
+        "payload_unit",
+        "cloakable",
+        "transport_unit",
+    )
+    for fixture_class in preferred_fixture_classes:
+        unit_id = (
+            ctx.fixture_unit_ids.get(fixture_class)
+            or ctx.capability_units.get(fixture_class)
+        )
+        unit = ctx.observed_own_units.get(unit_id, None)
+        if unit is None or not _unit_is_ready_fixture_unit(unit):
+            continue
+        if float(getattr(unit, "health", 0.0)) < float(getattr(unit, "max_health", 0.0)):
+            return unit
+        return unit
+
+    for unit in ctx.observed_own_units.values():
+        if getattr(unit, "unit_id", 0) == ctx.commander_unit_id:
+            continue
+        if not _unit_is_ready_fixture_unit(unit):
+            continue
+        if float(getattr(unit, "health", 0.0)) < float(getattr(unit, "max_health", 0.0)):
+            return unit
+        return unit
+    return None
+
+
+def _attempt_damaged_friendly_provisioning(
+    stub: Any,
+    shared: dict,
+    ctx: BootstrapContext,
+    *,
+    token: str | None = None,
+    timeout_s: float = 3.0,
+) -> BootstrapContext:
+    refreshed = _refresh_bootstrap_context(shared, ctx)
+    if refreshed.fixture_unit_ids.get("damaged_friendly"):
+        return refreshed
+
+    candidate = _damaged_friendly_candidate(refreshed)
+    if candidate is None:
+        return refreshed
+
+    candidate_health = float(getattr(candidate, "health", 0.0))
+    candidate_max_health = float(getattr(candidate, "max_health", 0.0))
+    if candidate_health < candidate_max_health:
+        refreshed.fixture_unit_ids["damaged_friendly"] = candidate.unit_id
+        refreshed.fixture_positions["damaged_friendly"] = _vector3_from_position(
+            candidate.position
+        )
+        return refreshed
+
+    damage_amount = max(1.0, min(25.0, candidate_health - 1.0))
+    _dispatch(
+        stub,
+        _call_lua_rules_batch(
+            f"highbar_damage_unit:{candidate.unit_id}:{damage_amount:.1f}"
+        ),
+        token=token,
+    )
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        _refreshing_snapshot(
+            stub,
+            shared,
+            token=token,
+            timeout_s=min(0.5, max(0.1, deadline - time.monotonic())),
+        )
+        refreshed = _refresh_bootstrap_context(shared, refreshed)
+        if refreshed.fixture_unit_ids.get("damaged_friendly"):
+            return refreshed
+        time.sleep(0.1)
+    return _refresh_bootstrap_context(shared, refreshed)
 
 
 def _refresh_bootstrap_context(shared: dict, ctx: BootstrapContext) -> BootstrapContext:

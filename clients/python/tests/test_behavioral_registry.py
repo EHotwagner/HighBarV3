@@ -14,6 +14,7 @@ import highbar_client.behavioral_coverage as behavioral_coverage
 from highbar_client.behavioral_coverage import REGISTRY
 from highbar_client.behavioral_coverage import (
     _assess_bootstrap_readiness,
+    _attempt_damaged_friendly_provisioning,
     _attempt_enemy_fixture_provisioning,
     _attempt_transport_provisioning,
     _can_skip_bootstrap_step_failure,
@@ -449,6 +450,77 @@ def test_attempt_enemy_fixture_provisioning_skips_spawn_when_enemy_visible(monke
 
     assert refreshed.enemy_seed_id == 123
     assert refreshed.fixture_unit_ids["custom_target"] == 123
+
+
+def test_attempt_damaged_friendly_provisioning_damages_builder_fixture(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    damaged_builder = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=665.0,
+        max_health=690.0,
+    )
+    before = FakeSnapshot(
+        own_units=(commander, builder),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    after = FakeSnapshot(
+        own_units=(commander, damaged_builder),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=20,
+    )
+    shared = {"snapshots": [before], "deltas": []}
+    dispatched = []
+
+    def fake_refreshing_snapshot(_stub, _shared, token=None, timeout_s=5.0):
+        del _stub, token, timeout_s
+        _shared["snapshots"][-1] = after
+        return after
+
+    def fake_dispatch(_stub, batch, token=None):
+        del _stub, token
+        dispatched.append(batch)
+        return None
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._refreshing_snapshot",
+        fake_refreshing_snapshot,
+    )
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fake_dispatch)
+
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42, "builder": 106},
+        fixture_unit_ids={"builder": 106},
+        observed_own_units={42: commander, 106: builder},
+    )
+
+    refreshed = _attempt_damaged_friendly_provisioning(object(), shared, ctx, token="tok")
+
+    assert len(dispatched) == 1
+    assert (
+        dispatched[0].commands[0].call_lua_rules.data
+        == "highbar_damage_unit:106:25.0"
+    )
+    assert refreshed.fixture_unit_ids["damaged_friendly"] == 106
 
 
 def test_custom_builder_prefers_native_cloak_command_when_cloakable_exists():
@@ -1423,6 +1495,54 @@ def test_assess_bootstrap_readiness_keeps_armmex_as_first_required_step_when_sta
     assert "resource-starved state" in reason
 
 
+def test_assess_bootstrap_readiness_allows_later_commander_steps_after_mex_exists():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    mex = FakeOwnUnit(101, 11, FakePosition(106.0, 0.0, 20.0), 100.0, 100.0)
+    solar = FakeOwnUnit(102, 12, FakePosition(-86.0, 0.0, 20.0), 100.0, 100.0)
+    vehicle_factory = FakeOwnUnit(103, 13, FakePosition(170.0, 0.0, 116.0), 1000.0, 1000.0)
+    snapshot = FakeSnapshot(
+        own_units=(commander, mex, solar, vehicle_factory),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+        economy=type(
+            "Economy",
+            (),
+            {
+                "metal": 0.0,
+                "metal_income": 0.0,
+                "metal_storage": 2250.0,
+                "energy": 6535.2,
+                "energy_income": 0.0,
+                "energy_storage": 8512.0,
+            },
+        )(),
+    )
+    ctx = BootstrapContext(
+        capability_units={"commander": 42, "factory_ground": 103},
+        def_id_by_name={
+            "armmex": 11,
+            "armsolar": 12,
+            "armvp": 13,
+            "armap": 14,
+            "armrad": 15,
+        },
+    )
+
+    status, path, first_required_step, reason = _assess_bootstrap_readiness(snapshot, ctx)
+
+    assert status == "natural_ready"
+    assert path == "prepared_state"
+    assert first_required_step == "armap"
+    assert "can start commander bootstrap" in reason
+
+
 def test_execute_live_bootstrap_records_resource_starved_readiness(monkeypatch):
     commander = FakeOwnUnit(
         unit_id=42,
@@ -1492,6 +1612,104 @@ def test_execute_live_bootstrap_records_resource_starved_readiness(monkeypatch):
     assert 47 in err.ctx.runtime_capability_profile["supported_callbacks"]
     assert 40 in err.ctx.runtime_capability_profile["supported_callbacks"]
     assert err.ctx.map_source_decisions[0]["selected_source"] == "missing"
+
+
+def test_execute_live_bootstrap_does_not_short_circuit_later_commander_steps_after_mex(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    mex = FakeOwnUnit(101, 11, FakePosition(106.0, 0.0, 20.0), 100.0, 100.0)
+    solar = FakeOwnUnit(102, 12, FakePosition(-86.0, 0.0, 20.0), 100.0, 100.0)
+    vehicle_factory = FakeOwnUnit(103, 13, FakePosition(170.0, 0.0, 116.0), 1000.0, 1000.0)
+    snapshot = FakeSnapshot(
+        own_units=(commander, mex, solar, vehicle_factory),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+        economy=type(
+            "Economy",
+            (),
+            {
+                "metal": 0.0,
+                "metal_income": 0.0,
+                "metal_storage": 2250.0,
+                "energy": 6535.2,
+                "energy_income": 0.0,
+                "energy_storage": 8512.0,
+            },
+        )(),
+    )
+    shared = {"snapshots": [snapshot], "deltas": []}
+    attempted_defs: list[str] = []
+
+    def fake_resolve_bootstrap_defs(_stub, ctx, token=None):
+        del token
+        ctx.def_id_by_name.update(
+            {
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+                "armap": 14,
+                "armrad": 15,
+            }
+        )
+
+    def fake_issue_bootstrap_build_step(
+        _stub,
+        _shared,
+        ctx,
+        step,
+        *,
+        builder_unit_id,
+        target_position,
+        baseline_ids,
+        token=None,
+        static_map=None,
+        failure_snapshot=None,
+    ):
+        del ctx, builder_unit_id, target_position, baseline_ids, token, static_map, failure_snapshot
+        attempted_defs.append(step.def_id)
+        raise RuntimeError("saw_new_candidate=0 timeout waiting for bootstrap unit")
+
+    monkeypatch.setattr(
+        behavioral_coverage,
+        "_resolve_bootstrap_defs",
+        fake_resolve_bootstrap_defs,
+    )
+    monkeypatch.setattr(
+        behavioral_coverage,
+        "_resolve_supported_transport_defs",
+        lambda _stub, _ctx, token=None: None,
+    )
+    monkeypatch.setattr(
+        behavioral_coverage,
+        "_refreshing_snapshot",
+        lambda _stub, _shared, token=None, timeout_s=5.0: snapshot,
+    )
+    monkeypatch.setattr(
+        behavioral_coverage,
+        "_capture_callback_diagnostic",
+        lambda _stub, _shared, _ctx, capture_stage, token=None: None,
+    )
+    monkeypatch.setattr(
+        behavioral_coverage,
+        "_issue_bootstrap_build_step",
+        fake_issue_bootstrap_build_step,
+    )
+
+    with pytest.raises(behavioral_coverage.BootstrapExecutionError) as exc_info:
+        _execute_live_bootstrap(object(), shared)
+
+    err = exc_info.value
+    assert err.ctx is not None
+    assert err.ctx.bootstrap_readiness is not None
+    assert err.ctx.bootstrap_readiness["readiness_status"] == "natural_ready"
+    assert err.ctx.bootstrap_readiness["first_required_step"] == "armap"
+    assert attempted_defs == ["armap"]
 
 
 def test_execute_live_bootstrap_reuses_existing_ready_plan_units(monkeypatch):

@@ -16,6 +16,7 @@ if not gadgetHandler:IsSyncedCode() then
 end
 
 local MESSAGE_PREFIX = "highbar_spawn_enemy:"
+local DAMAGE_PREFIX = "highbar_damage_unit:"
 local spawnedByAiTeam = {}
 
 local function splitFields(payload)
@@ -52,6 +53,29 @@ local function destroyTrackedUnit(aiTeam)
 end
 
 function gadget:RecvSkirmishAIMessage(aiTeam, dataStr)
+  if dataStr:sub(1, #DAMAGE_PREFIX) == DAMAGE_PREFIX then
+    local fields = splitFields(dataStr:sub(#DAMAGE_PREFIX + 1))
+    local unitID = tonumber(fields[1] or "")
+    local damage = tonumber(fields[2] or "") or 25
+    if not unitID or not Spring.ValidUnitID(unitID) then
+      return "error:invalid_unit"
+    end
+    if Spring.GetUnitTeam(unitID) ~= aiTeam then
+      return "error:not_owned"
+    end
+    local health, maxHealth = Spring.GetUnitHealth(unitID)
+    if not health or not maxHealth then
+      return "error:health_unavailable"
+    end
+    if health <= 1 then
+      return "error:unit_already_critical"
+    end
+    local appliedDamage = math.max(1, math.min(damage, health - 1))
+    local newHealth = math.max(1, health - appliedDamage)
+    Spring.SetUnitHealth(unitID, newHealth)
+    return string.format("%.1f", newHealth)
+  end
+
   if dataStr:sub(1, #MESSAGE_PREFIX) ~= MESSAGE_PREFIX then
     return nil
   end
