@@ -235,15 +235,21 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 		                               const std::string& d) {
 			this->RequestDisable(s, r, d);
 		});
-		service_->Bind(endpoint, &bound_address_);
-
+		const bool client_mode_enabled =
+			(std::getenv("HIGHBAR_COORDINATOR") != nullptr);
 		const std::string transport_name =
 			endpoint.transport == grpc::Transport::kUds ? "uds" : "tcp";
+		if (client_mode_enabled) {
+			bound_address_ = "client-mode-only";
+		} else {
+			service_->Bind(endpoint, &bound_address_);
+		}
+
 		// T023 — startup banner now includes engine pin so the pin is
 		// observable in the log alongside transport and schema.
 		std::string short_sha = grpc::kEngineSha256;
 		if (short_sha.size() > 12) short_sha = short_sha.substr(0, 12);
-		grpc::LogStartup(ai, transport_name, bound_address_,
+		grpc::LogStartup(ai, client_mode_enabled ? "client-mode" : transport_name, bound_address_,
 		                 std::string(::highbar::v1::kSchemaVersion)
 		                 + " engine=" + grpc::kEngineReleaseId
 		                 + " sha256=" + short_sha);

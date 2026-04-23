@@ -131,7 +131,7 @@ if [[ -n "$PLUGIN_SRC" ]]; then
         echo "_launch.sh: plugin file missing: $PLUGIN_SRC" >&2
         exit 1
     fi
-    mkdir -p "$HIGHBAR_DIR/config/dev" "$HIGHBAR_DIR/script/dev"
+    mkdir -p "$HIGHBAR_DIR/config" "$HIGHBAR_DIR/script"
     if [[ -d "$BARB_SEED_DIR/config" ]]; then
         cp -a "$BARB_SEED_DIR/config/." "$HIGHBAR_DIR/config/"
     fi
@@ -140,10 +140,8 @@ if [[ -n "$PLUGIN_SRC" ]]; then
     fi
     cp "$REPO_ROOT/data/AIInfo.lua" "$HIGHBAR_DIR/AIInfo.lua"
     cp "$REPO_ROOT/data/AIOptions.lua" "$HIGHBAR_DIR/AIOptions.lua"
-    cp "$REPO_ROOT/data/config/"*.json "$HIGHBAR_DIR/config/"
-    cp "$REPO_ROOT/data/config/dev/"*.json "$HIGHBAR_DIR/config/dev/"
-    cp "$REPO_ROOT/data/script/"*.as "$HIGHBAR_DIR/script/"
-    cp "$REPO_ROOT/data/script/dev/"*.as "$HIGHBAR_DIR/script/dev/"
+    cp -a "$REPO_ROOT/data/config/." "$HIGHBAR_DIR/config/"
+    cp -a "$REPO_ROOT/data/script/." "$HIGHBAR_DIR/script/"
     cp "$PLUGIN_SRC" "$HIGHBAR_DIR/libSkirmishAI.so"
 elif [[ "$VIEWER_ONLY" != "true" && ! -f "$HIGHBAR_DIR/libSkirmishAI.so" ]]; then
     echo "_launch.sh: highBar AI is not installed at $HIGHBAR_DIR and no plugin artifact was provided" >&2
@@ -152,17 +150,15 @@ fi
 
 if [[ "$VIEWER_ONLY" != "true" ]]; then
     HIGHBAR_GAME_CFG_DIR="$WRITEDIR/LuaRules/Configs/highBar/stable"
-    mkdir -p "$HIGHBAR_GAME_CFG_DIR/config/dev" "$HIGHBAR_GAME_CFG_DIR/script/dev"
+    mkdir -p "$HIGHBAR_GAME_CFG_DIR/config" "$HIGHBAR_GAME_CFG_DIR/script"
     if [[ -d "$BARB_SEED_DIR/config" ]]; then
         cp -a "$BARB_SEED_DIR/config/." "$HIGHBAR_GAME_CFG_DIR/config/"
     fi
     if [[ -d "$BARB_SEED_DIR/script" ]]; then
         cp -a "$BARB_SEED_DIR/script/." "$HIGHBAR_GAME_CFG_DIR/script/"
     fi
-    cp "$REPO_ROOT/data/config/"*.json "$HIGHBAR_GAME_CFG_DIR/config/"
-    cp "$REPO_ROOT/data/config/dev/"*.json "$HIGHBAR_GAME_CFG_DIR/config/dev/"
-    cp "$REPO_ROOT/data/script/"*.as "$HIGHBAR_GAME_CFG_DIR/script/"
-    cp "$REPO_ROOT/data/script/dev/"*.as "$HIGHBAR_GAME_CFG_DIR/script/dev/"
+    cp -a "$REPO_ROOT/data/config/." "$HIGHBAR_GAME_CFG_DIR/config/"
+    cp -a "$REPO_ROOT/data/script/." "$HIGHBAR_GAME_CFG_DIR/script/"
 fi
 
 # --- environment + launch ----------------------------------------------------

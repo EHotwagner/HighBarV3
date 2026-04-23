@@ -103,6 +103,11 @@ local options = {
 				name = 'Testing AI',
 				desc = 'Testing config',
 			},
+			{
+				key  = 'macro',
+				name = 'Macro Tech AI',
+				desc = 'Passive macro profile that prioritizes economy, tech, and a varied defensive army.',
+			},
 		},
 	},
 }
