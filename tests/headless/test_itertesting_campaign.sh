@@ -120,6 +120,75 @@ assert_wrapper_semantic_inventory() {
     fi
 }
 
+assert_split_live_setup_sequences_smoke_then_seeded() {
+    local tmpdir
+    local output
+    tmpdir="$(mktemp -d)"
+    output="$(
+        WRAPPER="$WRAPPER" \
+        HIGHBAR_ITERTESTING_SKIP_LIVE=false \
+        HIGHBAR_ITERTESTING_SPLIT_LIVE_SETUP=true \
+        HIGHBAR_ITERTESTING_REPORTS_DIR="$tmpdir/reports" \
+        HIGHBAR_RUN_DIR="$tmpdir/run" \
+        HIGHBAR_WRITE_DIR="$tmpdir/write" \
+        bash -lc '
+            set -euo pipefail
+            source "$WRAPPER"
+            launch_live_topology() { echo "launch:$1"; return 0; }
+            run_natural_smoke_campaign() { echo "smoke"; return 0; }
+            run_live_campaign() { echo "main:$1"; return 0; }
+            stop_live_topology() { echo "stop"; }
+            main
+        '
+    )"
+    rm -rf "$tmpdir"
+
+    if [[ "$output" != *"launch:$REPO_ROOT/tests/headless/scripts/minimal.startscript"* ]]; then
+        echo "test_itertesting_campaign: split live setup did not launch the natural smoke topology" >&2
+        exit 1
+    fi
+    if [[ "$output" != *$'smoke\nstop\nlaunch:'"$REPO_ROOT"$'/tests/headless/scripts/cheats.startscript'* ]]; then
+        echo "test_itertesting_campaign: split live setup did not relaunch on the cheat startscript after smoke" >&2
+        exit 1
+    fi
+    if [[ "$output" != *$'\nmain:1\nstop'* ]]; then
+        echo "test_itertesting_campaign: split live setup did not execute the seeded coverage run" >&2
+        exit 1
+    fi
+}
+
+assert_split_live_setup_forces_seeded_campaign_flags() {
+    local tmpdir
+    local output
+    tmpdir="$(mktemp -d)"
+    output="$(
+        WRAPPER="$WRAPPER" \
+        HIGHBAR_ITERTESTING_REPORTS_DIR="$tmpdir/reports" \
+        HIGHBAR_RUN_DIR="$tmpdir/run" \
+        HIGHBAR_WRITE_DIR="$tmpdir/write" \
+        bash -lc '
+            set -euo pipefail
+            source "$WRAPPER"
+            prepare_attempt_dir 1
+            COORD_ENDPOINT="unix:/tmp/highbar-test.sock"
+            ACTIVE_RUN_DIR="$HIGHBAR_RUN_DIR/attempt-1"
+            latest_stop_decision_path() { return 0; }
+            latest_run_manifest_path() { return 0; }
+            emit_contract_health_notice() { return 1; }
+            emit_fixture_provisioning_notice() { return 1; }
+            should_retry_live_session() { return 1; }
+            uv() { printf "%s\n" "$*"; }
+            run_live_campaign 1
+        '
+    )"
+    rm -rf "$tmpdir"
+
+    if [[ "$output" != *"--allow-cheat-escalation --no-natural-first"* ]]; then
+        echo "test_itertesting_campaign: split live setup did not force seeded campaign flags" >&2
+        exit 1
+    fi
+}
+
 assert_callback_proxy_endpoint_rebinds_per_attempt() {
     local expected_run_dir="${HIGHBAR_RUN_DIR:-/tmp/hb-run-itertesting}"
     mapfile -t rebound_endpoints < <(
@@ -336,6 +405,8 @@ assert_fixture_bundle_shape "$QUICK_DIR"
 assert_fixture_bundle_shape "$STANDARD_DIR"
 assert_fixture_bundle_shape "$DEEP_DIR"
 assert_wrapper_semantic_inventory "$QUICK_DIR"
+assert_split_live_setup_sequences_smoke_then_seeded
+assert_split_live_setup_forces_seeded_campaign_flags
 assert_callback_proxy_endpoint_rebinds_per_attempt
 assert_autoquit_config_is_temporarily_disabled
 assert_semantic_gate_bundle "$QUICK_DIR"

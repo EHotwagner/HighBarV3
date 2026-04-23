@@ -30,6 +30,7 @@ START_SCRIPT="${HIGHBAR_STARTSCRIPT:-$HEADLESS_DIR/scripts/minimal.startscript}"
 CHEAT_STARTSCRIPT="${HIGHBAR_ITERTESTING_CHEAT_STARTSCRIPT:-$HEADLESS_DIR/scripts/cheats.startscript}"
 WRITE_DIR="${HIGHBAR_WRITE_DIR:-$HOME/.local/state/Beyond All Reason}"
 REPORTS_DIR="${HIGHBAR_ITERTESTING_REPORTS_DIR:-$REPO_ROOT/reports/itertesting}"
+NATURAL_SMOKE_REPORTS_DIR="${HIGHBAR_ITERTESTING_NATURAL_SMOKE_REPORTS_DIR:-$REPORTS_DIR/natural-smoke}"
 RETRY_INTENSITY="${HIGHBAR_ITERTESTING_RETRY_INTENSITY:-standard}"
 RUNTIME_TARGET_MINUTES="${HIGHBAR_ITERTESTING_RUNTIME_TARGET_MINUTES:-15}"
 SKIP_LIVE="${HIGHBAR_ITERTESTING_SKIP_LIVE:-false}"
@@ -39,6 +40,7 @@ GAMESEED="${HIGHBAR_GAMESEED:-0x42424242}"
 MAX_RUNS="${HIGHBAR_ITERTESTING_MAX_IMPROVEMENT_RUNS:-}"
 BOOTSTRAP_WAIT_SECONDS="${HIGHBAR_ITERTESTING_BOOTSTRAP_WAIT_SECONDS:-12}"
 ENABLE_BUILTIN="${HIGHBAR_ITERTESTING_ENABLE_BUILTIN:-false}"
+SPLIT_LIVE_SETUP="${HIGHBAR_ITERTESTING_SPLIT_LIVE_SETUP:-true}"
 EXPLICIT_CALLBACK_PROXY_ENDPOINT="${HIGHBAR_CALLBACK_PROXY_ENDPOINT:-}"
 # The maintainer-facing live path is documented as a default single run.
 # Keep profile-driven defaults for synthetic campaign validation, but
@@ -185,14 +187,26 @@ wait_for_gateway_startup() {
 }
 
 latest_stop_decision_path() {
-    find "$REPORTS_DIR" -maxdepth 2 -name 'campaign-stop-decision.json' -printf '%T@ %p\n' 2>/dev/null \
+    find "$REPORTS_DIR" -maxdepth 2 \
+        \( -path "$NATURAL_SMOKE_REPORTS_DIR" -o -path "$NATURAL_SMOKE_REPORTS_DIR/*" \) -prune -o \
+        -name 'campaign-stop-decision.json' -printf '%T@ %p\n' 2>/dev/null \
         | sort -nr \
         | head -n 1 \
         | cut -d' ' -f2-
 }
 
 latest_run_manifest_path() {
-    find "$REPORTS_DIR" -maxdepth 2 -name 'manifest.json' -printf '%T@ %p\n' 2>/dev/null \
+    find "$REPORTS_DIR" -maxdepth 2 \
+        \( -path "$NATURAL_SMOKE_REPORTS_DIR" -o -path "$NATURAL_SMOKE_REPORTS_DIR/*" \) -prune -o \
+        -name 'manifest.json' -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr \
+        | head -n 1 \
+        | cut -d' ' -f2-
+}
+
+latest_manifest_in_dir() {
+    local reports_dir="$1"
+    find "$reports_dir" -maxdepth 2 -name 'manifest.json' -printf '%T@ %p\n' 2>/dev/null \
         | sort -nr \
         | head -n 1 \
         | cut -d' ' -f2-
@@ -431,6 +445,7 @@ PY
 }
 
 launch_live_topology() {
+    local launch_start_script="${1:-$START_SCRIPT}"
     configure_live_attempt_env
     disable_autoquit_for_attempt
     if ! highbar_start_coordinator "$EXAMPLES_DIR" "$ACTIVE_RUN_DIR" "bcov" "$COORD_LOG"; then
@@ -442,7 +457,7 @@ launch_live_topology() {
     COORD_ENDPOINT="$HIGHBAR_COORDINATOR_ENDPOINT"
 
     LAUNCH_OUT=$("$HEADLESS_DIR/_launch.sh" \
-        --start-script "$START_SCRIPT" \
+        --start-script "$launch_start_script" \
         --coordinator "$COORD_ENDPOINT" \
         --enable-builtin "$ENABLE_BUILTIN" \
         --runtime-dir "$ACTIVE_RUN_DIR" 2>&1)
@@ -499,7 +514,9 @@ run_live_campaign() {
     if [[ -n "$MAX_RUNS" ]]; then
         ARGS+=(--max-improvement-runs "$MAX_RUNS")
     fi
-    if [[ "${HIGHBAR_ITERTESTING_ALLOW_CHEAT_ESCALATION:-false}" == "true" ]]; then
+    if [[ "$SPLIT_LIVE_SETUP" == "true" ]]; then
+        ARGS+=(--allow-cheat-escalation --no-natural-first)
+    elif [[ "${HIGHBAR_ITERTESTING_ALLOW_CHEAT_ESCALATION:-false}" == "true" ]]; then
         ARGS+=(--allow-cheat-escalation)
     fi
 
@@ -525,6 +542,61 @@ run_live_campaign() {
     fi
 
     return $rc
+}
+
+emit_natural_smoke_notice() {
+    local manifest_path="$1"
+    if [[ -z "$manifest_path" || ! -f "$manifest_path" ]]; then
+        return 1
+    fi
+    python3 - "$manifest_path" <<'PY'
+import json
+import os
+import sys
+
+manifest_path = sys.argv[1]
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+decision = manifest.get("contract_health_decision") or {}
+bootstrap = manifest.get("bootstrap_readiness") or {}
+print(
+    "itertesting: natural_smoke="
+    f"{decision.get('decision_status', 'unknown')} "
+    f"bootstrap={bootstrap.get('readiness_status', 'none')} "
+    f"report={os.path.join(os.path.dirname(manifest_path), 'run-report.md')}"
+)
+PY
+}
+
+run_natural_smoke_campaign() {
+    local smoke_reports_dir="$NATURAL_SMOKE_REPORTS_DIR"
+    local smoke_out_file="$ACTIVE_RUN_DIR/natural-smoke.out"
+    local smoke_output=""
+    local smoke_manifest=""
+
+    mkdir -p "$smoke_reports_dir"
+    ARGS=(
+        itertesting
+        --endpoint "$COORD_ENDPOINT"
+        --startscript "$START_SCRIPT"
+        --reports-dir "$smoke_reports_dir"
+        --retry-intensity quick
+        --runtime-target-minutes 1
+        --threshold "$THRESHOLD"
+        --gameseed "$GAMESEED"
+        --cheat-startscript "$CHEAT_STARTSCRIPT"
+        --max-improvement-runs 0
+    )
+
+    echo "itertesting: invoking natural smoke: ${ARGS[*]}"
+    uv run --project "$REPO_ROOT/clients/python" python -m highbar_client.behavioral_coverage "${ARGS[@]}" >"$smoke_out_file" 2>&1
+    smoke_output="$(cat "$smoke_out_file")"
+    printf '%s\n' "$smoke_output"
+
+    smoke_manifest="$(latest_manifest_in_dir "$smoke_reports_dir")"
+    emit_natural_smoke_notice "$smoke_manifest" || true
+    return 0
 }
 
 cleanup() {
@@ -561,11 +633,26 @@ main() {
         return $rc
     fi
 
+    if [[ "$SPLIT_LIVE_SETUP" == "true" ]]; then
+        prepare_attempt_dir "smoke"
+        launch_live_topology "$START_SCRIPT"
+        launch_rc=$?
+        if [[ $launch_rc -ne 0 ]]; then
+            return $launch_rc
+        fi
+        run_natural_smoke_campaign
+        stop_live_topology
+    fi
+
     attempt=1
     total_attempts=$((LIVE_RETRIES + 1))
     while [[ $attempt -le $total_attempts ]]; do
         prepare_attempt_dir "$attempt"
-        launch_live_topology
+        if [[ "$SPLIT_LIVE_SETUP" == "true" ]]; then
+            launch_live_topology "$CHEAT_STARTSCRIPT"
+        else
+            launch_live_topology "$START_SCRIPT"
+        fi
         launch_rc=$?
         if [[ $launch_rc -ne 0 ]]; then
             return $launch_rc
