@@ -220,6 +220,215 @@ def test_turtle1_falls_back_when_build_options_are_unavailable():
     assert all(batch.commands[0].build_unit.options == 0 for batch in batches)
 
 
+def test_turtle1_does_not_overwrite_active_commander_build():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 4,
+            "build_interval_frames": 1,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+
+    first = state_pb2.StateUpdate(seq=1, frame=100)
+    first.snapshot.frame_number = 100
+    first.snapshot.static_map.CopyFrom(static_map)
+    first.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    first_batches = list(plugin.on_state(context, first))
+
+    assert len(first_batches) == 1
+    assert first_batches[0].target_unit_id == 101
+
+    second = state_pb2.StateUpdate(seq=2, frame=101)
+    second.snapshot.frame_number = 101
+    second.snapshot.static_map.CopyFrom(static_map)
+    second.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, second)) == []
+
+
+def test_turtle1_reuses_commander_after_idle_event():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 1,
+            "build_interval_frames": 1,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+                "armsolar": 12,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+    first = state_pb2.StateUpdate(seq=1, frame=100)
+    first.snapshot.frame_number = 100
+    first.snapshot.static_map.CopyFrom(static_map)
+    first.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, first))
+
+    idle = state_pb2.StateUpdate(seq=2, frame=110)
+    idle.delta.events.add().unit_idle.unit_id = 101
+    assert list(plugin.on_state(context, idle)) == []
+
+    second = state_pb2.StateUpdate(seq=3, frame=111)
+    second.snapshot.frame_number = 111
+    second.snapshot.static_map.CopyFrom(static_map)
+    second.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, second))
+
+
+def test_turtle1_command_finished_does_not_release_active_build():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 1,
+            "build_interval_frames": 1,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+                "armsolar": 12,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+    first = state_pb2.StateUpdate(seq=1, frame=100)
+    first.snapshot.frame_number = 100
+    first.snapshot.static_map.CopyFrom(static_map)
+    first.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, first))
+
+    finished = state_pb2.StateUpdate(seq=2, frame=105)
+    finished.delta.events.add().command_finished.unit_id = 101
+    assert list(plugin.on_state(context, finished)) == []
+
+    second = state_pb2.StateUpdate(seq=3, frame=106)
+    second.snapshot.frame_number = 106
+    second.snapshot.static_map.CopyFrom(static_map)
+    second.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, second)) == []
+
+
+def test_turtle1_created_unit_missing_from_snapshot_stays_reserved():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 1,
+            "build_interval_frames": 1,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+                "armsolar": 12,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+    first = state_pb2.StateUpdate(seq=1, frame=100)
+    first.snapshot.frame_number = 100
+    first.snapshot.static_map.CopyFrom(static_map)
+    first.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, first))
+
+    created = state_pb2.StateUpdate(seq=2, frame=101)
+    event = created.delta.events.add().unit_created
+    event.unit_id = 201
+    event.builder_id = 101
+    assert list(plugin.on_state(context, created)) == []
+
+    second = state_pb2.StateUpdate(seq=3, frame=102)
+    second.snapshot.frame_number = 102
+    second.snapshot.static_map.CopyFrom(static_map)
+    second.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, second)) == []
+
+
+def test_turtle1_created_unit_snapshot_does_not_release_builder():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 1,
+            "build_interval_frames": 1,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+                "armsolar": 12,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+    first = state_pb2.StateUpdate(seq=1, frame=100)
+    first.snapshot.frame_number = 100
+    first.snapshot.static_map.CopyFrom(static_map)
+    first.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, first))
+
+    created = state_pb2.StateUpdate(seq=2, frame=101)
+    event = created.delta.events.add().unit_created
+    event.unit_id = 201
+    event.builder_id = 101
+    assert list(plugin.on_state(context, created)) == []
+
+    second = state_pb2.StateUpdate(seq=3, frame=102)
+    second.snapshot.frame_number = 102
+    second.snapshot.static_map.CopyFrom(static_map)
+    second.snapshot.own_units.extend(
+        (
+            _unit(101, 1, 1024.0, 4096.0),
+            _unit(201, 11, 900.0, 3900.0),
+        )
+    )
+
+    assert list(plugin.on_state(context, second)) == []
+
+
+def test_turtle1_missing_builder_snapshot_stays_reserved():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 1,
+            "build_interval_frames": 1,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+                "armsolar": 12,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+    first = state_pb2.StateUpdate(seq=1, frame=100)
+    first.snapshot.frame_number = 100
+    first.snapshot.static_map.CopyFrom(static_map)
+    first.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, first))
+
+    missing = state_pb2.StateUpdate(seq=2, frame=101)
+    missing.snapshot.frame_number = 101
+    missing.snapshot.static_map.CopyFrom(static_map)
+    assert list(plugin.on_state(context, missing)) == []
+
+    second = state_pb2.StateUpdate(seq=3, frame=102)
+    second.snapshot.frame_number = 102
+    second.snapshot.static_map.CopyFrom(static_map)
+    second.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    assert list(plugin.on_state(context, second)) == []
+
+
 def test_turtle1_can_queue_macro_orders_when_configured():
     static_map = _left_side_map()
     plugin = Turtle1AI(

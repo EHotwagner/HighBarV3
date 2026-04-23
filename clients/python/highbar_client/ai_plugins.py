@@ -193,6 +193,15 @@ class MoveOnceAI(BaseAIPlugin):
         )
 
 
+@dataclass
+class _TurtleBuildIntent:
+    builder_unit_id: int
+    target_def_id: int
+    category: str
+    issued_frame: int
+    created_unit_id: int | None = None
+
+
 class Turtle1AI(BaseAIPlugin):
     """Defensive macro policy that builds economy, tech, and a mixed army."""
 
@@ -301,6 +310,12 @@ class Turtle1AI(BaseAIPlugin):
         self.target_advanced_factories = int(cfg.get("target_advanced_factories", 1))
         self.enable_advanced = _config_bool(cfg.get("enable_advanced", True))
         self.queue_macro_orders = _config_bool(cfg.get("queue_macro_orders", False))
+        self.build_order_timeout_frames = int(
+            cfg.get(
+                "build_order_timeout_frames",
+                max(self.build_interval_frames * 200, 18_000),
+            )
+        )
         self.unit_names = {
             key: tuple(cfg.get(key, default))
             for key, default in self.DEFAULT_UNIT_NAMES.items()
@@ -316,6 +331,8 @@ class Turtle1AI(BaseAIPlugin):
         self.batch_seq = 1
         self.last_build_frame = -self.build_interval_frames
         self.resolution_attempted = False
+        self.pending_builds_by_builder: dict[int, _TurtleBuildIntent] = {}
+        self.macro_pause_until_frame = 0
         self._army_cursor = 0
         self._advanced_army_cursor = 0
         self._build_site_cursor = 0
@@ -331,13 +348,15 @@ class Turtle1AI(BaseAIPlugin):
         context: AIPluginContext,
         update: state_pb2.StateUpdate,
     ) -> Iterable[commands_pb2.CommandBatch]:
+        self._observe_update(update)
         if not update.HasField("snapshot"):
             return ()
         if not self.resolution_attempted:
             self._resolve_defs(context)
-        if update.frame < self.last_build_frame + self.build_interval_frames:
-            return ()
         snapshot = update.snapshot
+        frame = int(update.frame or snapshot.frame_number)
+        if frame < self.last_build_frame + self.build_interval_frames:
+            return ()
         ready_units = [unit for unit in snapshot.own_units if self._is_ready(unit)]
         if not ready_units:
             return ()
@@ -348,12 +367,69 @@ class Turtle1AI(BaseAIPlugin):
             else context.handshake.static_map
         )
         anchor = self._base_anchor(snapshot, static_map)
+        self._refresh_pending_builds(snapshot, frame)
         batches: list[commands_pb2.CommandBatch] = []
         self._append_hold_position_batches(ready_units, batches)
-        self._append_macro_batches(context, snapshot, ready_units, static_map, anchor, batches)
+        if (
+            not self.queue_macro_orders
+            and self.pending_builds_by_builder
+            and frame < self.macro_pause_until_frame
+        ):
+            if batches:
+                self.last_build_frame = frame
+            return tuple(batches[: self.max_batches_per_update])
+        self._append_macro_batches(
+            context,
+            snapshot,
+            ready_units,
+            static_map,
+            anchor,
+            batches,
+            frame,
+        )
         if batches:
-            self.last_build_frame = int(update.frame)
+            self.last_build_frame = frame
         return tuple(batches[: self.max_batches_per_update])
+
+    def _observe_update(self, update: state_pb2.StateUpdate) -> None:
+        if not update.HasField("delta") or not self.pending_builds_by_builder:
+            return
+        for event in update.delta.events:
+            kind = event.WhichOneof("kind")
+            if kind == "unit_idle":
+                self.pending_builds_by_builder.pop(
+                    int(event.unit_idle.unit_id),
+                    None,
+                )
+            elif kind == "unit_created":
+                created = event.unit_created
+                intent = self.pending_builds_by_builder.get(int(created.builder_id))
+                if intent is not None:
+                    intent.created_unit_id = int(created.unit_id)
+        if not self.pending_builds_by_builder:
+            self.macro_pause_until_frame = 0
+
+    def _refresh_pending_builds(
+        self,
+        snapshot: state_pb2.StateSnapshot,
+        frame: int,
+    ) -> None:
+        if not self.pending_builds_by_builder:
+            return
+        own_by_id = {int(unit.unit_id): unit for unit in snapshot.own_units}
+        stale: list[int] = []
+        for builder_id, intent in self.pending_builds_by_builder.items():
+            builder = own_by_id.get(builder_id)
+            if builder is not None and builder.health <= 0:
+                stale.append(builder_id)
+                continue
+            if frame >= intent.issued_frame + self.build_order_timeout_frames:
+                stale.append(builder_id)
+                continue
+        for builder_id in stale:
+            self.pending_builds_by_builder.pop(builder_id, None)
+        if not self.pending_builds_by_builder:
+            self.macro_pause_until_frame = 0
 
     def _resolve_defs(self, context: AIPluginContext) -> None:
         self.resolution_attempted = True
@@ -404,6 +480,7 @@ class Turtle1AI(BaseAIPlugin):
         static_map: state_pb2.StaticMap,
         anchor: common_pb2.Vector3,
         batches: list[commands_pb2.CommandBatch],
+        frame: int,
     ) -> None:
         counts = self._counts_by_group(snapshot)
         plan: list[tuple[str, tuple[str, ...]]] = []
@@ -430,6 +507,7 @@ class Turtle1AI(BaseAIPlugin):
         if counts["advanced_factories"] > 0 and counts["army"] < self.target_army:
             plan.append(("advanced_army", self._rotated_army_names(advanced=True)))
 
+        assigned_builders: set[int] = set()
         for category, names in plan:
             if len(batches) >= self.max_batches_per_update:
                 return
@@ -437,7 +515,13 @@ class Turtle1AI(BaseAIPlugin):
             if target_name is None:
                 continue
             target_def_id = self.def_id_by_name[target_name]
-            builder = self._find_builder(context, ready_units, target_def_id, category)
+            builder = self._find_builder(
+                context,
+                ready_units,
+                target_def_id,
+                category,
+                assigned_builders,
+            )
             if builder is None:
                 continue
             position = self._position_for_category(
@@ -467,6 +551,19 @@ class Turtle1AI(BaseAIPlugin):
                     ),
                 )
             )
+            builder_id = int(builder.unit_id)
+            assigned_builders.add(builder_id)
+            if not self.queue_macro_orders:
+                self.pending_builds_by_builder[builder_id] = _TurtleBuildIntent(
+                    builder_unit_id=builder_id,
+                    target_def_id=int(target_def_id),
+                    category=category,
+                    issued_frame=frame,
+                )
+                self.macro_pause_until_frame = max(
+                    self.macro_pause_until_frame,
+                    frame + self.build_order_timeout_frames,
+                )
 
     def _append_hold_position_batches(
         self,
@@ -524,8 +621,15 @@ class Turtle1AI(BaseAIPlugin):
         ready_units: list[state_pb2.OwnUnit],
         target_def_id: int,
         category: str,
+        assigned_builders: set[int] | None = None,
     ) -> state_pb2.OwnUnit | None:
+        assigned_builders = assigned_builders or set()
         for unit in ready_units:
+            unit_id = int(unit.unit_id)
+            if unit_id in assigned_builders:
+                continue
+            if not self.queue_macro_orders and unit_id in self.pending_builds_by_builder:
+                continue
             build_options = self._build_options_for_unit(context, unit)
             if target_def_id in build_options:
                 return unit
