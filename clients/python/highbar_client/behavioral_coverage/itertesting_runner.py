@@ -2194,12 +2194,14 @@ def run_campaign(
     previous_run: ItertestingRun | None = None
     stop_decision: CampaignStopDecision | None = None
     final_status = "budget_exhausted"
+    force_cheat_next_run = False
     for sequence_index in range(effective_runs + 1):
-        cheat_enabled = should_enable_cheat_escalation(
+        cheat_enabled = force_cheat_next_run or should_enable_cheat_escalation(
             policy=policy,
             snapshots=tuple(progress_snapshots),
             sequence_index=sequence_index,
         )
+        force_cheat_next_run = False
         live_rows: list[dict] | None = None
         if not skip_live:
             from . import collect_live_rows
@@ -2259,6 +2261,13 @@ def run_campaign(
                 message=run.contract_health_decision.summary_message,
                 created_at=format_timestamp(utc_now()),
             )
+            if (
+                allow_cheat_escalation
+                and not cheat_enabled
+                and sequence_index < effective_runs
+            ):
+                stop_decision = None
+                force_cheat_next_run = True
         else:
             stop_decision = decide_stop(
                 policy=policy,

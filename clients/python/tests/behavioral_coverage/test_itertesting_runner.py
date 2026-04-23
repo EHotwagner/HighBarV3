@@ -874,6 +874,46 @@ def test_campaign_stops_immediately_when_contract_health_is_blocked(tmp_path, mo
     assert campaign.stop_decision.stop_reason == "foundational_blocked"
 
 
+def test_campaign_escalates_foundational_block_to_cheat_follow_up_when_allowed(
+    tmp_path,
+    monkeypatch,
+):
+    seen_startscripts = []
+
+    def fake_collect_live_rows(args):
+        seen_startscripts.append(args.startscript)
+        return [
+            {
+                "arm_name": "move_unit",
+                "category": REGISTRY["move_unit"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "batch target 4 disagreed with command unit 9",
+                "error": "target_drift",
+            }
+        ]
+
+    monkeypatch.setattr(behavioral_coverage, "collect_live_rows", fake_collect_live_rows)
+
+    campaign, runs = run_campaign(
+        reports_dir=tmp_path,
+        retry_intensity="standard",
+        max_improvement_runs=1,
+        allow_cheat_escalation=True,
+        natural_first=True,
+        skip_live=False,
+        endpoint="unix:/tmp/unused.sock",
+    )
+
+    assert len(runs) == 2
+    assert seen_startscripts[0].endswith("minimal.startscript")
+    assert seen_startscripts[1].endswith("cheats.startscript")
+    assert runs[0].contract_health_decision is not None
+    assert runs[1].sequence_index == 1
+    assert campaign.stop_decision is not None
+    assert campaign.stop_decision.stop_reason == "foundational_blocked"
+
+
 def test_summary_tracks_tuned_rule_count(tmp_path):
     _campaign, runs = run_campaign(
         reports_dir=tmp_path,

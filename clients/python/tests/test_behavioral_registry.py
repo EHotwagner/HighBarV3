@@ -1216,6 +1216,138 @@ def test_execute_live_bootstrap_reuses_existing_ready_plan_units(monkeypatch):
     assert ctx.capability_units["cloakable"] == 107
 
 
+def test_execute_live_bootstrap_uses_explicit_seed_path(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    economy = type(
+        "FakeEconomy",
+        (),
+        {
+            "metal": 0.0,
+            "metal_income": 0.0,
+            "metal_storage": 1500.0,
+            "energy": 0.0,
+            "energy_income": 0.0,
+            "energy_storage": 1200.0,
+        },
+    )()
+    shared = {
+        "snapshots": [
+            FakeSnapshot(
+                own_units=(commander,),
+                visible_enemies=(),
+                map_features=(),
+                frame_number=0,
+                economy=economy,
+            )
+        ],
+        "deltas": [],
+    }
+    pending_snapshots = []
+    dispatched = []
+    produced_by_def_id = {
+        11: FakeOwnUnit(101, 11, FakePosition(106.0, 0.0, 20.0), 100.0, 100.0),
+        12: FakeOwnUnit(102, 12, FakePosition(-86.0, 0.0, 20.0), 100.0, 100.0),
+        13: FakeOwnUnit(103, 13, FakePosition(170.0, 0.0, 116.0), 2050.0, 2050.0),
+        14: FakeOwnUnit(104, 14, FakePosition(-150.0, 0.0, 116.0), 2050.0, 2050.0),
+        15: FakeOwnUnit(105, 15, FakePosition(106.0, 0.0, -76.0), 100.0, 100.0),
+        16: FakeOwnUnit(106, 16, FakePosition(172.0, 0.0, 118.0), 690.0, 690.0),
+        17: FakeOwnUnit(107, 17, FakePosition(-148.0, 0.0, 118.0), 89.0, 89.0),
+    }
+
+    def fake_resolve_bootstrap_defs(_stub, ctx, token=None):
+        del token
+        ctx.def_id_by_name.update(
+            {
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+                "armap": 14,
+                "armrad": 15,
+                "armck": 16,
+                "armpeep": 17,
+                "armatlas": 18,
+            }
+        )
+
+    def fake_request_snapshot(_stub, token=None):
+        del token
+        return 0
+
+    def fake_wait_for_snapshot(_shared, min_frame, timeout_s):
+        del timeout_s
+        if not pending_snapshots:
+            return None
+        for index, snapshot in enumerate(pending_snapshots):
+            if snapshot.frame_number < min_frame:
+                continue
+            del pending_snapshots[index]
+            shared["snapshots"].append(snapshot)
+            return snapshot
+        return None
+
+    def fake_dispatch(_stub, batch, token=None):
+        del token
+        dispatched.append(batch)
+        command = batch.commands[0]
+        if command.build_unit.to_build_unit_def_id:
+            raise AssertionError("explicit seed path should not use natural build dispatch")
+        if command.give_me_new_unit.unit_def_id:
+            produced_unit = produced_by_def_id[command.give_me_new_unit.unit_def_id]
+            latest_snapshot = shared["snapshots"][-1]
+            pending_snapshots.append(
+                FakeSnapshot(
+                    own_units=tuple(getattr(latest_snapshot, "own_units", ())) + (produced_unit,),
+                    visible_enemies=(),
+                    map_features=(),
+                    frame_number=getattr(latest_snapshot, "frame_number", 0) + len(pending_snapshots) + 1,
+                    economy=economy,
+                )
+            )
+        return None
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._resolve_bootstrap_defs",
+        fake_resolve_bootstrap_defs,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._resolve_supported_transport_defs",
+        lambda _stub, ctx, token=None: setattr(ctx, "transport_resolution_trace", ()),
+    )
+    monkeypatch.setattr("highbar_client.behavioral_coverage._request_snapshot", fake_request_snapshot)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._wait_for_snapshot", fake_wait_for_snapshot)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fake_dispatch)
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
+    )
+
+    ctx = _execute_live_bootstrap(object(), shared, token="tok", enable_seeded_path=True)
+
+    seed_def_ids = [
+        batch.commands[0].give_me_new_unit.unit_def_id
+        for batch in dispatched
+        if batch.commands[0].give_me_new_unit.unit_def_id
+    ]
+
+    assert ctx.cheats_enabled is True
+    assert ctx.bootstrap_readiness is not None
+    assert ctx.bootstrap_readiness["readiness_status"] == "seeded_ready"
+    assert ctx.bootstrap_readiness["readiness_path"] == "explicit_seed"
+    assert seed_def_ids == [11, 12, 13, 14, 15, 16, 17]
+    assert any(batch.commands[0].give_me.amount == 5000.0 for batch in dispatched)
+    assert any(batch.commands[0].give_me.amount == 20000.0 for batch in dispatched)
+    assert ctx.capability_units["factory_ground"] == 103
+    assert ctx.capability_units["factory_air"] == 104
+    assert ctx.capability_units["builder"] == 106
+    assert ctx.capability_units["cloakable"] == 107
+
+
 def test_execute_live_bootstrap_skips_commander_built_factories_when_downstream_units_preexist(
     monkeypatch,
 ):

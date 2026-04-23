@@ -638,6 +638,30 @@ def _transport_build_batch(factory_unit_id: int, transport_def_id: int, position
     )
 
 
+def _give_me_batch(resource_id: int, amount: float):
+    from ..highbar import commands_pb2
+
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    cmd = batch.commands.add()
+    cmd.give_me.resource_id = resource_id
+    cmd.give_me.amount = amount
+    return batch
+
+
+def _give_me_new_unit_batch(unit_def_id: int, position: Vector3):
+    from ..highbar import commands_pb2
+
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    cmd = batch.commands.add()
+    cmd.give_me_new_unit.unit_def_id = unit_def_id
+    cmd.give_me_new_unit.position.x = position.x
+    cmd.give_me_new_unit.position.y = position.y
+    cmd.give_me_new_unit.position.z = position.z
+    return batch
+
+
 def _latest_snapshot(shared: dict) -> Any | None:
     snapshots = shared.get("snapshots") or ()
     if not snapshots:
@@ -720,6 +744,167 @@ def _wait_for_new_ready_unit(
             return min(ready_units, key=lambda item: item.unit_id)
     state = "saw_new_candidate=1" if saw_new_candidate else "saw_new_candidate=0"
     raise RuntimeError(f"timeout waiting for new ready unit def_id={def_id} {state}")
+
+
+def _seed_position_for_bootstrap_step(
+    step: Any,
+    ctx: BootstrapContext,
+    *,
+    static_map: Any | None = None,
+    snapshot: Any | None = None,
+) -> Vector3:
+    if step.builder_capability == "commander":
+        return _position_for_bootstrap_step(
+            step,
+            ctx.commander_position,
+            static_map=static_map,
+            snapshot=snapshot,
+            ignore_unit_ids={ctx.commander_unit_id},
+        )
+    builder_unit_id = ctx.capability_units.get(step.builder_capability)
+    builder_unit = ctx.observed_own_units.get(builder_unit_id or 0)
+    builder_position = (
+        _vector3_from_position(builder_unit.position)
+        if builder_unit is not None
+        else ctx.commander_position
+    )
+    return _find_clear_build_position(
+        Vector3(
+            x=builder_position.x + 96.0,
+            y=builder_position.y,
+            z=builder_position.z + 96.0,
+        ),
+        snapshot=snapshot,
+        ignore_unit_ids={builder_unit_id} if builder_unit_id else None,
+        clearance_radius=96.0,
+    )
+
+
+def _issue_bootstrap_seed_step(
+    stub: Any,
+    shared: dict,
+    ctx: BootstrapContext,
+    step: Any,
+    *,
+    baseline_ids: set[int],
+    token: str | None = None,
+    static_map: Any | None = None,
+    snapshot: Any | None = None,
+) -> Any:
+    resolved_def_id = ctx.def_id_by_name.get(step.def_id, 0)
+    if not resolved_def_id:
+        raise RuntimeError(f"runtime def id for {step.def_id} was not resolved")
+    target_position = _seed_position_for_bootstrap_step(
+        step,
+        ctx,
+        static_map=static_map,
+        snapshot=snapshot,
+    )
+    _dispatch(
+        stub,
+        _give_me_new_unit_batch(resolved_def_id, target_position),
+        token=token,
+    )
+    try:
+        return _wait_for_new_ready_unit(
+            shared,
+            def_id=resolved_def_id,
+            baseline_ids=baseline_ids,
+            timeout_s=min(step.timeout_seconds, 10.0),
+            stub=stub,
+            token=token,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"seed/{step.capability}/{step.def_id} "
+            f"spawn_pos={_format_vector3(target_position)} "
+            f"{exc}"
+        ) from exc
+
+
+def _attempt_seeded_bootstrap(
+    stub: Any,
+    shared: dict,
+    ctx: BootstrapContext,
+    *,
+    token: str | None = None,
+    static_map: Any | None = None,
+    starting_snapshot: Any | None = None,
+) -> tuple[BootstrapContext, tuple[str, ...]]:
+    seeded_steps: list[str] = []
+    # Seed economy first so follow-up natural dispatches still have a usable budget
+    # even if one or more cheat spawns are unavailable on this host.
+    _dispatch(stub, _give_me_batch(0, 5000.0), token=token)
+    _dispatch(stub, _give_me_batch(1, 20000.0), token=token)
+    snapshot = starting_snapshot or _latest_snapshot(shared)
+    commander_steps = tuple(
+        step for step in DEFAULT_BOOTSTRAP_PLAN if step.builder_capability == "commander"
+    )
+    for step in commander_steps:
+        existing_units = _ready_units_for_def(
+            snapshot,
+            ctx.def_id_by_name.get(step.def_id, 0),
+        )
+        if existing_units:
+            completed = min(existing_units, key=lambda item: item.unit_id)
+            ctx.capability_units[step.capability] = completed.unit_id
+            ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+            continue
+        completed = _issue_bootstrap_seed_step(
+            stub,
+            shared,
+            ctx,
+            step,
+            baseline_ids={
+                unit.unit_id
+                for unit in getattr(snapshot, "own_units", ())
+                if getattr(unit, "def_id", 0) == ctx.def_id_by_name.get(step.def_id, 0)
+            },
+            token=token,
+            static_map=static_map,
+            snapshot=snapshot,
+        )
+        seeded_steps.append(step.def_id)
+        ctx.capability_units[step.capability] = completed.unit_id
+        ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+        ctx = _refresh_bootstrap_context(shared, ctx)
+        snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=3.0) or _latest_snapshot(shared)
+        if snapshot is None:
+            snapshot = starting_snapshot
+
+    factory_steps = tuple(
+        step for step in DEFAULT_BOOTSTRAP_PLAN if step.builder_capability != "commander"
+    )
+    for step in factory_steps:
+        snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=3.0) or _latest_snapshot(shared)
+        existing_units = _ready_units_for_def(
+            snapshot,
+            ctx.def_id_by_name.get(step.def_id, 0),
+        )
+        if existing_units:
+            completed = min(existing_units, key=lambda item: item.unit_id)
+            ctx.capability_units[step.capability] = completed.unit_id
+            ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+            ctx = _refresh_bootstrap_context(shared, ctx)
+            continue
+        completed = _issue_bootstrap_seed_step(
+            stub,
+            shared,
+            ctx,
+            step,
+            baseline_ids={
+                unit.unit_id
+                for unit in getattr(snapshot, "own_units", ())
+                if getattr(unit, "def_id", 0) == ctx.def_id_by_name.get(step.def_id, 0)
+            },
+            token=token,
+            snapshot=snapshot,
+        )
+        seeded_steps.append(step.def_id)
+        ctx.capability_units[step.capability] = completed.unit_id
+        ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+        ctx = _refresh_bootstrap_context(shared, ctx)
+    return ctx, tuple(seeded_steps)
 
 
 def _issue_bootstrap_build_step(
@@ -1663,6 +1848,7 @@ def _execute_live_bootstrap(
     *,
     token: str | None = None,
     static_map: Any | None = None,
+    enable_seeded_path: bool = False,
 ) -> BootstrapContext:
     commander = None
     deadline = time.monotonic() + 30.0
@@ -1685,7 +1871,7 @@ def _execute_live_bootstrap(
         fixture_positions={},
         enemy_seed_id=None,
         manifest=(),
-        cheats_enabled=False,
+        cheats_enabled=enable_seeded_path,
         def_id_by_name={},
     )
     try:
@@ -1739,6 +1925,43 @@ def _execute_live_bootstrap(
         starting_snapshot,
         ctx,
     )
+    if enable_seeded_path and readiness_status != "seeded_ready":
+        try:
+            ctx, seeded_steps = _attempt_seeded_bootstrap(
+                stub,
+                shared,
+                ctx,
+                token=token,
+                static_map=static_map,
+                starting_snapshot=starting_snapshot,
+            )
+        except RuntimeError as exc:
+            _record_bootstrap_readiness(
+                ctx,
+                readiness_status="unknown",
+                readiness_path="explicit_seed",
+                first_required_step=first_required_step,
+                economy_summary=_economy_debug_string(starting_snapshot),
+                reason=f"explicit seed path failed before bootstrap completed: {exc}",
+            )
+            _capture_callback_diagnostic(
+                stub,
+                shared,
+                ctx,
+                capture_stage="bootstrap_failure",
+                token=token,
+            )
+            raise BootstrapExecutionError(str(exc), ctx=ctx) from exc
+        post_seed_snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=5.0) or _latest_snapshot(shared)
+        if post_seed_snapshot is not None:
+            starting_snapshot = post_seed_snapshot
+        ctx = _refresh_bootstrap_context(shared, ctx)
+        readiness_status = "seeded_ready"
+        readiness_path = "explicit_seed"
+        readiness_reason = (
+            "explicit seed path provisioned bootstrap readiness via cheat-backed setup: "
+            + (", ".join(seeded_steps) if seeded_steps else "economy_seed_only")
+        )
     _record_bootstrap_readiness(
         ctx,
         readiness_status=readiness_status,
@@ -2133,6 +2356,16 @@ def _fixture_status_detail(
     return " ".join(ctx.transport_diagnostics or ()).strip()
 
 
+def _startscript_enables_cheats(startscript: str) -> bool:
+    path = Path(startscript)
+    if not path.exists():
+        return False
+    try:
+        return "Cheats=1" in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
 def collect_live_rows(args: argparse.Namespace) -> list[dict]:
     """Collect live behavioral rows without emitting artifacts."""
     try:
@@ -2150,11 +2383,13 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
 
     time.sleep(3.0)
     try:
+        enable_seeded_path = _startscript_enables_cheats(str(getattr(args, "startscript", "")))
         ctx = _execute_live_bootstrap(
             stub,
             shared,
             token=ai_token,
             static_map=getattr(hello_resp, "static_map", None),
+            enable_seeded_path=enable_seeded_path,
         )
     except Exception as exc:  # noqa: BLE001
         detail = f"bootstrap_failed: {exc}"
