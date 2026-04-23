@@ -16,6 +16,7 @@ from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from .capabilities import CAPABILITY_TAGS
+from .bootstrap import is_transport_dependent_command
 from .predicates import (
     build_progress_monotonic_predicate,
     capability_selector,
@@ -119,6 +120,55 @@ def _payload_unit_id(ctx: Any) -> int:
 
 def _transport_unit_id(ctx: Any) -> int:
     return _fixture_unit_id(ctx, "transport_unit", ctx.commander_unit_id)
+
+
+def transport_compatibility_for_command(
+    command_id: str,
+    ctx: Any,
+) -> tuple[str, str | None]:
+    def _unit_ready(unit: Any | None) -> bool:
+        if unit is None:
+            return False
+        if float(getattr(unit, "health", 0.0)) <= 0.0:
+            return False
+        if bool(getattr(unit, "under_construction", False)):
+            return False
+        build_progress = getattr(unit, "build_progress", None)
+        if build_progress is None:
+            return True
+        try:
+            progress_value = float(build_progress)
+        except (TypeError, ValueError):
+            return True
+        return not (0.0 < progress_value < 0.999)
+
+    if not is_transport_dependent_command(command_id):
+        return "compatible", None
+    transport_id = _fixture_unit_id(ctx, "transport_unit")
+    if not transport_id:
+        return "candidate_missing", "transport_unit is not available"
+    payload_id = _fixture_unit_id(ctx, "payload_unit")
+    if not payload_id:
+        return "candidate_missing", "payload_unit is not available"
+    if transport_id == payload_id:
+        return (
+            "payload_incompatible",
+            "selected transport candidate matches the payload unit and cannot carry itself",
+        )
+    observed_units = getattr(ctx, "observed_own_units", {}) or {}
+    transport_unit = observed_units.get(transport_id)
+    if transport_unit is not None and not _unit_ready(transport_unit):
+        return (
+            "candidate_unusable",
+            "selected transport candidate is still under construction or destroyed and is unusable",
+        )
+    payload_unit = observed_units.get(payload_id)
+    if payload_unit is not None and not _unit_ready(payload_unit):
+        return (
+            "payload_incompatible",
+            "transport payload incompatible: selected payload unit is still under construction or destroyed",
+        )
+    return "compatible", None
 
 
 def _preferred_custom_command(ctx: Any) -> tuple[int, int, tuple[float, ...]] | None:

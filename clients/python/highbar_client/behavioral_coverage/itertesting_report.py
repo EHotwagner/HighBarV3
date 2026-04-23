@@ -221,6 +221,68 @@ def render_run_report(
                     )
                 )
             lines.append("")
+        if run.transport_provisioning is not None:
+            lines.extend(
+                [
+                    "### Transport Provisioning",
+                    "",
+                    f"- Status: {run.transport_provisioning.status}",
+                    (
+                        "- Active candidate: "
+                        f"{run.transport_provisioning.active_candidate_id or 'none'}"
+                    ),
+                    (
+                        "- Affected transport commands: "
+                        + (
+                            ", ".join(run.transport_provisioning.affected_command_ids)
+                            if run.transport_provisioning.affected_command_ids
+                            else "none"
+                        )
+                    ),
+                ]
+            )
+            if run.transport_provisioning.candidates:
+                lines.append("- Candidate chain:")
+                for candidate in run.transport_provisioning.candidates:
+                    lines.append(
+                        (
+                            f"  `{candidate.candidate_id}` — {candidate.variant_id} — "
+                            f"{candidate.provenance} — {candidate.readiness_state} — "
+                            f"payload: {candidate.payload_compatibility}"
+                        )
+                    )
+            if run.transport_provisioning.lifecycle_events:
+                lines.append("- Lifecycle events:")
+                for event in run.transport_provisioning.lifecycle_events:
+                    scope = ", ".join(event.command_scope) or "none"
+                    lines.append(
+                        f"  `{event.event_type}` — commands: {scope} — {event.reason}"
+                    )
+            if run.transport_provisioning.compatibility_checks:
+                lines.append("- Compatibility checks:")
+                for check in run.transport_provisioning.compatibility_checks:
+                    lines.append(
+                        (
+                            f"  `{check.command_id}` — {check.result} — "
+                            f"{check.blocking_reason or 'compatible'}"
+                        )
+                    )
+            if run.transport_provisioning.resolution_trace:
+                lines.append("- Resolution trace:")
+                for trace in run.transport_provisioning.resolution_trace:
+                    resolved_def_id = (
+                        str(trace.resolved_def_id)
+                        if trace.resolved_def_id is not None
+                        else "unresolved"
+                    )
+                    lines.append(
+                        (
+                            f"  `{trace.variant_id}` — {trace.callback_path} — "
+                            f"{trace.resolution_status} — def_id: {resolved_def_id} — "
+                            f"{trace.reason}"
+                        )
+                    )
+            lines.append("")
 
     inventory = all_custom_command_inventory()
     if inventory:

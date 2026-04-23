@@ -152,6 +152,7 @@ with open(manifest_path, "r", encoding="utf-8") as handle:
     manifest = json.load(handle)
 
 fixture = manifest.get("fixture_provisioning") or {}
+transport = manifest.get("transport_provisioning") or {}
 class_statuses = fixture.get("class_statuses") or []
 if not class_statuses:
     raise SystemExit(1)
@@ -167,6 +168,18 @@ print(
 print(
     "itertesting: fixture_affected_commands="
     + (",".join(affected) if affected else "none")
+)
+print(
+    "itertesting: transport_status="
+    + transport.get("status", "none")
+)
+print(
+    "itertesting: transport_affected_commands="
+    + (
+        ",".join(transport.get("affected_command_ids", ()))
+        if transport.get("affected_command_ids")
+        else "none"
+    )
 )
 report_path = Path(manifest_path).with_name("run-report.md")
 semantic_inventory = []
@@ -251,6 +264,11 @@ PY
 }
 
 launch_live_topology() {
+    export HIGHBAR_WRITE_DIR="$WRITE_DIR"
+    export HIGHBAR_ENGINE_RELEASE="recoil_2025.06.19"
+    export HIGHBAR_COORDINATOR_OWNER_SKIRMISH_AI_ID="${HIGHBAR_COORDINATOR_OWNER_SKIRMISH_AI_ID:-1}"
+    export HIGHBAR_TOKEN_PATH="${HIGHBAR_TOKEN_PATH:-/tmp/highbar.token}"
+    export HIGHBAR_CALLBACK_PROXY_ENDPOINT="${HIGHBAR_CALLBACK_PROXY_ENDPOINT:-unix:$ACTIVE_RUN_DIR/highbar-1.sock}"
     if ! highbar_start_coordinator "$EXAMPLES_DIR" "$ACTIVE_RUN_DIR" "bcov" "$COORD_LOG"; then
         echo "itertesting: coordinator failed to bind on unix or tcp — skip" >&2
         cat "$COORD_LOG" >&2

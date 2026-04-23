@@ -19,6 +19,9 @@ from .bootstrap import (
     build_fixture_class_statuses,
     build_shared_fixture_instance,
     fixture_classes_for_command,
+    is_transport_dependent_command,
+    supported_transport_variants,
+    transport_dependent_command_ids,
 )
 from .itertesting_campaign import (
     apply_progress_metrics_to_run,
@@ -55,6 +58,12 @@ from .itertesting_types import (
     RunProgressSnapshot,
     RunComparison,
     RunSummary,
+    SupportedTransportVariant,
+    TransportCandidate,
+    TransportCompatibilityCheck,
+    TransportLifecycleEvent,
+    TransportProvisioningResult,
+    TransportResolutionTrace,
     manifest_dict,
     run_from_dict,
 )
@@ -228,6 +237,294 @@ _MISSING_FIXTURE_TOKENS = (
     "missing fixture",
     "not provisioned by the live bootstrap context",
 )
+_TRANSPORT_PREEXISTING_TOKENS = (
+    "preexisting transport",
+    "reused transport",
+    "transport reuse",
+)
+_TRANSPORT_PROVISIONED_TOKENS = (
+    "transport fixture prepared",
+    "natural transport",
+    "transport provisioned",
+)
+_TRANSPORT_REPLACED_TOKENS = ("transport replaced", "replacement transport")
+_TRANSPORT_FALLBACK_TOKENS = (
+    "fallback transport",
+    "fallback spawn",
+    "cheat-assisted transport",
+)
+_TRANSPORT_PAYLOAD_INCOMPATIBLE_TOKENS = (
+    "payload incompatible",
+    "transport-payload incompatible",
+    "transport payload incompatible",
+)
+
+
+def _transport_variant_id_from_detail(detail: str) -> str | None:
+    lowered = detail.lower()
+    for variant in supported_transport_variants():
+        if variant.variant_id in lowered or variant.def_name in lowered:
+            return variant.variant_id
+    return None
+
+
+def _transport_variant_payload_rules() -> tuple[SupportedTransportVariant, ...]:
+    return tuple(sorted(supported_transport_variants(), key=lambda item: item.priority))
+
+
+def _transport_resolution_trace(
+    live_rows: list[dict] | None,
+) -> tuple[TransportResolutionTrace, ...]:
+    detail = " ".join(
+        str(part or "")
+        for row in (live_rows or ())
+        if is_transport_dependent_command(_command_id(row.get("arm_name", "")))
+        for part in (row.get("evidence", ""), row.get("error", ""), row.get("fixture_status", ""))
+    ).lower()
+    traces: list[TransportResolutionTrace] = []
+    for variant in _transport_variant_payload_rules():
+        variant_seen = variant.variant_id in detail or variant.def_name in detail
+        traces.append(
+            TransportResolutionTrace(
+                variant_id=variant.variant_id,
+                callback_path=f"InvokeCallback/{variant.def_name}",
+                resolved_def_id=None,
+                resolution_status="resolved" if variant_seen else "missing",
+                reason=(
+                    f"{variant.def_name} appeared in live transport evidence"
+                    if variant_seen
+                    else "live bundle did not record runtime def resolution for this variant"
+                ),
+            )
+        )
+    return tuple(traces)
+
+
+def _transport_status_from_rows(
+    live_rows: list[dict] | None,
+) -> tuple[str, str, str | None]:
+    detail = " ".join(
+        str(part or "")
+        for row in (live_rows or ())
+        if is_transport_dependent_command(_command_id(row.get("arm_name", "")))
+        for part in (row.get("evidence", ""), row.get("error", ""), row.get("fixture_status", ""))
+    ).lower()
+    variant_id = _transport_variant_id_from_detail(detail)
+    if any(token in detail for token in _TRANSPORT_FALLBACK_TOKENS):
+        return "fallback_provisioned", "transport coverage required explicit fallback provisioning", variant_id
+    if any(token in detail for token in _TRANSPORT_REPLACED_TOKENS):
+        return "replaced", "transport coverage replaced an earlier unusable candidate", variant_id
+    if any(token in detail for token in _REFRESHED_FIXTURE_TOKENS):
+        return "refreshed", "transport coverage was refreshed after a stale or lost candidate", variant_id
+    if any(token in detail for token in _TRANSPORT_PREEXISTING_TOKENS):
+        return "preexisting", "transport coverage reused a preexisting live candidate", variant_id
+    if any(token in detail for token in _UNUSABLE_FIXTURE_TOKENS) or any(
+        token in detail for token in _TRANSPORT_PAYLOAD_INCOMPATIBLE_TOKENS
+    ):
+        return "unusable", "transport coverage became unusable for one or more dependent commands", variant_id
+    if any(token in detail for token in _MISSING_FIXTURE_TOKENS):
+        return "missing", "transport coverage was not available when dependent commands were attempted", variant_id
+    if any(token in detail for token in _TRANSPORT_PROVISIONED_TOKENS):
+        return "provisioned", "transport coverage was provisioned during the live workflow", variant_id
+    if any(
+        row.get("arm_name", "") in {"load_units", "load_units_area", "load_onto", "unload_unit", "unload_units_area"}
+        and row.get("dispatched") == "true"
+        for row in (live_rows or ())
+    ):
+        return "provisioned", "transport coverage was available because transport commands reached live evaluation", variant_id
+    return "missing", "transport coverage was not exercised or recorded in the run bundle", variant_id
+
+
+def _transport_command_scope(
+    live_rows: list[dict] | None,
+) -> tuple[str, ...]:
+    commands = {
+        _command_id(row.get("arm_name", ""))
+        for row in (live_rows or ())
+        if is_transport_dependent_command(_command_id(row.get("arm_name", "")))
+    }
+    return tuple(sorted(commands)) or transport_dependent_command_ids()
+
+
+def _transport_candidates_and_events(
+    *,
+    run_id: str,
+    completed_at: str,
+    status: str,
+    status_reason: str,
+    variant_id: str | None,
+    live_rows: list[dict] | None,
+) -> tuple[tuple[TransportCandidate, ...], tuple[TransportLifecycleEvent, ...], str | None]:
+    command_scope = _transport_command_scope(live_rows)
+    chosen_variant_id = variant_id or _transport_variant_payload_rules()[0].variant_id
+    if status == "missing":
+        return (
+            (),
+            (
+                TransportLifecycleEvent(
+                    event_id=f"{run_id}:transport:provision-failed",
+                    event_type="provision_failed",
+                    candidate_id=None,
+                    command_scope=command_scope,
+                    reason=status_reason,
+                    recorded_at=completed_at,
+                ),
+            ),
+            None,
+        )
+
+    readiness_state = "ready"
+    payload_compatibility = "compatible"
+    provenance = "preexisting"
+    event_type = "discovered"
+    if status == "provisioned":
+        provenance = "naturally_provisioned"
+        event_type = "provision_succeeded"
+    elif status == "refreshed":
+        provenance = "refreshed"
+        event_type = "refreshed"
+    elif status == "replaced":
+        provenance = "replaced"
+        event_type = "replaced"
+    elif status == "fallback_provisioned":
+        provenance = "fallback_provisioned"
+        event_type = "fallback_used"
+    elif status == "unusable":
+        readiness_state = "refresh_failed"
+        payload_compatibility = "incompatible"
+        event_type = "compatibility_failed"
+
+    candidate = TransportCandidate(
+        candidate_id=f"{run_id}:transport:01",
+        variant_id=chosen_variant_id,
+        unit_id=1,
+        provenance=provenance,  # type: ignore[arg-type]
+        readiness_state=readiness_state,  # type: ignore[arg-type]
+        payload_compatibility=payload_compatibility,  # type: ignore[arg-type]
+        discovered_at=completed_at,
+        supersedes_candidate_id=(
+            f"{run_id}:transport:00" if status == "replaced" else None
+        ),
+    )
+    events: list[TransportLifecycleEvent] = []
+    if status in {"provisioned", "fallback_provisioned"}:
+        events.append(
+            TransportLifecycleEvent(
+                event_id=f"{run_id}:transport:provision-started",
+                event_type="provision_started",
+                candidate_id=None,
+                command_scope=command_scope,
+                reason="transport provisioning started before dependent command evaluation",
+                recorded_at=completed_at,
+            )
+        )
+    events.append(
+        TransportLifecycleEvent(
+            event_id=f"{run_id}:transport:{event_type}",
+            event_type=event_type,  # type: ignore[arg-type]
+            candidate_id=candidate.candidate_id,
+            command_scope=command_scope,
+            reason=status_reason,
+            recorded_at=completed_at,
+        )
+    )
+    if status == "replaced":
+        events.insert(
+            0,
+            TransportLifecycleEvent(
+                event_id=f"{run_id}:transport:lost",
+                event_type="lost",
+                candidate_id=f"{run_id}:transport:00",
+                command_scope=command_scope,
+                reason="earlier transport candidate was lost before a replacement was selected",
+                recorded_at=completed_at,
+            ),
+        )
+    return (candidate,), tuple(events), candidate.candidate_id
+
+
+def _transport_compatibility_checks(
+    *,
+    live_rows: list[dict] | None,
+    completed_at: str,
+    candidate_id: str | None,
+    status: str,
+) -> tuple[TransportCompatibilityCheck, ...]:
+    checks: list[TransportCompatibilityCheck] = []
+    for row in live_rows or ():
+        command_id = _command_id(row.get("arm_name", ""))
+        if not is_transport_dependent_command(command_id):
+            continue
+        detail = " ".join(
+            str(part or "")
+            for part in (row.get("evidence", ""), row.get("error", ""))
+        ).lower()
+        result = "compatible"
+        blocking_reason = None
+        if any(token in detail for token in _TRANSPORT_PAYLOAD_INCOMPATIBLE_TOKENS):
+            result = "payload_incompatible"
+            blocking_reason = "selected transport could not safely carry the pending payload"
+        elif status == "missing":
+            result = "candidate_missing"
+            blocking_reason = "no usable transport candidate was available for this command"
+        elif status == "unusable":
+            result = "candidate_unusable"
+            blocking_reason = "the transport candidate became unusable before this command could be evaluated"
+        checks.append(
+            TransportCompatibilityCheck(
+                command_id=command_id,
+                candidate_id=candidate_id,
+                payload_unit_id=1 if "payload" in detail or row.get("arm_name", "").startswith("load_") else None,
+                result=result,  # type: ignore[arg-type]
+                blocking_reason=blocking_reason,
+                checked_at=completed_at,
+            )
+        )
+    return tuple(checks)
+
+
+def _transport_provisioning_for_run(
+    run_id: str,
+    *,
+    live_rows: list[dict] | None,
+    completed_at: str,
+) -> TransportProvisioningResult:
+    status, reason, variant_id = _transport_status_from_rows(live_rows)
+    candidates, lifecycle_events, active_candidate_id = _transport_candidates_and_events(
+        run_id=run_id,
+        completed_at=completed_at,
+        status=status,
+        status_reason=reason,
+        variant_id=variant_id,
+        live_rows=live_rows,
+    )
+    compatibility_checks = _transport_compatibility_checks(
+        live_rows=live_rows,
+        completed_at=completed_at,
+        candidate_id=active_candidate_id,
+        status=status,
+    )
+    affected_command_ids = tuple(
+        sorted(
+            check.command_id
+            for check in compatibility_checks
+            if check.result != "compatible"
+        )
+    )
+    if status in {"missing", "unusable"} and not affected_command_ids:
+        affected_command_ids = _transport_command_scope(live_rows)
+    return TransportProvisioningResult(
+        run_id=run_id,
+        supported_variants=_transport_variant_payload_rules(),
+        active_candidate_id=active_candidate_id,
+        candidates=candidates,
+        lifecycle_events=lifecycle_events,
+        compatibility_checks=compatibility_checks,
+        resolution_trace=_transport_resolution_trace(live_rows),
+        status=status,  # type: ignore[arg-type]
+        affected_command_ids=affected_command_ids,
+        completed_at=completed_at,
+    )
 
 
 def _precise_missing_fixture_classes(detail: str) -> tuple[str, ...]:
@@ -412,12 +709,46 @@ def _fixture_provisioning_for_run(
     *,
     cheat_enabled: bool,
     live_rows: list[dict] | None,
-) -> FixtureProvisioningResult:
+) -> tuple[FixtureProvisioningResult, TransportProvisioningResult]:
     completed_at = format_timestamp(utc_now())
+    transport_provisioning = _transport_provisioning_for_run(
+        run_id,
+        live_rows=live_rows,
+        completed_at=completed_at,
+    )
     provisioned, missing, refreshed, unusable, reasons = _infer_fixture_observations(
         live_rows,
         cheat_enabled=cheat_enabled,
     )
+    if transport_provisioning.status in {"preexisting", "provisioned", "fallback_provisioned"}:
+        provisioned.add("transport_unit")
+        missing.discard("transport_unit")
+        refreshed.discard("transport_unit")
+        unusable.discard("transport_unit")
+    elif transport_provisioning.status in {"refreshed", "replaced"}:
+        provisioned.discard("transport_unit")
+        missing.discard("transport_unit")
+        refreshed.add("transport_unit")
+        unusable.discard("transport_unit")
+    elif transport_provisioning.status == "unusable":
+        provisioned.discard("transport_unit")
+        missing.discard("transport_unit")
+        refreshed.discard("transport_unit")
+        unusable.add("transport_unit")
+    else:
+        provisioned.discard("transport_unit")
+        refreshed.discard("transport_unit")
+        unusable.discard("transport_unit")
+        missing.add("transport_unit")
+    reasons["transport_unit"] = {
+        "preexisting": "transport coverage reused a preexisting live transport candidate",
+        "provisioned": "transport coverage was provisioned through the live workflow",
+        "refreshed": "transport coverage was refreshed after the first candidate went stale",
+        "replaced": "transport coverage replaced a lost transport candidate",
+        "fallback_provisioned": "transport coverage required explicit fallback provisioning",
+        "missing": "transport coverage remained unavailable for dependent commands",
+        "unusable": "transport coverage became unusable before dependent commands completed",
+    }[transport_provisioning.status]
     class_statuses = build_fixture_class_statuses(
         updated_at=completed_at,
         provisioned_fixture_classes=tuple(sorted(provisioned)),
@@ -460,7 +791,7 @@ def _fixture_provisioning_for_run(
         for status in class_statuses
         if status.status in {"provisioned", "refreshed"}
     )
-    return FixtureProvisioningResult(
+    fixture_provisioning = FixtureProvisioningResult(
         run_id=run_id,
         profile_id=_fixture_profile().profile_id,
         provisioned_fixture_classes=provisioned_fixture_classes,
@@ -470,6 +801,7 @@ def _fixture_provisioning_for_run(
         class_statuses=class_statuses,
         shared_fixture_instances=shared_fixture_instances,
     )
+    return fixture_provisioning, transport_provisioning
 
 
 def _channel_health_for_run(
@@ -512,6 +844,7 @@ def _channel_health_for_run(
 def _failure_classifications_for_run(
     records: tuple[CommandVerificationRecord, ...],
     fixture_provisioning: FixtureProvisioningResult,
+    transport_provisioning: TransportProvisioningResult,
     channel_health: ChannelHealthOutcome,
     verification_rules: tuple[ArmVerificationRule, ...],
 ) -> tuple[FailureCauseClassification, ...]:
@@ -534,6 +867,7 @@ def _failure_classifications_for_run(
             classify_failure_cause(
                 record,
                 fixture_provisioning,
+                transport_provisioning,
                 channel_health,
                 rule,
             )
@@ -857,6 +1191,12 @@ def _record_from_live_row(
     arm_name = row["arm_name"]
     command_id = _command_id(arm_name)
     evidence = row.get("evidence", "")
+    fixture_status = row.get("fixture_status", "")
+    detail = (
+        f"{evidence} | {fixture_status}"
+        if evidence and fixture_status
+        else (fixture_status or evidence)
+    )
     error = row.get("error", "")
     dispatched = row.get("dispatched") == "true"
     verified = row.get("verified")
@@ -865,7 +1205,7 @@ def _record_from_live_row(
         if cheat_enabled and arm_name in _CHEAT_ONLY
         else "natural"
     )
-    if is_channel_failure_signal(f"{evidence} {error}"):
+    if is_channel_failure_signal(f"{detail} {error}"):
         return CommandVerificationRecord(
             command_id=command_id,
             command_name=arm_name,
@@ -889,10 +1229,10 @@ def _record_from_live_row(
             category=row["category"],
             attempt_status="verified",
             verification_mode=verification_mode,
-            evidence_kind="game-state" if evidence else "live-artifact",
+            evidence_kind="game-state" if detail else "live-artifact",
             verified=True,
             source_run_id=run_id,
-            evidence_summary=evidence or f"{arm_name} verified via live behavioral coverage.",
+            evidence_summary=detail or f"{arm_name} verified via live behavioral coverage.",
             setup_actions=(
                 ("enabled cheats",) if verification_mode == "cheat-assisted" else ()
             ),
@@ -900,7 +1240,7 @@ def _record_from_live_row(
                 "applied" if prior_instruction is not None or arm_name in _NATURAL_IMPROVABLE else "none"
             ),
             improvement_note=(
-                _instruction_detail(prior_instruction, evidence or "Applied live verification guidance.")
+                _instruction_detail(prior_instruction, detail or "Applied live verification guidance.")
                 if prior_instruction is not None or arm_name in _NATURAL_IMPROVABLE
                 else ""
             ),
@@ -930,7 +1270,7 @@ def _record_from_live_row(
             evidence_kind=evidence_kind,
             verified=False,
             source_run_id=run_id,
-            blocking_reason=evidence or error or "live behavioral verification failed",
+            blocking_reason=detail or error or "live behavioral verification failed",
             improvement_state=improvement_state,  # type: ignore[arg-type]
             improvement_note=improvement_note,
         )
@@ -976,7 +1316,7 @@ def _record_from_live_row(
         evidence_kind=evidence_kind,
         verified=False,
         source_run_id=run_id,
-        blocking_reason=evidence or error or "live behavioral verification unavailable",
+        blocking_reason=detail or error or "live behavioral verification unavailable",
         improvement_state=improvement_state,  # type: ignore[arg-type]
         improvement_note=improvement_note,
     )
@@ -1287,7 +1627,7 @@ def build_run(
             )
             for arm_name in sorted(REGISTRY)
         )
-        fixture_provisioning = _fixture_provisioning_for_run(
+        fixture_provisioning, transport_provisioning = _fixture_provisioning_for_run(
             run_id,
             cheat_enabled=cheat_enabled,
             live_rows=None,
@@ -1314,7 +1654,7 @@ def build_run(
             )
             for arm_name in sorted(REGISTRY)
         )
-        fixture_provisioning = _fixture_provisioning_for_run(
+        fixture_provisioning, transport_provisioning = _fixture_provisioning_for_run(
             run_id,
             cheat_enabled=cheat_enabled,
             live_rows=live_rows,
@@ -1323,6 +1663,7 @@ def build_run(
     failure_classifications = _failure_classifications_for_run(
         command_records,
         fixture_provisioning,
+        transport_provisioning,
         channel_health,
         verification_rules,
     )
@@ -1391,6 +1732,7 @@ def build_run(
         summary=summary,
         fixture_profile=fixture_profile,
         fixture_provisioning=fixture_provisioning,
+        transport_provisioning=transport_provisioning,
         channel_health=channel_health,
         verification_rules=verification_rules,
         failure_classifications=failure_classifications,

@@ -99,6 +99,7 @@ def test_report_renders_channel_health_and_failure_causes(tmp_path):
 
     assert "## Fixture Provisioning" in rendered
     assert "### Fixture Class Statuses" in rendered
+    assert "### Transport Provisioning" in rendered
     assert "## Channel Health" in rendered
     assert "## Failure Cause Summary" in rendered
     assert "simplified bootstrap" not in rendered.lower()
@@ -150,6 +151,7 @@ def test_report_renders_fixture_class_status_and_shared_instance_detail(tmp_path
     assert "Refreshed fixtures:" in rendered
     assert "`transport_unit`" in rendered
     assert "### Shared Fixture Instances" in rendered
+    assert "Resolution trace:" in rendered
     assert "replacement_of" not in rendered.lower()
 
 

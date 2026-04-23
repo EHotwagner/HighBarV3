@@ -41,6 +41,63 @@ FixtureBlockingFallback = Literal[
     "missing_fixture",
     "transport_interruption_only_if_session_unhealthy",
 ]
+TransportProvisioningStatus = Literal[
+    "preexisting",
+    "provisioned",
+    "refreshed",
+    "replaced",
+    "fallback_provisioned",
+    "missing",
+    "unusable",
+]
+TransportResolutionSource = Literal[
+    "invoke_callback",
+    "preexisting_snapshot",
+    "audit_reference",
+]
+TransportProvisioningMode = Literal[
+    "reuse-only",
+    "natural-build",
+    "fallback-spawn",
+]
+TransportCandidateProvenance = Literal[
+    "preexisting",
+    "naturally_provisioned",
+    "refreshed",
+    "replaced",
+    "fallback_provisioned",
+]
+TransportCandidateReadinessState = Literal[
+    "ready",
+    "pending",
+    "lost",
+    "stale",
+    "incompatible",
+    "refresh_failed",
+]
+TransportPayloadCompatibility = Literal[
+    "compatible",
+    "incompatible",
+    "not_checked",
+]
+TransportLifecycleEventType = Literal[
+    "discovered",
+    "provision_started",
+    "provision_succeeded",
+    "refreshed",
+    "replaced",
+    "lost",
+    "fallback_used",
+    "compatibility_failed",
+    "provision_failed",
+]
+TransportCompatibilityResult = Literal[
+    "compatible",
+    "candidate_missing",
+    "candidate_unusable",
+    "payload_incompatible",
+]
+TransportResolutionStatus = Literal["resolved", "missing", "relay_unavailable"]
 FixtureClassState = Literal[
     "planned",
     "provisioned",
@@ -199,6 +256,71 @@ class FixtureProvisioningResult:
     completed_at: str
     class_statuses: tuple[FixtureClassStatus, ...] = ()
     shared_fixture_instances: tuple[SharedFixtureInstance, ...] = ()
+
+
+@dataclass(frozen=True)
+class SupportedTransportVariant:
+    variant_id: str
+    def_name: str
+    resolution_source: TransportResolutionSource
+    provisioning_mode: TransportProvisioningMode
+    payload_rules: tuple[str, ...]
+    priority: int
+
+
+@dataclass(frozen=True)
+class TransportResolutionTrace:
+    variant_id: str
+    callback_path: str
+    resolved_def_id: int | None
+    resolution_status: TransportResolutionStatus
+    reason: str
+
+
+@dataclass(frozen=True)
+class TransportCandidate:
+    candidate_id: str
+    variant_id: str
+    unit_id: int
+    provenance: TransportCandidateProvenance
+    readiness_state: TransportCandidateReadinessState
+    payload_compatibility: TransportPayloadCompatibility
+    discovered_at: str
+    supersedes_candidate_id: str | None = None
+
+
+@dataclass(frozen=True)
+class TransportLifecycleEvent:
+    event_id: str
+    event_type: TransportLifecycleEventType
+    candidate_id: str | None
+    command_scope: tuple[str, ...]
+    reason: str
+    recorded_at: str
+
+
+@dataclass(frozen=True)
+class TransportCompatibilityCheck:
+    command_id: str
+    candidate_id: str | None
+    payload_unit_id: int | None
+    result: TransportCompatibilityResult
+    blocking_reason: str | None
+    checked_at: str
+
+
+@dataclass(frozen=True)
+class TransportProvisioningResult:
+    run_id: str
+    supported_variants: tuple[SupportedTransportVariant, ...]
+    active_candidate_id: str | None
+    candidates: tuple[TransportCandidate, ...]
+    lifecycle_events: tuple[TransportLifecycleEvent, ...]
+    compatibility_checks: tuple[TransportCompatibilityCheck, ...]
+    resolution_trace: tuple[TransportResolutionTrace, ...]
+    status: TransportProvisioningStatus
+    affected_command_ids: tuple[str, ...]
+    completed_at: str
 
 
 @dataclass(frozen=True)
@@ -428,6 +550,7 @@ class ItertestingRun:
     previous_run_comparison: Optional[RunComparison] = None
     fixture_profile: LiveFixtureProfile | None = None
     fixture_provisioning: FixtureProvisioningResult | None = None
+    transport_provisioning: TransportProvisioningResult | None = None
     channel_health: ChannelHealthOutcome | None = None
     verification_rules: tuple[ArmVerificationRule, ...] = ()
     failure_classifications: tuple[FailureCauseClassification, ...] = ()
@@ -516,6 +639,102 @@ def _shared_fixture_instance_from_dict(
         refresh_count=payload.get("refresh_count", 0),
         last_ready_at=payload.get("last_ready_at"),
         replacement_of=payload.get("replacement_of"),
+    )
+
+
+def _supported_transport_variant_from_dict(
+    payload: dict[str, Any],
+) -> SupportedTransportVariant:
+    return SupportedTransportVariant(
+        variant_id=payload["variant_id"],
+        def_name=payload["def_name"],
+        resolution_source=payload.get("resolution_source", "audit_reference"),
+        provisioning_mode=payload.get("provisioning_mode", "reuse-only"),
+        payload_rules=tuple(payload.get("payload_rules", ())),
+        priority=payload.get("priority", 0),
+    )
+
+
+def _transport_resolution_trace_from_dict(
+    payload: dict[str, Any],
+) -> TransportResolutionTrace:
+    return TransportResolutionTrace(
+        variant_id=payload["variant_id"],
+        callback_path=payload.get("callback_path", ""),
+        resolved_def_id=payload.get("resolved_def_id"),
+        resolution_status=payload.get("resolution_status", "missing"),
+        reason=payload.get("reason", ""),
+    )
+
+
+def _transport_candidate_from_dict(payload: dict[str, Any]) -> TransportCandidate:
+    return TransportCandidate(
+        candidate_id=payload["candidate_id"],
+        variant_id=payload["variant_id"],
+        unit_id=payload.get("unit_id", 0),
+        provenance=payload.get("provenance", "preexisting"),
+        readiness_state=payload.get("readiness_state", "pending"),
+        payload_compatibility=payload.get("payload_compatibility", "not_checked"),
+        discovered_at=payload["discovered_at"],
+        supersedes_candidate_id=payload.get("supersedes_candidate_id"),
+    )
+
+
+def _transport_lifecycle_event_from_dict(
+    payload: dict[str, Any],
+) -> TransportLifecycleEvent:
+    return TransportLifecycleEvent(
+        event_id=payload["event_id"],
+        event_type=payload.get("event_type", "discovered"),
+        candidate_id=payload.get("candidate_id"),
+        command_scope=tuple(payload.get("command_scope", ())),
+        reason=payload.get("reason", ""),
+        recorded_at=payload["recorded_at"],
+    )
+
+
+def _transport_compatibility_check_from_dict(
+    payload: dict[str, Any],
+) -> TransportCompatibilityCheck:
+    return TransportCompatibilityCheck(
+        command_id=payload["command_id"],
+        candidate_id=payload.get("candidate_id"),
+        payload_unit_id=payload.get("payload_unit_id"),
+        result=payload.get("result", "candidate_missing"),
+        blocking_reason=payload.get("blocking_reason"),
+        checked_at=payload["checked_at"],
+    )
+
+
+def _transport_provisioning_from_dict(
+    payload: dict[str, Any],
+) -> TransportProvisioningResult:
+    return TransportProvisioningResult(
+        run_id=payload["run_id"],
+        supported_variants=tuple(
+            _supported_transport_variant_from_dict(item)
+            for item in payload.get("supported_variants", ())
+        ),
+        active_candidate_id=payload.get("active_candidate_id"),
+        candidates=tuple(
+            _transport_candidate_from_dict(item)
+            for item in payload.get("candidates", ())
+        ),
+        lifecycle_events=tuple(
+            _transport_lifecycle_event_from_dict(item)
+            for item in payload.get("lifecycle_events", ())
+        ),
+        compatibility_checks=tuple(
+            _transport_compatibility_check_from_dict(item)
+            for item in payload.get("compatibility_checks", ())
+        ),
+        resolution_trace=tuple(
+            _transport_resolution_trace_from_dict(item)
+            for item in payload.get("resolution_trace", ())
+        ),
+        status=payload.get("status", "missing"),
+        affected_command_ids=tuple(payload.get("affected_command_ids", ())),
+        completed_at=payload["completed_at"],
     )
 
 
@@ -753,6 +972,11 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
         fixture_provisioning=(
             _fixture_provisioning_from_dict(payload["fixture_provisioning"])
             if payload.get("fixture_provisioning")
+            else None
+        ),
+        transport_provisioning=(
+            _transport_provisioning_from_dict(payload["transport_provisioning"])
+            if payload.get("transport_provisioning")
             else None
         ),
         channel_health=(

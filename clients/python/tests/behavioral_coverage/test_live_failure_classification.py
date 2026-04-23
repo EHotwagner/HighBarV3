@@ -6,6 +6,7 @@ from highbar_client.behavioral_coverage.itertesting_types import (
     CommandVerificationRecord,
     FixtureClassStatus,
     FixtureProvisioningResult,
+    TransportProvisioningResult,
 )
 from highbar_client.behavioral_coverage.live_failure_classification import (
     classify_foundational_issue,
@@ -17,6 +18,21 @@ from highbar_client.behavioral_coverage.live_failure_classification import (
     precise_missing_fixture_classes_from_detail,
     unavailable_fixture_classes_for_command,
 )
+
+
+def _empty_transport_provisioning() -> TransportProvisioningResult:
+    return TransportProvisioningResult(
+        run_id="run-1",
+        supported_variants=(),
+        active_candidate_id=None,
+        candidates=(),
+        lifecycle_events=(),
+        compatibility_checks=(),
+        resolution_trace=(),
+        status="missing",
+        affected_command_ids=(),
+        completed_at="2026-04-22T10:15:00Z",
+    )
 
 
 def test_default_fixture_profile_covers_expected_direct_commands():
@@ -197,7 +213,13 @@ def test_transport_interruption_overrides_other_failure_causes():
         item.command_id: item for item in default_verification_rules()
     }["cmd-fight"]
 
-    classification = classify_failure_cause(record, fixture, channel, rule)
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
 
     assert classification.primary_cause == "transport_interruption"
     assert classification.source_scope == "channel_health"
@@ -247,7 +269,13 @@ def test_authoritative_class_statuses_drive_missing_fixture_classification():
         item.command_id: item for item in default_verification_rules()
     }["cmd-load-units"]
 
-    classification = classify_failure_cause(record, fixture, channel, rule)
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
 
     assert classification.primary_cause == "missing_fixture"
     assert "transport_unit" in classification.supporting_detail
@@ -377,7 +405,13 @@ def test_semantic_gate_helper_parity_is_reported_in_supporting_detail():
         item.command_id: item for item in default_verification_rules()
     }["cmd-set-wanted-max-speed"]
 
-    classification = classify_failure_cause(record, fixture, channel, rule)
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
 
     assert classification.primary_cause == "predicate_or_evidence_gap"
     assert "semantic gate (helper-parity gap)" in classification.supporting_detail
@@ -416,7 +450,13 @@ def test_semantic_gate_mod_option_is_reported_in_supporting_detail():
         item.command_id: item for item in default_verification_rules()
     }["cmd-set-wanted-max-speed"]
 
-    classification = classify_failure_cause(record, fixture, channel, rule)
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
 
     assert "semantic gate (mod option gate)" in classification.supporting_detail
 
@@ -452,7 +492,13 @@ def test_semantic_gate_lua_rewrite_is_reported_in_supporting_detail():
     )
     rule = {item.command_id: item for item in default_verification_rules()}["cmd-attack"]
 
-    classification = classify_failure_cause(record, fixture, channel, rule)
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
 
     assert "semantic gate (lua rewrite gate)" in classification.supporting_detail
 
@@ -488,6 +534,12 @@ def test_semantic_gate_unit_shape_is_reported_for_manual_launch_substitution():
     )
     rule = {item.command_id: item for item in default_verification_rules()}["cmd-dgun"]
 
-    classification = classify_failure_cause(record, fixture, channel, rule)
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
 
     assert "semantic gate (unit shape gate)" in classification.supporting_detail

@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HEADLESS_DIR="$REPO_ROOT/tests/headless"
-FEATURE_DIR="$REPO_ROOT/specs/014-fixture-bootstrap-simplification"
+FEATURE_DIR="$REPO_ROOT/specs/015-live-transport-provisioning"
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "test_live_itertesting_hardening: uv missing — skip" >&2
@@ -41,6 +41,7 @@ report = Path(sys.argv[2]).read_text(encoding="utf-8")
 
 fixture_profile = manifest.get("fixture_profile") or {}
 fixture_provisioning = manifest.get("fixture_provisioning") or {}
+transport_provisioning = manifest.get("transport_provisioning") or {}
 channel_health = manifest.get("channel_health") or {}
 verification_rules = {
     item["command_id"]: item for item in manifest.get("verification_rules", [])
@@ -56,6 +57,8 @@ shared_instances = fixture_provisioning.get("shared_fixture_instances", [])
 assert fixture_profile.get("profile_id") == "default-live-fixture-profile"
 assert "builder" in fixture_profile.get("fixture_classes", [])
 assert "cmd-load-units" in fixture_provisioning.get("affected_command_ids", [])
+assert transport_provisioning.get("status") == "missing"
+assert "cmd-load-units" in transport_provisioning.get("affected_command_ids", [])
 assert channel_health.get("status") == "healthy"
 assert verification_rules["cmd-move-unit"]["rule_mode"] == "movement_tuned"
 assert verification_rules["cmd-fight"]["rule_mode"] == "combat_tuned"
@@ -66,6 +69,7 @@ assert "cmd-load-units" in class_statuses["transport_unit"]["affected_command_id
 assert any(item["fixture_class"] == "commander" for item in shared_instances)
 for section in (
     "## Fixture Provisioning",
+    "### Transport Provisioning",
     "## Command Semantic Inventory",
     "## Channel Health",
     "## Failure Cause Summary",
@@ -140,6 +144,7 @@ manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 report = Path(sys.argv[2]).read_text(encoding="utf-8")
 semantic_gates = {item["command_id"]: item for item in manifest.get("semantic_gates", [])}
 fixture = manifest.get("fixture_provisioning") or {}
+transport = manifest.get("transport_provisioning") or {}
 class_statuses = {item["fixture_class"]: item for item in fixture.get("class_statuses", [])}
 
 assert semantic_gates["cmd-set-wanted-max-speed"]["gate_kind"] == "mod-option"
@@ -147,6 +152,8 @@ assert semantic_gates["cmd-dgun"]["gate_kind"] == "unit-shape"
 assert semantic_gates["cmd-dgun"]["custom_command_id"] == 32102
 assert semantic_gates["cmd-attack"]["gate_kind"] == "lua-rewrite"
 assert class_statuses["transport_unit"]["status"] == "unusable"
+assert transport["status"] == "unusable"
+assert "cmd-load-units" in transport.get("affected_command_ids", [])
 assert "## Semantic Gates" in report
 assert "custom command id: 32102" in report
 PY
@@ -157,9 +164,9 @@ if ! grep -Fq "Three consecutive prepared live closeout runs complete with healt
     exit 1
 fi
 
-if ! grep -Fq "simplified bootstrap blocker" \
-    "$FEATURE_DIR/contracts/fixture-blocker-classification-and-reporting.md"; then
-    echo "test_live_itertesting_hardening: 014 blocker-reporting contract is missing the legacy blocker removal guidance" >&2
+if ! grep -Fq 'only `cmd-load-onto`, `cmd-load-units`, `cmd-load-units-area`, `cmd-unload-unit`, and `cmd-unload-units-area`' \
+    "$FEATURE_DIR/contracts/transport-blocker-classification-and-reporting.md"; then
+    echo "test_live_itertesting_hardening: 015 blocker-reporting contract is missing the transport-only blocker guidance" >&2
     exit 1
 fi
 

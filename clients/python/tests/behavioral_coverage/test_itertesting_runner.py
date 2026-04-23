@@ -48,6 +48,7 @@ def test_manifest_validation_and_round_trip(tmp_path):
     assert len(loaded.command_records) == len(REGISTRY)
     assert loaded.contract_health_decision is not None
     assert loaded.fixture_provisioning is not None
+    assert loaded.transport_provisioning is not None
     assert loaded.fixture_provisioning.class_statuses
     assert loaded.fixture_provisioning.shared_fixture_instances
     assert loaded.semantic_gates == run.semantic_gates
@@ -267,6 +268,7 @@ def test_synthetic_run_records_fixture_provisioning_and_missing_fixture_causes(t
 
     assert run.fixture_profile is not None
     assert run.fixture_provisioning is not None
+    assert run.transport_provisioning is not None
     assert "cmd-load-units" in run.fixture_provisioning.affected_command_ids
     class_statuses = {
         item.fixture_class: item for item in run.fixture_provisioning.class_statuses
@@ -274,6 +276,8 @@ def test_synthetic_run_records_fixture_provisioning_and_missing_fixture_causes(t
     assert class_statuses["transport_unit"].status == "missing"
     assert "cmd-load-units" in class_statuses["transport_unit"].affected_command_ids
     assert class_statuses["commander"].status == "provisioned"
+    assert run.transport_provisioning.status == "missing"
+    assert "cmd-load-units" in run.transport_provisioning.affected_command_ids
     assert any(
         item.fixture_class == "commander"
         for item in run.fixture_provisioning.shared_fixture_instances
@@ -305,6 +309,8 @@ def test_live_rows_can_unblock_shared_fixture_commands_when_fixture_is_available
     }
     assert class_statuses["transport_unit"].status == "provisioned"
     assert class_statuses["payload_unit"].status == "provisioned"
+    assert run.transport_provisioning is not None
+    assert run.transport_provisioning.status == "provisioned"
     assert "cmd-load-units" not in class_statuses["transport_unit"].affected_command_ids
     causes = {item.command_id: item for item in run.failure_classifications}
     assert causes["cmd-load-units"].primary_cause == "predicate_or_evidence_gap"
@@ -333,6 +339,8 @@ def test_precise_missing_transport_detail_keeps_payload_provisioned(tmp_path):
     }
     assert class_statuses["transport_unit"].status == "missing"
     assert class_statuses["payload_unit"].status == "provisioned"
+    assert run.transport_provisioning is not None
+    assert run.transport_provisioning.status == "missing"
 
 
 def test_refresh_failure_only_blocks_commands_that_depend_on_the_failed_fixture(tmp_path):
@@ -357,6 +365,8 @@ def test_refresh_failure_only_blocks_commands_that_depend_on_the_failed_fixture(
         item.fixture_class: item for item in run.fixture_provisioning.class_statuses
     }
     assert class_statuses["transport_unit"].status == "unusable"
+    assert run.transport_provisioning is not None
+    assert run.transport_provisioning.status == "unusable"
     assert "cmd-load-units" in class_statuses["transport_unit"].affected_command_ids
     assert "cmd-capture" not in class_statuses["transport_unit"].affected_command_ids
     assert any(
@@ -424,6 +434,125 @@ def test_live_rows_promote_channel_failures_to_run_level_health_outcome(tmp_path
     assert run.contract_health_decision is not None
     assert "live-closeout:transport-interruption" in run.contract_health_decision.blocking_issue_ids
     assert "transport interruption" in run.contract_health_decision.summary_message.lower()
+
+
+def test_transport_provisioning_tracks_supported_variant_and_resolution_trace(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "true",
+                "verified": "false",
+                "evidence": "preexisting transport armhvytrans reached load validation",
+                "error": "effect_not_observed",
+            }
+        ],
+    )
+
+    assert run.transport_provisioning is not None
+    assert run.transport_provisioning.status == "preexisting"
+    assert run.transport_provisioning.candidates[0].variant_id == "armhvytrans"
+    trace = {
+        item.variant_id: item for item in run.transport_provisioning.resolution_trace
+    }
+    assert trace["armhvytrans"].resolution_status == "resolved"
+
+
+def test_transport_payload_incompatibility_is_recorded_per_command(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "false",
+                "verified": "false",
+                "evidence": "transport payload incompatible before load validation",
+                "error": "precondition_unmet",
+            }
+        ],
+    )
+
+    assert run.transport_provisioning is not None
+    assert run.transport_provisioning.status == "unusable"
+    check = {
+        item.command_id: item for item in run.transport_provisioning.compatibility_checks
+    }["cmd-load-units"]
+    assert check.result == "payload_incompatible"
+
+
+def test_transport_fixture_status_diagnostics_are_preserved_in_blocking_reason(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "false",
+                "verified": "na",
+                "evidence": "live fixture dependency unavailable for this arm (transport_unit)",
+                "fixture_status": (
+                    "transport_debug factory_air=present "
+                    "resolved_defs=armatlas:1,armhvytrans:1 "
+                    "build_attempts=armatlas:dispatched_waited_no_ready_transport "
+                    "pending=none ready=none "
+                    "provisioning_action=dispatch_wait_completed attempted_variant=armatlas"
+                ),
+                "error": "precondition_unmet",
+            }
+        ],
+    )
+
+    record = {
+        item.command_id: item for item in run.command_records
+    }["cmd-load-units"]
+
+    assert record.blocking_reason is not None
+    assert "transport_debug" in record.blocking_reason
+    assert "factory_air=present" in record.blocking_reason
+
+
+def test_transport_status_ignores_non_transport_destroyed_evidence(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=[
+            {
+                "arm_name": "attack",
+                "category": REGISTRY["attack"].category,
+                "dispatched": "true",
+                "verified": "true",
+                "evidence": "target 31603 destroyed",
+                "error": "",
+            },
+            {
+                "arm_name": "load_units",
+                "category": REGISTRY["load_units"].category,
+                "dispatched": "false",
+                "verified": "na",
+                "evidence": "live fixture dependency unavailable for this arm (transport_unit)",
+                "fixture_status": (
+                    "transport_debug factory_air=absent "
+                    "resolved_defs=armatlas:0,armhvytrans:0 "
+                    "build_attempts=none pending=none ready=none "
+                    "provisioning_action=no_ready_factory_air"
+                ),
+                "error": "precondition_unmet",
+            },
+        ],
+    )
+
+    assert run.transport_provisioning is not None
+    assert run.transport_provisioning.status == "missing"
 
 
 def test_foundational_blockers_disable_normal_improvement_guidance(tmp_path):

@@ -19,6 +19,7 @@ from .itertesting_types import (
     CommandFixtureDependency,
     FixtureClassStatus,
     SharedFixtureInstance,
+    SupportedTransportVariant,
 )
 from .types import RegistryError
 
@@ -78,6 +79,9 @@ class BootstrapContext:
     manifest: tuple[tuple[str, int], ...] = ()
     cheats_enabled: bool = False
     def_id_by_name: dict[str, int] = None                     # type: ignore[assignment]
+    observed_own_units: dict[int, Any] = None                 # type: ignore[assignment]
+    transport_build_requests: dict[str, str] = None           # type: ignore[assignment]
+    transport_diagnostics: list[str] = None                   # type: ignore[assignment]
 
     def __post_init__(self):
         if self.capability_units is None:
@@ -90,6 +94,12 @@ class BootstrapContext:
             self.fixture_positions = {}
         if self.def_id_by_name is None:
             self.def_id_by_name = {}
+        if self.observed_own_units is None:
+            self.observed_own_units = {}
+        if self.transport_build_requests is None:
+            self.transport_build_requests = {}
+        if self.transport_diagnostics is None:
+            self.transport_diagnostics = []
 
 
 # ---- manifest computation -----------------------------------------------
@@ -267,9 +277,63 @@ _FIXTURE_CLASSES_BY_CUSTOM_COMMAND_ID: dict[int, tuple[str, ...]] = {
     37382: ("cloakable",),
 }
 
+TRANSPORT_DEPENDENT_COMMAND_IDS: tuple[str, ...] = (
+    "cmd-load-onto",
+    "cmd-load-units",
+    "cmd-load-units-area",
+    "cmd-unload-unit",
+    "cmd-unload-units-area",
+)
+
+_SUPPORTED_TRANSPORT_VARIANTS: tuple[SupportedTransportVariant, ...] = (
+    SupportedTransportVariant(
+        variant_id="armatlas",
+        def_name="armatlas",
+        resolution_source="invoke_callback",
+        provisioning_mode="natural-build",
+        payload_rules=(
+            "Preferred baseline ARM air transport variant.",
+            "Must be alive and distinct from the pending payload unit.",
+        ),
+        priority=10,
+    ),
+    SupportedTransportVariant(
+        variant_id="armhvytrans",
+        def_name="armhvytrans",
+        resolution_source="invoke_callback",
+        provisioning_mode="natural-build",
+        payload_rules=(
+            "Acceptable heavy transport variant for transport_unit coverage.",
+            "Must be alive and distinct from the pending payload unit.",
+        ),
+        priority=20,
+    ),
+)
+
 
 def fixture_classes_for_command(command_id: str) -> tuple[str, ...]:
     return DEFAULT_LIVE_FIXTURE_CLASS_BY_COMMAND.get(command_id, ("commander",))
+
+
+def transport_dependent_command_ids() -> tuple[str, ...]:
+    return TRANSPORT_DEPENDENT_COMMAND_IDS
+
+
+def is_transport_dependent_command(command_id: str) -> bool:
+    return command_id in TRANSPORT_DEPENDENT_COMMAND_IDS
+
+
+def supported_transport_variants() -> tuple[SupportedTransportVariant, ...]:
+    return _SUPPORTED_TRANSPORT_VARIANTS
+
+
+def supported_transport_variant_by_name(
+    def_name: str,
+) -> SupportedTransportVariant | None:
+    for variant in _SUPPORTED_TRANSPORT_VARIANTS:
+        if variant.def_name == def_name:
+            return variant
+    return None
 
 
 def all_live_fixture_classes() -> tuple[str, ...]:
@@ -485,12 +549,17 @@ __all__ = [
     "DEFAULT_LIVE_FIXTURE_CLASS_BY_COMMAND",
     "DEFAULT_LIVE_FIXTURE_CLASSES",
     "OPTIONAL_LIVE_FIXTURE_CLASSES",
+    "TRANSPORT_DEPENDENT_COMMAND_IDS",
     "all_live_fixture_classes",
     "command_fixture_dependency",
     "planned_command_ids_for_fixture_class",
     "affected_commands_for_fixture_classes",
     "known_custom_command_ids",
+    "is_transport_dependent_command",
     "fixture_classes_for_custom_command_id",
+    "supported_transport_variant_by_name",
+    "supported_transport_variants",
+    "transport_dependent_command_ids",
     "build_fixture_class_statuses",
     "build_shared_fixture_instance",
     "fixture_classes_for_command",

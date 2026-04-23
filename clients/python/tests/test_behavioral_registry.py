@@ -12,15 +12,26 @@ import pytest
 
 from highbar_client.behavioral_coverage import REGISTRY
 from highbar_client.behavioral_coverage import (
+    _attempt_transport_provisioning,
+    _can_skip_bootstrap_step_failure,
+    _economy_obviously_starved,
+    _execute_live_bootstrap,
+    _position_for_bootstrap_step,
     _refresh_bootstrap_context,
+    _reset_live_context_to_manifest,
     _simplified_bootstrap_precondition_message,
 )
-from highbar_client.behavioral_coverage.bootstrap import BootstrapContext, Vector3
+from highbar_client.behavioral_coverage.bootstrap import (
+    BootstrapContext,
+    DEFAULT_BOOTSTRAP_PLAN,
+    Vector3,
+)
 from highbar_client.behavioral_coverage.capabilities import CAPABILITY_TAGS
 from highbar_client.behavioral_coverage.registry import (
     _build_registry,
     _expected_arm_names,
     exact_custom_command_ids_for_arm,
+    transport_compatibility_for_command,
     validate_registry,
 )
 from highbar_client.behavioral_coverage.types import (
@@ -44,6 +55,8 @@ class FakeOwnUnit:
     position: FakePosition
     health: float
     max_health: float
+    under_construction: bool = False
+    build_progress: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -70,6 +83,7 @@ class FakeSnapshot:
     visible_enemies: tuple[FakeEnemyUnit, ...]
     map_features: tuple[FakeFeature, ...]
     frame_number: int = 0
+    economy: object | None = None
 
 
 @dataclass(frozen=True)
@@ -360,6 +374,123 @@ def test_load_units_precondition_only_reports_truly_missing_composite_fixture():
     assert "payload_unit" not in message
 
 
+def test_transport_compatibility_helper_flags_payload_incompatibility():
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+        fixture_unit_ids={"transport_unit": 99, "payload_unit": 99},
+    )
+
+    result, detail = transport_compatibility_for_command("cmd-load-units", ctx)
+
+    assert result == "payload_incompatible"
+    assert detail is not None
+
+
+def test_refresh_bootstrap_context_prefers_runtime_resolved_transport_variant():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    heavy_transport = FakeOwnUnit(
+        unit_id=109,
+        def_id=777,
+        position=FakePosition(12.0, 0.0, 22.0),
+        health=1800.0,
+        max_health=1800.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(commander, heavy_transport),
+        visible_enemies=(),
+        map_features=(),
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+        def_id_by_name={"armhvytrans": 777},
+    )
+
+    refreshed = _refresh_bootstrap_context({"snapshots": [snapshot], "deltas": []}, ctx)
+
+    assert refreshed.fixture_unit_ids["transport_unit"] == 109
+
+
+def test_refresh_bootstrap_context_clears_stale_transport_fixture_when_missing():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(),
+        map_features=(),
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+        fixture_unit_ids={"transport_unit": 109, "payload_unit": 110},
+        fixture_positions={
+            "transport_unit": Vector3(12.0, 0.0, 22.0),
+            "payload_unit": Vector3(13.0, 0.0, 23.0),
+        },
+    )
+
+    refreshed = _refresh_bootstrap_context({"snapshots": [snapshot], "deltas": []}, ctx)
+
+    assert "transport_unit" not in refreshed.fixture_unit_ids
+    assert "payload_unit" not in refreshed.fixture_unit_ids
+
+
+def test_refresh_bootstrap_context_prefers_builder_payload_over_cloakable():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    cloakable = FakeOwnUnit(
+        unit_id=88,
+        def_id=3,
+        position=FakePosition(14.0, 0.0, 26.0),
+        health=89.0,
+        max_health=89.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(12.0, 0.0, 24.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    transport = FakeOwnUnit(
+        unit_id=99,
+        def_id=4,
+        position=FakePosition(16.0, 0.0, 28.0),
+        health=265.0,
+        max_health=265.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(commander, cloakable, builder, transport),
+        visible_enemies=(),
+        map_features=(),
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+    )
+
+    refreshed = _refresh_bootstrap_context({"snapshots": [snapshot], "deltas": []}, ctx)
+
+    assert refreshed.fixture_unit_ids["payload_unit"] == 77
+
+
 def test_self_destruct_precondition_accepts_builder_as_disposable_fixture():
     ctx = BootstrapContext(
         commander_unit_id=42,
@@ -418,6 +549,171 @@ def test_self_destruct_precondition_accepts_payload_as_disposable_fixture():
     assert message is None
 
 
+def test_transport_compatibility_helper_flags_transport_under_construction():
+    transport = FakeOwnUnit(
+        unit_id=99,
+        def_id=4,
+        position=FakePosition(16.0, 0.0, 28.0),
+        health=265.0,
+        max_health=265.0,
+        under_construction=True,
+        build_progress=0.5,
+    )
+    payload = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(12.0, 0.0, 24.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+        fixture_unit_ids={"transport_unit": 99, "payload_unit": 77},
+        observed_own_units={99: transport, 77: payload},
+    )
+
+    result, detail = transport_compatibility_for_command("cmd-load-units", ctx)
+
+    assert result == "candidate_unusable"
+    assert "under construction" in (detail or "")
+
+
+def test_transport_compatibility_helper_flags_payload_under_construction():
+    transport = FakeOwnUnit(
+        unit_id=99,
+        def_id=4,
+        position=FakePosition(16.0, 0.0, 28.0),
+        health=265.0,
+        max_health=265.0,
+    )
+    payload = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(12.0, 0.0, 24.0),
+        health=690.0,
+        max_health=690.0,
+        under_construction=True,
+        build_progress=0.5,
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+        fixture_unit_ids={"transport_unit": 99, "payload_unit": 77},
+        observed_own_units={99: transport, 77: payload},
+    )
+
+    result, detail = transport_compatibility_for_command("cmd-load-units", ctx)
+
+    assert result == "payload_incompatible"
+    assert "payload" in (detail or "")
+
+
+def test_attempt_transport_provisioning_dispatches_natural_build(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    factory_air = FakeOwnUnit(
+        unit_id=51,
+        def_id=100,
+        position=FakePosition(30.0, 0.0, 40.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=77,
+        def_id=2,
+        position=FakePosition(12.0, 0.0, 24.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    shared = {
+        "snapshots": [
+            FakeSnapshot(
+                own_units=(commander, factory_air, builder),
+                visible_enemies=(),
+                map_features=(),
+            )
+        ],
+        "deltas": [],
+    }
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+        def_id_by_name={"armap": 100, "armatlas": 200},
+    )
+    dispatched = []
+
+    def fake_dispatch(_stub, batch, token=None):
+        dispatched.append((batch, token))
+        return None
+
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fake_dispatch)
+
+    refreshed = _attempt_transport_provisioning(object(), shared, ctx, wait_timeout_s=0.0)
+
+    assert refreshed.capability_units["factory_air"] == 51
+    assert len(dispatched) == 1
+    batch = dispatched[0][0]
+    assert batch.target_unit_id == 51
+    assert batch.commands[0].build_unit.unit_id == 51
+    assert batch.commands[0].build_unit.to_build_unit_def_id == 200
+
+
+def test_attempt_transport_provisioning_does_not_duplicate_pending_build(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    factory_air = FakeOwnUnit(
+        unit_id=51,
+        def_id=100,
+        position=FakePosition(30.0, 0.0, 40.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    pending_transport = FakeOwnUnit(
+        unit_id=99,
+        def_id=200,
+        position=FakePosition(35.0, 0.0, 45.0),
+        health=100.0,
+        max_health=265.0,
+        under_construction=True,
+        build_progress=0.5,
+    )
+    shared = {
+        "snapshots": [
+            FakeSnapshot(
+                own_units=(commander, factory_air, pending_transport),
+                visible_enemies=(),
+                map_features=(),
+            )
+        ],
+        "deltas": [],
+    }
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        capability_units={"commander": 42},
+        def_id_by_name={"armap": 100, "armatlas": 200},
+    )
+
+    def fail_dispatch(*_args, **_kwargs):
+        raise AssertionError("dispatch should not be called while a transport build is already pending")
+
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fail_dispatch)
+
+    refreshed = _attempt_transport_provisioning(object(), shared, ctx, wait_timeout_s=0.0)
+
+    assert "transport_unit" not in refreshed.fixture_unit_ids
+
+
 def test_self_destruct_builder_targets_payload_before_commander():
     ctx = BootstrapContext(
         commander_unit_id=42,
@@ -429,6 +725,480 @@ def test_self_destruct_builder_targets_payload_before_commander():
 
     assert batch.target_unit_id == 99
     assert batch.commands[0].self_destruct.unit_id == 99
+
+
+def test_execute_live_bootstrap_builds_full_plan(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    mex = FakeOwnUnit(
+        unit_id=101,
+        def_id=11,
+        position=FakePosition(106.0, 0.0, 20.0),
+        health=100.0,
+        max_health=100.0,
+    )
+    solar = FakeOwnUnit(
+        unit_id=102,
+        def_id=12,
+        position=FakePosition(-86.0, 0.0, 20.0),
+        health=100.0,
+        max_health=100.0,
+    )
+    factory_ground = FakeOwnUnit(
+        unit_id=103,
+        def_id=13,
+        position=FakePosition(170.0, 0.0, 116.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    factory_air = FakeOwnUnit(
+        unit_id=104,
+        def_id=14,
+        position=FakePosition(-150.0, 0.0, 116.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    radar = FakeOwnUnit(
+        unit_id=105,
+        def_id=15,
+        position=FakePosition(106.0, 0.0, -76.0),
+        health=100.0,
+        max_health=100.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    cloakable = FakeOwnUnit(
+        unit_id=107,
+        def_id=17,
+        position=FakePosition(-148.0, 0.0, 118.0),
+        health=89.0,
+        max_health=89.0,
+    )
+    shared = {
+        "snapshots": [
+            FakeSnapshot(own_units=(commander,), visible_enemies=(), map_features=(), frame_number=0)
+        ],
+        "deltas": [],
+    }
+    produced_by_def_id = {
+        11: mex,
+        12: solar,
+        13: factory_ground,
+        14: factory_air,
+        15: radar,
+        16: builder,
+        17: cloakable,
+    }
+    pending_snapshots = []
+    dispatched = []
+    wait_call_count = 0
+    request_call_count = 0
+
+    def fake_resolve_bootstrap_defs(_stub, ctx, token=None):
+        del token
+        ctx.def_id_by_name.update(
+            {
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+                "armap": 14,
+                "armrad": 15,
+                "armck": 16,
+                "armpeep": 17,
+                "armatlas": 18,
+            }
+        )
+
+    def fake_resolve_transport_defs(_stub, ctx, token=None):
+        del token
+        ctx.transport_resolution_trace = ()
+
+    def fake_request_snapshot(_stub, token=None):
+        nonlocal request_call_count
+        del token
+        request_call_count += 1
+        return 0
+
+    def fake_wait_for_snapshot(_shared, min_frame, timeout_s):
+        nonlocal wait_call_count
+        del timeout_s
+        wait_call_count += 1
+        if wait_call_count == 1:
+            return None
+        if not pending_snapshots:
+            return None
+        for index, snapshot in enumerate(pending_snapshots):
+            if snapshot.frame_number < min_frame:
+                continue
+            del pending_snapshots[index]
+            shared["snapshots"].append(snapshot)
+            return snapshot
+        return None
+
+    def fake_dispatch(_stub, batch, token=None):
+        del token
+        dispatched.append(batch)
+        build_def_id = batch.commands[0].build_unit.to_build_unit_def_id
+        produced_unit = produced_by_def_id[build_def_id]
+        latest_snapshot = shared["snapshots"][-1]
+        next_units = tuple(getattr(latest_snapshot, "own_units", ())) + (produced_unit,)
+        pending_snapshots.append(
+            FakeSnapshot(
+                own_units=next_units,
+                visible_enemies=(),
+                map_features=(),
+                frame_number=getattr(latest_snapshot, "frame_number", 0) + len(pending_snapshots) + 1,
+            )
+        )
+        return None
+
+    monkeypatch.setattr("highbar_client.behavioral_coverage._resolve_bootstrap_defs", fake_resolve_bootstrap_defs)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._resolve_supported_transport_defs", fake_resolve_transport_defs)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._request_snapshot", fake_request_snapshot)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._wait_for_snapshot", fake_wait_for_snapshot)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fake_dispatch)
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
+    )
+
+    static_map = type(
+        "FakeStaticMap",
+        (),
+        {
+            "metal_spots": (
+                FakePosition(200.0, 0.0, 300.0),
+                FakePosition(106.0, 0.0, 20.0),
+            )
+        },
+    )()
+
+    ctx = _execute_live_bootstrap(object(), shared, token="tok", static_map=static_map)
+
+    assert len(dispatched) == 7
+    assert [batch.target_unit_id for batch in dispatched[:5]] == [42, 42, 42, 42, 42]
+    assert [batch.target_unit_id for batch in dispatched[5:]] == [103, 104]
+    assert request_call_count >= 7
+    assert dispatched[0].commands[0].build_unit.build_position.x == 106.0
+    assert dispatched[0].commands[0].build_unit.build_position.z == 20.0
+    assert ctx.capability_units["factory_ground"] == 103
+    assert ctx.capability_units["factory_air"] == 104
+    assert ctx.capability_units["builder"] == 106
+    assert ctx.capability_units["cloakable"] == 107
+    assert dict(ctx.manifest)["armap"] == 1
+    assert dict(ctx.manifest)["armck"] == 1
+    assert dict(ctx.manifest)["armpeep"] == 1
+
+
+def test_position_for_bootstrap_step_skips_occupied_metal_spot():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    occupied = FakeOwnUnit(
+        unit_id=77,
+        def_id=11,
+        position=FakePosition(106.0, 0.0, 20.0),
+        health=100.0,
+        max_health=100.0,
+    )
+    step = DEFAULT_BOOTSTRAP_PLAN[0]
+    static_map = type(
+        "FakeStaticMap",
+        (),
+        {
+            "metal_spots": (
+                FakePosition(106.0, 0.0, 20.0),
+                FakePosition(200.0, 0.0, 300.0),
+            )
+        },
+    )()
+    snapshot = FakeSnapshot(
+        own_units=(commander, occupied),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+    )
+
+    position = _position_for_bootstrap_step(
+        step,
+        Vector3(10.0, 0.0, 20.0),
+        static_map=static_map,
+        snapshot=snapshot,
+        ignore_unit_ids={42},
+    )
+
+    assert position.x == 200.0
+    assert position.z == 300.0
+
+
+def test_position_for_bootstrap_step_relocates_blocked_factory_site():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    blocker = FakeOwnUnit(
+        unit_id=77,
+        def_id=99,
+        position=FakePosition(170.0, 0.0, 116.0),
+        health=1000.0,
+        max_health=1000.0,
+    )
+    step = DEFAULT_BOOTSTRAP_PLAN[2]
+    snapshot = FakeSnapshot(
+        own_units=(commander, blocker),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+    )
+
+    position = _position_for_bootstrap_step(
+        step,
+        Vector3(10.0, 0.0, 20.0),
+        snapshot=snapshot,
+        ignore_unit_ids={42},
+    )
+
+    assert (position.x, position.z) != (170.0, 116.0)
+
+
+def test_economy_obviously_starved_requires_no_metal_and_no_income():
+    starved_snapshot = FakeSnapshot(
+        own_units=(),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+        economy=type(
+            "Economy",
+            (),
+            {
+                "metal": 0.1,
+                "metal_income": 0.0,
+                "metal_storage": 1500.0,
+                "energy": 6000.0,
+                "energy_income": 0.0,
+                "energy_storage": 8000.0,
+            },
+        )(),
+    )
+    healthy_snapshot = FakeSnapshot(
+        own_units=(),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+        economy=type(
+            "Economy",
+            (),
+            {
+                "metal": 25.0,
+                "metal_income": 2.0,
+                "metal_storage": 1500.0,
+                "energy": 6000.0,
+                "energy_income": 20.0,
+                "energy_storage": 8000.0,
+            },
+        )(),
+    )
+
+    assert _economy_obviously_starved(starved_snapshot)
+    assert not _economy_obviously_starved(healthy_snapshot)
+
+
+def test_execute_live_bootstrap_reuses_existing_ready_plan_units(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    mex = FakeOwnUnit(101, 11, FakePosition(106.0, 0.0, 20.0), 100.0, 100.0)
+    solar = FakeOwnUnit(102, 12, FakePosition(-86.0, 0.0, 20.0), 100.0, 100.0)
+    factory_ground = FakeOwnUnit(103, 13, FakePosition(170.0, 0.0, 116.0), 2050.0, 2050.0)
+    factory_air = FakeOwnUnit(104, 14, FakePosition(-150.0, 0.0, 116.0), 2050.0, 2050.0)
+    radar = FakeOwnUnit(105, 15, FakePosition(106.0, 0.0, -76.0), 100.0, 100.0)
+    builder = FakeOwnUnit(106, 16, FakePosition(172.0, 0.0, 118.0), 690.0, 690.0)
+    cloakable = FakeOwnUnit(107, 17, FakePosition(-148.0, 0.0, 118.0), 89.0, 89.0)
+    shared = {
+        "snapshots": [
+            FakeSnapshot(
+                own_units=(commander, mex, solar, factory_ground, factory_air, radar, builder, cloakable),
+                visible_enemies=(),
+                map_features=(),
+                frame_number=0,
+            )
+        ],
+        "deltas": [],
+    }
+    dispatched = []
+
+    def fake_resolve_bootstrap_defs(_stub, ctx, token=None):
+        del token
+        ctx.def_id_by_name.update(
+            {
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+                "armap": 14,
+                "armrad": 15,
+                "armck": 16,
+                "armpeep": 17,
+                "armatlas": 18,
+            }
+        )
+
+    monkeypatch.setattr("highbar_client.behavioral_coverage._resolve_bootstrap_defs", fake_resolve_bootstrap_defs)
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._resolve_supported_transport_defs",
+        lambda _stub, ctx, token=None: setattr(ctx, "transport_resolution_trace", ()),
+    )
+    monkeypatch.setattr("highbar_client.behavioral_coverage._request_snapshot", lambda _stub, token=None: 0)
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_snapshot",
+        lambda _shared, min_frame, timeout_s: None,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._dispatch",
+        lambda _stub, batch, token=None: dispatched.append(batch),
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
+    )
+
+    ctx = _execute_live_bootstrap(object(), shared, token="tok")
+
+    assert dispatched == []
+    assert ctx.capability_units["mex"] == 101
+    assert ctx.capability_units["factory_ground"] == 103
+    assert ctx.capability_units["factory_air"] == 104
+    assert ctx.capability_units["builder"] == 106
+    assert ctx.capability_units["cloakable"] == 107
+
+
+def test_can_skip_bootstrap_step_failure_only_for_optional_no_candidate_steps():
+    assert _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[0],
+        RuntimeError("timeout waiting for new ready unit def_id=149 saw_new_candidate=0"),
+    )
+    assert _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[1],
+        RuntimeError("timeout waiting for new ready unit def_id=209 saw_new_candidate=0"),
+    )
+    assert _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[4],
+        RuntimeError("timeout waiting for new ready unit def_id=333 saw_new_candidate=0"),
+    )
+    assert not _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[0],
+        RuntimeError("timeout waiting for new ready unit def_id=149 saw_new_candidate=1"),
+    )
+    assert not _can_skip_bootstrap_step_failure(
+        DEFAULT_BOOTSTRAP_PLAN[2],
+        RuntimeError("timeout waiting for new ready unit def_id=150 saw_new_candidate=0"),
+    )
+
+
+def test_reset_live_context_to_manifest_reissues_missing_builder(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    factory_ground = FakeOwnUnit(
+        unit_id=103,
+        def_id=13,
+        position=FakePosition(170.0, 0.0, 116.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    builder = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    current = FakeSnapshot(
+        own_units=(commander, factory_ground),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    restored = FakeSnapshot(
+        own_units=(commander, factory_ground, builder),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=11,
+    )
+    shared = {"snapshots": [current], "deltas": []}
+    pending_snapshots = [restored]
+    dispatched = []
+    wait_call_count = 0
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42, "factory_ground": 103},
+        manifest=(("armck", 1), ("armcom", 1), ("armvp", 1)),
+        def_id_by_name={"armcom": 1, "armvp": 13, "armck": 16},
+        observed_own_units={42: commander, 103: factory_ground},
+    )
+
+    def fake_request_snapshot(_stub, token=None):
+        del token
+        return 0
+
+    def fake_wait_for_snapshot(_shared, min_frame, timeout_s):
+        nonlocal wait_call_count
+        del timeout_s
+        wait_call_count += 1
+        if wait_call_count == 1:
+            return None
+        if not pending_snapshots:
+            return None
+        snapshot = pending_snapshots.pop(0)
+        if snapshot.frame_number < min_frame:
+            return None
+        shared["snapshots"].append(snapshot)
+        return snapshot
+
+    def fake_dispatch(_stub, batch, token=None):
+        del token
+        dispatched.append(batch)
+        return None
+
+    monkeypatch.setattr("highbar_client.behavioral_coverage._request_snapshot", fake_request_snapshot)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._wait_for_snapshot", fake_wait_for_snapshot)
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fake_dispatch)
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
+    )
+
+    refreshed = _reset_live_context_to_manifest(object(), shared, ctx, timeout_s=10.0, token="tok")
+
+    assert len(dispatched) == 1
+    assert dispatched[0].target_unit_id == 103
+    assert dispatched[0].commands[0].build_unit.to_build_unit_def_id == 16
+    assert refreshed.capability_units["builder"] == 106
 
 
 def test_custom_arm_exposes_exact_bar_command_inventory_ids():

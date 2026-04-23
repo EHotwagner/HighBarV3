@@ -18,6 +18,7 @@ from .itertesting_types import (
     FailureCauseClassification,
     FixtureProvisioningResult,
     LiveFixtureProfile,
+    TransportProvisioningResult,
 )
 from .predicates import semantic_gate_metadata
 from .registry import REGISTRY
@@ -366,6 +367,7 @@ def normalize_contract_issues(
 def classify_failure_cause(
     record: CommandVerificationRecord,
     fixture_provisioning: FixtureProvisioningResult,
+    transport_provisioning: TransportProvisioningResult,
     channel_health: ChannelHealthOutcome,
     verification_rule: ArmVerificationRule,
 ) -> FailureCauseClassification:
@@ -407,11 +409,16 @@ def classify_failure_cause(
         )
     ):
         joined = ", ".join(unavailable_fixture_classes) or detail
+        transport_detail = detail
+        for check in transport_provisioning.compatibility_checks:
+            if check.command_id == record.command_id and check.blocking_reason:
+                transport_detail = check.blocking_reason
+                break
         return FailureCauseClassification(
             command_id=record.command_id,
             run_id=record.source_run_id,
             primary_cause="missing_fixture",
-            supporting_detail=f"missing fixture classes: {joined}",
+            supporting_detail=f"missing fixture classes: {joined}; {transport_detail}",
             source_scope="bootstrap",
         )
 

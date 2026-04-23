@@ -35,9 +35,12 @@ sys.path.insert(0, "/tmp/hb-run/pyproto")
 import grpc
 from concurrent import futures
 from google.protobuf.descriptor import FieldDescriptor
+from highbar import callbacks_pb2
 from highbar import coordinator_pb2, coordinator_pb2_grpc
 from highbar import commands_pb2, service_pb2, service_pb2_grpc
 from highbar import state_pb2
+
+TOKEN_HEADER = "x-highbar-ai-token"
 
 
 class Relay:
@@ -225,10 +228,20 @@ class ProxySvc(service_pb2_grpc.HighBarProxyServicer):
         self.coord_id = coord_id
         self.relay = relay
         self.session_seq = 0
+        self.callback_proxy_endpoint = os.environ.get(
+            "HIGHBAR_CALLBACK_PROXY_ENDPOINT", ""
+        ).strip()
 
     def _new_session_id(self):
         self.session_seq += 1
         return f"{self.coord_id}-sess-{self.session_seq}"
+
+    def _token_metadata(self, context):
+        return [
+            (item.key, item.value)
+            for item in context.invocation_metadata()
+            if item.key == TOKEN_HEADER
+        ]
 
     def Hello(self, request, context):
         print(f"[proxy] Hello from {context.peer()} "
@@ -238,11 +251,35 @@ class ProxySvc(service_pb2_grpc.HighBarProxyServicer):
             context.set_details(
                 f"schema mismatch: server=1.0.0 client={request.schema_version}")
             return service_pb2.HelloResponse()
-        return service_pb2.HelloResponse(
+        static_map = None
+        current_frame = 0
+        if self.callback_proxy_endpoint:
+            metadata = self._token_metadata(context)
+            try:
+                with grpc.insecure_channel(self.callback_proxy_endpoint) as channel:
+                    stub = service_pb2_grpc.HighBarProxyStub(channel)
+                    downstream = stub.Hello(
+                        service_pb2.HelloRequest(
+                            schema_version=request.schema_version,
+                            client_id=request.client_id,
+                            role=request.role,
+                        ),
+                        metadata=metadata,
+                        timeout=5.0,
+                    )
+                static_map = downstream.static_map
+                current_frame = downstream.current_frame
+            except grpc.RpcError:
+                static_map = None
+                current_frame = 0
+        response = service_pb2.HelloResponse(
             schema_version="1.0.0",
             session_id=self._new_session_id(),
-            current_frame=0,
+            current_frame=current_frame,
         )
+        if static_map is not None:
+            response.static_map.CopyFrom(static_map)
+        return response
 
     def StreamState(self, request, context):
         print(f"[proxy] StreamState subscriber from {context.peer()} "
@@ -281,6 +318,42 @@ class ProxySvc(service_pb2_grpc.HighBarProxyServicer):
             batches_rejected_invalid=0,
             batches_rejected_full=0,
         )
+
+    def InvokeCallback(self, request, context):
+        if not self.callback_proxy_endpoint:
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "InvokeCallback relay unavailable; set HIGHBAR_CALLBACK_PROXY_ENDPOINT",
+            )
+        metadata = self._token_metadata(context)
+        print(
+            f"[proxy] InvokeCallback from {context.peer()} "
+            f"callback_id={request.callback_id} "
+            f"endpoint={self.callback_proxy_endpoint} "
+            f"token={'present' if metadata else 'absent'}",
+            flush=True,
+        )
+        try:
+            with grpc.insecure_channel(self.callback_proxy_endpoint) as channel:
+                stub = service_pb2_grpc.HighBarProxyStub(channel)
+                stub.Hello(
+                    service_pb2.HelloRequest(
+                        schema_version="1.0.0",
+                        client_id=f"{self.coord_id}-callback-relay",
+                        role=service_pb2.Role.ROLE_AI,
+                    ),
+                    metadata=metadata,
+                    timeout=5.0,
+                )
+                return stub.InvokeCallback(request, metadata=metadata, timeout=5.0)
+        except grpc.RpcError as exc:
+            context.abort(
+                exc.code(),
+                exc.details() or "callback relay failed",
+            )
+        except Exception as exc:
+            context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
+        return callbacks_pb2.CallbackResponse(request_id=request.request_id)
 
 
 # ----------------------------------------------------------------------

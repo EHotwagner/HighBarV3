@@ -78,6 +78,10 @@ assert_wrapper_semantic_inventory() {
         echo "test_itertesting_campaign: wrapper did not emit semantic inventory" >&2
         exit 1
     fi
+    if [[ "$output" != *"transport_status="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit transport status" >&2
+        exit 1
+    fi
     if [[ "$output" != *"semantic_gates="* ]]; then
         echo "test_itertesting_campaign: wrapper did not emit semantic gate summary" >&2
         exit 1
@@ -161,11 +165,13 @@ with open(sys.argv[1], "r", encoding="utf-8") as f:
     payload = json.load(f)
 
 fixture = payload.get("fixture_provisioning") or {}
+transport = payload.get("transport_provisioning") or {}
 class_statuses = fixture.get("class_statuses") or []
 assert class_statuses, "fixture class statuses missing from manifest"
 status_by_class = {item["fixture_class"]: item["status"] for item in class_statuses}
 assert status_by_class["transport_unit"] in {"missing", "provisioned", "refreshed", "unusable"}
 assert "affected_command_ids" in fixture
+assert transport.get("status") in {"missing", "preexisting", "provisioned", "refreshed", "replaced", "fallback_provisioned", "unusable"}
 PY
 }
 
