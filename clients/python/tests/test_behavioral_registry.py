@@ -20,6 +20,7 @@ from highbar_client.behavioral_coverage import (
     _can_skip_bootstrap_step_failure,
     _economy_obviously_starved,
     _execute_live_bootstrap,
+    _issue_bootstrap_build_step_with_retries,
     _issue_bootstrap_seed_step,
     _position_for_bootstrap_step,
     _refresh_bootstrap_context,
@@ -1279,6 +1280,182 @@ def test_issue_bootstrap_seed_step_retries_alternate_mex_positions(monkeypatch):
     assert completed.unit_id == 101
 
 
+def test_issue_bootstrap_build_step_retries_alternate_positions(monkeypatch):
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        def_id_by_name={"armap": 14},
+    )
+    snapshot = FakeSnapshot(
+        own_units=(),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    shared = {"snapshots": [snapshot], "deltas": []}
+    candidate_positions = (
+        Vector3(100.0, 0.0, 200.0),
+        Vector3(260.0, 0.0, 200.0),
+    )
+    completed_unit = FakeOwnUnit(
+        unit_id=104,
+        def_id=14,
+        position=FakePosition(260.0, 0.0, 200.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    dispatched = []
+    attempt_count = 0
+
+    def record_dispatch(_stub, batch, token=None):
+        del token
+        command = batch.commands[0]
+        kind = command.WhichOneof("command")
+        if kind == "build_unit":
+            dispatched.append(
+                (
+                    kind,
+                    command.build_unit.build_position.x,
+                    command.build_unit.build_position.y,
+                    command.build_unit.build_position.z,
+                )
+            )
+        else:
+            dispatched.append((kind, None, None, None))
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._dispatch",
+        record_dispatch,
+    )
+
+    def fake_wait_for_new_ready_unit(
+        _shared,
+        *,
+        def_id,
+        baseline_ids,
+        timeout_s,
+        stub=None,
+        token=None,
+    ):
+        nonlocal attempt_count
+        del _shared, def_id, baseline_ids, timeout_s, stub, token
+        attempt_count += 1
+        if attempt_count == 1:
+            raise RuntimeError("timeout waiting for new ready unit def_id=14 saw_new_candidate=0")
+        return completed_unit
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_new_ready_unit",
+        fake_wait_for_new_ready_unit,
+    )
+
+    completed = _issue_bootstrap_build_step_with_retries(
+        object(),
+        shared,
+        ctx,
+        DEFAULT_BOOTSTRAP_PLAN[3],
+        builder_unit_id=42,
+        candidate_positions=candidate_positions,
+        baseline_ids=set(),
+        token="tok",
+    )
+
+    assert attempt_count == 2
+    assert dispatched == [
+        ("build_unit", 100.0, 0.0, 200.0),
+        ("stop", None, None, None),
+        ("build_unit", 260.0, 0.0, 200.0),
+    ]
+    assert completed.unit_id == 104
+
+
+def test_issue_bootstrap_build_step_retries_same_position_for_factory_output(monkeypatch):
+    ctx = BootstrapContext(
+        capability_units={"factory_ground": 103},
+        def_id_by_name={"armck": 16},
+    )
+    snapshot = FakeSnapshot(
+        own_units=(),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    shared = {"snapshots": [snapshot], "deltas": []}
+    target = Vector3(170.0, 0.0, 116.0)
+    completed_unit = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    dispatched = []
+    attempt_count = 0
+
+    def record_dispatch(_stub, batch, token=None):
+        del token
+        command = batch.commands[0]
+        kind = command.WhichOneof("command")
+        if kind == "build_unit":
+            dispatched.append(
+                (
+                    kind,
+                    command.build_unit.build_position.x,
+                    command.build_unit.build_position.y,
+                    command.build_unit.build_position.z,
+                )
+            )
+        else:
+            dispatched.append((kind, None, None, None))
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._dispatch",
+        record_dispatch,
+    )
+
+    def fake_wait_for_new_ready_unit(
+        _shared,
+        *,
+        def_id,
+        baseline_ids,
+        timeout_s,
+        stub=None,
+        token=None,
+    ):
+        nonlocal attempt_count
+        del _shared, def_id, baseline_ids, timeout_s, stub, token
+        attempt_count += 1
+        if attempt_count < 3:
+            raise RuntimeError("timeout waiting for new ready unit def_id=16 saw_new_candidate=0")
+        return completed_unit
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_new_ready_unit",
+        fake_wait_for_new_ready_unit,
+    )
+
+    completed = _issue_bootstrap_build_step_with_retries(
+        object(),
+        shared,
+        ctx,
+        DEFAULT_BOOTSTRAP_PLAN[5],
+        builder_unit_id=103,
+        candidate_positions=(target, target, target),
+        baseline_ids=set(),
+        token="tok",
+    )
+
+    assert attempt_count == 3
+    assert dispatched == [
+        ("build_unit", 170.0, 0.0, 116.0),
+        ("stop", None, None, None),
+        ("build_unit", 170.0, 0.0, 116.0),
+        ("stop", None, None, None),
+        ("build_unit", 170.0, 0.0, 116.0),
+    ]
+    assert completed.unit_id == 106
+
+
 def test_position_for_bootstrap_step_skips_occupied_metal_spot():
     commander = FakeOwnUnit(
         unit_id=42,
@@ -1670,8 +1847,9 @@ def test_execute_live_bootstrap_does_not_short_circuit_later_commander_steps_aft
         token=None,
         static_map=None,
         failure_snapshot=None,
+        timeout_s=None,
     ):
-        del ctx, builder_unit_id, target_position, baseline_ids, token, static_map, failure_snapshot
+        del ctx, builder_unit_id, target_position, baseline_ids, token, static_map, failure_snapshot, timeout_s
         attempted_defs.append(step.def_id)
         raise RuntimeError("saw_new_candidate=0 timeout waiting for bootstrap unit")
 
@@ -1697,6 +1875,11 @@ def test_execute_live_bootstrap_does_not_short_circuit_later_commander_steps_aft
     )
     monkeypatch.setattr(
         behavioral_coverage,
+        "_dispatch",
+        lambda _stub, _batch, token=None: None,
+    )
+    monkeypatch.setattr(
+        behavioral_coverage,
         "_issue_bootstrap_build_step",
         fake_issue_bootstrap_build_step,
     )
@@ -1709,7 +1892,8 @@ def test_execute_live_bootstrap_does_not_short_circuit_later_commander_steps_aft
     assert err.ctx.bootstrap_readiness is not None
     assert err.ctx.bootstrap_readiness["readiness_status"] == "natural_ready"
     assert err.ctx.bootstrap_readiness["first_required_step"] == "armap"
-    assert attempted_defs == ["armap"]
+    assert attempted_defs
+    assert set(attempted_defs) == {"armap"}
 
 
 def test_execute_live_bootstrap_reuses_existing_ready_plan_units(monkeypatch):
@@ -2114,8 +2298,9 @@ def test_execute_live_bootstrap_skips_commander_built_factories_when_downstream_
         token=None,
         static_map=None,
         failure_snapshot=None,
+        timeout_s=None,
     ):
-        del builder_unit_id, target_position, baseline_ids, token, static_map, failure_snapshot
+        del builder_unit_id, target_position, baseline_ids, token, static_map, failure_snapshot, timeout_s
         attempted_defs.append(step.def_id)
         raise RuntimeError(
             f"{step.capability}/{step.def_id} timeout waiting for new ready unit "
@@ -2143,6 +2328,10 @@ def test_execute_live_bootstrap_skips_commander_built_factories_when_downstream_
         lambda _shared, min_frame, timeout_s: None,
     )
     monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._dispatch",
+        lambda _stub, _batch, token=None: None,
+    )
+    monkeypatch.setattr(
         "highbar_client.behavioral_coverage._issue_bootstrap_build_step",
         fake_issue_bootstrap_build_step,
     )
@@ -2157,7 +2346,10 @@ def test_execute_live_bootstrap_skips_commander_built_factories_when_downstream_
 
     ctx = _execute_live_bootstrap(object(), shared, token="tok")
 
-    assert attempted_defs == ["armvp", "armap"]
+    assert attempted_defs
+    assert attempted_defs[0] == "armvp"
+    assert attempted_defs[-1] == "armap"
+    assert set(attempted_defs) == {"armvp", "armap"}
     assert ctx.capability_units["builder"] == 106
     assert ctx.capability_units["cloakable"] == 107
     assert "factory_ground" not in ctx.capability_units

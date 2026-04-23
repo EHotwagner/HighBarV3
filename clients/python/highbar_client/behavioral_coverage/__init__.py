@@ -483,6 +483,51 @@ def _position_for_bootstrap_step(
     )
 
 
+def _bootstrap_build_position_candidates(
+    step: Any,
+    commander_position: Vector3,
+    *,
+    static_map: Any | None = None,
+    snapshot: Any | None = None,
+    ignore_unit_ids: set[int] | None = None,
+) -> tuple[Vector3, ...]:
+    primary = _position_for_bootstrap_step(
+        step,
+        commander_position,
+        static_map=static_map,
+        snapshot=snapshot,
+        ignore_unit_ids=ignore_unit_ids,
+    )
+    capability = getattr(step, "capability", "")
+    if capability not in {"factory_ground", "factory_air"}:
+        return (primary,)
+
+    candidates = [primary]
+    for dx, dz in (
+        (+192.0, 0.0),
+        (-192.0, 0.0),
+        (0.0, +192.0),
+        (0.0, -192.0),
+        (+192.0, +192.0),
+        (-192.0, +192.0),
+        (+192.0, -192.0),
+        (-192.0, -192.0),
+    ):
+        desired = Vector3(x=primary.x + dx, y=primary.y, z=primary.z + dz)
+        candidate = _find_clear_build_position(
+            desired,
+            snapshot=snapshot,
+            ignore_unit_ids=ignore_unit_ids,
+            clearance_radius=192.0,
+            search_step=96.0,
+            max_ring=2,
+        )
+        if any(_distance_sq(candidate, existing) < 1.0 for existing in candidates):
+            continue
+        candidates.append(candidate)
+    return tuple(candidates)
+
+
 def _find_commander(snapshot: Any) -> Any | None:
     commander = None
     for unit in getattr(snapshot, "own_units", ()):
@@ -613,6 +658,17 @@ def _build_unit_batch(builder_unit_id: int, build_def_id: int, position: Vector3
     cmd.build_unit.build_position.x = position.x
     cmd.build_unit.build_position.y = position.y
     cmd.build_unit.build_position.z = position.z
+    return batch
+
+
+def _stop_unit_batch(unit_id: int):
+    from ..highbar import commands_pb2
+
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    batch.target_unit_id = unit_id
+    cmd = batch.commands.add()
+    cmd.stop.unit_id = unit_id
     return batch
 
 
@@ -1071,6 +1127,7 @@ def _issue_bootstrap_build_step(
     token: str | None = None,
     static_map: Any | None = None,
     failure_snapshot: Any | None = None,
+    timeout_s: float | None = None,
 ) -> Any:
     resolved_def_id = ctx.def_id_by_name.get(step.def_id, 0)
     if not resolved_def_id:
@@ -1085,7 +1142,7 @@ def _issue_bootstrap_build_step(
             shared,
             def_id=resolved_def_id,
             baseline_ids=baseline_ids,
-            timeout_s=step.timeout_seconds,
+            timeout_s=timeout_s if timeout_s is not None else step.timeout_seconds,
             stub=stub,
             token=token,
         )
@@ -1113,6 +1170,54 @@ def _issue_bootstrap_build_step(
             f"{commander_detail}"
             f"{exc}"
         ) from exc
+
+
+def _issue_bootstrap_build_step_with_retries(
+    stub: Any,
+    shared: dict,
+    ctx: BootstrapContext,
+    step: Any,
+    *,
+    builder_unit_id: int,
+    candidate_positions: tuple[Vector3, ...],
+    baseline_ids: set[int],
+    token: str | None = None,
+    static_map: Any | None = None,
+    failure_snapshot: Any | None = None,
+) -> Any:
+    deadline = time.monotonic() + step.timeout_seconds
+    last_exc: RuntimeError | None = None
+    for index, target_position in enumerate(candidate_positions):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
+        remaining_candidates = len(candidate_positions) - index
+        attempt_timeout = remaining
+        if remaining_candidates > 1:
+            attempt_timeout = min(12.0, max(5.0, remaining / remaining_candidates))
+        if index > 0:
+            _dispatch(stub, _stop_unit_batch(builder_unit_id), token=token)
+        try:
+            return _issue_bootstrap_build_step(
+                stub,
+                shared,
+                ctx,
+                step,
+                builder_unit_id=builder_unit_id,
+                target_position=target_position,
+                baseline_ids=baseline_ids,
+                token=token,
+                static_map=static_map,
+                failure_snapshot=failure_snapshot,
+                timeout_s=attempt_timeout,
+            )
+        except RuntimeError as exc:
+            last_exc = exc
+            if "saw_new_candidate=0" not in str(exc) or index + 1 >= len(candidate_positions):
+                raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"timeout waiting to issue bootstrap step {step.def_id}")
 
 
 def _can_skip_bootstrap_step_failure(
@@ -2452,13 +2557,13 @@ def _execute_live_bootstrap(
             )
             continue
         try:
-            completed = _issue_bootstrap_build_step(
+            completed = _issue_bootstrap_build_step_with_retries(
                 stub,
                 shared,
                 ctx,
                 step,
                 builder_unit_id=ctx.commander_unit_id,
-                target_position=_position_for_bootstrap_step(
+                candidate_positions=_bootstrap_build_position_candidates(
                     step,
                     ctx.commander_position,
                     static_map=static_map,
@@ -2525,13 +2630,14 @@ def _execute_live_bootstrap(
         if builder_unit is None or not _unit_is_ready_fixture_unit(builder_unit):
             raise BootstrapExecutionError(f"builder capability {step.builder_capability} is not ready", ctx=ctx)
         try:
-            completed = _issue_bootstrap_build_step(
+            build_position = _vector3_from_position(builder_unit.position)
+            completed = _issue_bootstrap_build_step_with_retries(
                 stub,
                 shared,
                 ctx,
                 step,
                 builder_unit_id=builder_unit_id,
-                target_position=_vector3_from_position(builder_unit.position),
+                candidate_positions=(build_position, build_position, build_position),
                 baseline_ids=baseline_ids_by_step[step.capability],
                 token=token,
             )
