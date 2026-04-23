@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HEADLESS_DIR="$REPO_ROOT/tests/headless"
-FEATURE_DIR="$REPO_ROOT/specs/015-live-transport-provisioning"
+FEATURE_DIR="$REPO_ROOT/specs/016-live-bootstrap-hardening"
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "test_live_itertesting_hardening: uv missing — skip" >&2
@@ -42,6 +42,8 @@ report = Path(sys.argv[2]).read_text(encoding="utf-8")
 fixture_profile = manifest.get("fixture_profile") or {}
 fixture_provisioning = manifest.get("fixture_provisioning") or {}
 transport_provisioning = manifest.get("transport_provisioning") or {}
+bootstrap_readiness = manifest.get("bootstrap_readiness") or {}
+callback_diagnostics = manifest.get("callback_diagnostics") or []
 channel_health = manifest.get("channel_health") or {}
 verification_rules = {
     item["command_id"]: item for item in manifest.get("verification_rules", [])
@@ -59,6 +61,9 @@ assert "builder" in fixture_profile.get("fixture_classes", [])
 assert "cmd-load-units" in fixture_provisioning.get("affected_command_ids", [])
 assert transport_provisioning.get("status") == "missing"
 assert "cmd-load-units" in transport_provisioning.get("affected_command_ids", [])
+assert bootstrap_readiness.get("readiness_status") == "unknown"
+assert bootstrap_readiness.get("readiness_path") == "unavailable"
+assert callback_diagnostics
 assert channel_health.get("status") == "healthy"
 assert verification_rules["cmd-move-unit"]["rule_mode"] == "movement_tuned"
 assert verification_rules["cmd-fight"]["rule_mode"] == "combat_tuned"
@@ -69,6 +74,8 @@ assert "cmd-load-units" in class_statuses["transport_unit"]["affected_command_id
 assert any(item["fixture_class"] == "commander" for item in shared_instances)
 for section in (
     "## Fixture Provisioning",
+    "## Bootstrap Readiness",
+    "## Callback Diagnostics",
     "### Transport Provisioning",
     "## Command Semantic Inventory",
     "## Channel Health",
@@ -158,15 +165,15 @@ assert "## Semantic Gates" in report
 assert "custom command id: 32102" in report
 PY
 
-if ! grep -Fq "Three consecutive prepared live closeout runs complete with healthy channel status" \
+if ! grep -Fq "Three consecutive prepared live closeout reruns either complete without the old bootstrap-readiness ambiguity" \
     "$FEATURE_DIR/quickstart.md"; then
     echo "test_live_itertesting_hardening: quickstart is missing the prepared rerun guidance" >&2
     exit 1
 fi
 
-if ! grep -Fq 'only `cmd-load-onto`, `cmd-load-units`, `cmd-load-units-area`, `cmd-unload-unit`, and `cmd-unload-units-area`' \
-    "$FEATURE_DIR/contracts/transport-blocker-classification-and-reporting.md"; then
-    echo "test_live_itertesting_hardening: 015 blocker-reporting contract is missing the transport-only blocker guidance" >&2
+if ! grep -Fq 'The standalone build probe must stop using the old env-var def-id injection path as its normal prerequisite mechanism.' \
+    "$FEATURE_DIR/contracts/live-bootstrap-validation-suite.md"; then
+    echo "test_live_itertesting_hardening: 016 validation contract is missing the standalone probe guidance" >&2
     exit 1
 fi
 

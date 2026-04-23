@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import pytest
 
+import highbar_client.behavioral_coverage as behavioral_coverage
 from highbar_client.behavioral_coverage import REGISTRY
 from highbar_client.behavioral_coverage import (
     _attempt_transport_provisioning,
@@ -1018,6 +1019,73 @@ def test_economy_obviously_starved_requires_no_metal_and_no_income():
 
     assert _economy_obviously_starved(starved_snapshot)
     assert not _economy_obviously_starved(healthy_snapshot)
+
+
+def test_execute_live_bootstrap_records_resource_starved_readiness(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    starved_snapshot = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+        economy=type(
+            "Economy",
+            (),
+            {
+                "metal": 0.1,
+                "metal_income": 0.0,
+                "metal_storage": 1500.0,
+                "energy": 6000.0,
+                "energy_income": 0.0,
+                "energy_storage": 8000.0,
+            },
+        )(),
+    )
+    shared = {"snapshots": [starved_snapshot], "deltas": []}
+
+    def fake_resolve_bootstrap_defs(_stub, ctx, token=None):
+        del token
+        ctx.def_id_by_name.update(
+            {
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+                "armap": 14,
+                "armrad": 15,
+            }
+        )
+
+    monkeypatch.setattr(
+        behavioral_coverage,
+        "_resolve_bootstrap_defs",
+        fake_resolve_bootstrap_defs,
+    )
+    monkeypatch.setattr(
+        behavioral_coverage,
+        "_resolve_supported_transport_defs",
+        lambda _stub, _ctx, token=None: None,
+    )
+    monkeypatch.setattr(
+        behavioral_coverage,
+        "_refreshing_snapshot",
+        lambda _stub, _shared, token=None, timeout_s=5.0: starved_snapshot,
+    )
+
+    with pytest.raises(behavioral_coverage.BootstrapExecutionError) as exc_info:
+        _execute_live_bootstrap(object(), shared)
+
+    err = exc_info.value
+    assert err.ctx is not None
+    assert err.ctx.bootstrap_readiness is not None
+    assert err.ctx.bootstrap_readiness["readiness_status"] == "resource_starved"
+    assert err.ctx.bootstrap_readiness["first_required_step"] == "armmex"
+    assert err.ctx.prerequisite_resolution_records[0]["prerequisite_name"] == "armmex"
 
 
 def test_execute_live_bootstrap_reuses_existing_ready_plan_units(monkeypatch):

@@ -82,6 +82,18 @@ assert_wrapper_semantic_inventory() {
         echo "test_itertesting_campaign: wrapper did not emit transport status" >&2
         exit 1
     fi
+    if [[ "$output" != *"bootstrap_readiness="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit bootstrap readiness" >&2
+        exit 1
+    fi
+    if [[ "$output" != *"callback_diagnostics="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit callback diagnostics" >&2
+        exit 1
+    fi
+    if [[ "$output" != *"prerequisite_resolution="* ]]; then
+        echo "test_itertesting_campaign: wrapper did not emit prerequisite resolution" >&2
+        exit 1
+    fi
     if [[ "$output" != *"semantic_gates="* ]]; then
         echo "test_itertesting_campaign: wrapper did not emit semantic gate summary" >&2
         exit 1

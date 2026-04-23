@@ -19,6 +19,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -51,6 +52,16 @@ from .types import (
     VerificationOutcome,
 )
 from ..session import TOKEN_HEADER, read_token_with_backoff
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+class BootstrapExecutionError(RuntimeError):
+    def __init__(self, message: str, *, ctx: BootstrapContext | None = None):
+        super().__init__(message)
+        self.ctx = ctx
+
 
 # ---- argparse -----------------------------------------------------------
 
@@ -114,6 +125,37 @@ def _collect_bootstrap_blocked_rows(detail: str, *, error: str = "precondition_u
                 "error": error,
             }
         )
+    return rows
+
+
+def _metadata_row(arm_name: str, **payload: Any) -> dict[str, Any]:
+    row = {
+        "arm_name": arm_name,
+        "category": "metadata",
+        "dispatched": "na",
+        "verified": "na",
+        "evidence": "",
+        "error": "",
+    }
+    row.update(payload)
+    return row
+
+
+def _bootstrap_metadata_rows(ctx: BootstrapContext | None) -> list[dict[str, Any]]:
+    if ctx is None:
+        return []
+    rows: list[dict[str, Any]] = []
+    if ctx.bootstrap_readiness:
+        rows.append(
+            _metadata_row(
+                "__bootstrap_readiness__",
+                **ctx.bootstrap_readiness,
+            )
+        )
+    for item in ctx.callback_diagnostics:
+        rows.append(_metadata_row("__callback_diagnostic__", **item))
+    for item in ctx.prerequisite_resolution_records:
+        rows.append(_metadata_row("__prerequisite_resolution__", **item))
     return rows
 
 
@@ -831,6 +873,163 @@ def _economy_obviously_starved(snapshot: Any | None) -> bool:
     return metal < 1.0 and metal_income <= 0.0
 
 
+def _record_bootstrap_readiness(
+    ctx: BootstrapContext,
+    *,
+    readiness_status: str,
+    readiness_path: str,
+    first_required_step: str,
+    economy_summary: str,
+    reason: str,
+) -> None:
+    ctx.bootstrap_readiness = {
+        "run_id": "live-closeout",
+        "readiness_status": readiness_status,
+        "readiness_path": readiness_path,
+        "first_required_step": first_required_step,
+        "economy_summary": economy_summary,
+        "reason": reason,
+        "recorded_at": _utc_now_iso(),
+    }
+
+
+def _record_callback_diagnostic(
+    ctx: BootstrapContext,
+    *,
+    capture_stage: str,
+    availability_status: str,
+    source: str,
+    diagnostic_scope: tuple[str, ...],
+    summary: str,
+) -> None:
+    ctx.callback_diagnostics.append(
+        {
+            "snapshot_id": f"callback-{len(ctx.callback_diagnostics) + 1:02d}",
+            "capture_stage": capture_stage,
+            "availability_status": availability_status,
+            "source": source,
+            "diagnostic_scope": diagnostic_scope,
+            "summary": summary,
+            "captured_at": _utc_now_iso(),
+        }
+    )
+
+
+def _record_prerequisite_resolution(
+    ctx: BootstrapContext,
+    *,
+    prerequisite_name: str,
+    consumer: str,
+    callback_path: str,
+    resolved_def_id: int | None,
+    resolution_status: str,
+    reason: str,
+) -> None:
+    ctx.prerequisite_resolution_records.append(
+        {
+            "prerequisite_name": prerequisite_name,
+            "consumer": consumer,
+            "callback_path": callback_path,
+            "resolved_def_id": resolved_def_id,
+            "resolution_status": resolution_status,
+            "reason": reason,
+            "recorded_at": _utc_now_iso(),
+        }
+    )
+
+
+def _capture_callback_diagnostic(
+    stub: Any,
+    shared: dict,
+    ctx: BootstrapContext,
+    *,
+    capture_stage: str,
+    token: str | None = None,
+) -> None:
+    summary = _commander_build_context_debug(
+        stub,
+        ctx,
+        snapshot=_latest_snapshot(shared),
+        token=token,
+    )
+    if summary.startswith("commander_diag_error="):
+        if ctx.callback_diagnostics:
+            _record_callback_diagnostic(
+                ctx,
+                capture_stage=capture_stage,
+                availability_status="cached",
+                source="preserved_earlier_capture",
+                diagnostic_scope=("commander_def", "build_options", "economy"),
+                summary=f"late callback refresh unavailable; preserved earlier capture after: {summary}",
+            )
+            return
+        _record_callback_diagnostic(
+            ctx,
+            capture_stage=capture_stage,
+            availability_status="missing",
+            source="not_available",
+            diagnostic_scope=("commander_def", "build_options", "economy"),
+            summary=summary,
+        )
+        return
+    _record_callback_diagnostic(
+        ctx,
+        capture_stage=capture_stage,
+        availability_status="live",
+        source="invoke_callback_live",
+        diagnostic_scope=("commander_def", "build_options", "economy"),
+        summary=summary,
+    )
+
+
+def _assess_bootstrap_readiness(
+    starting_snapshot: Any,
+    ctx: BootstrapContext,
+) -> tuple[str, str, str, str]:
+    commander_steps = tuple(
+        step for step in DEFAULT_BOOTSTRAP_PLAN if step.builder_capability == "commander"
+    )
+    preexisting_steps = [
+        step.def_id
+        for step in commander_steps
+        if _ready_units_for_def(starting_snapshot, ctx.def_id_by_name.get(step.def_id, 0))
+    ]
+    first_missing_step = next(
+        (
+            step
+            for step in commander_steps
+            if not _ready_units_for_def(starting_snapshot, ctx.def_id_by_name.get(step.def_id, 0))
+        ),
+        None,
+    )
+    economy_summary = _economy_debug_string(starting_snapshot)
+    if first_missing_step is None:
+        return (
+            "seeded_ready" if preexisting_steps else "natural_ready",
+            "explicit_seed" if preexisting_steps else "prepared_state",
+            commander_steps[0].def_id if commander_steps else "armmex",
+            (
+                "prepared live start already contained commander-built bootstrap fixtures: "
+                + ", ".join(preexisting_steps)
+                if preexisting_steps
+                else "prepared live start already satisfied commander-built bootstrap requirements"
+            ),
+        )
+    if _economy_obviously_starved(starting_snapshot):
+        return (
+            "resource_starved",
+            "unavailable",
+            first_missing_step.def_id,
+            f"first commander-built bootstrap step {first_missing_step.def_id} would start from a resource-starved state",
+        )
+    return (
+        "natural_ready",
+        "prepared_state",
+        first_missing_step.def_id,
+        f"prepared live state can start commander bootstrap at {first_missing_step.def_id}",
+    )
+
+
 def _commander_build_context_debug(
     stub: Any,
     ctx: BootstrapContext,
@@ -1313,18 +1512,74 @@ def _execute_live_bootstrap(
         cheats_enabled=False,
         def_id_by_name={},
     )
-    _resolve_bootstrap_defs(stub, ctx, token=token)
+    try:
+        _resolve_bootstrap_defs(stub, ctx, token=token)
+    except Exception as exc:  # noqa: BLE001
+        _record_prerequisite_resolution(
+            ctx,
+            prerequisite_name="armmex",
+            consumer="live_closeout",
+            callback_path="InvokeCallback/armmex",
+            resolved_def_id=None,
+            resolution_status="relay_unavailable",
+            reason=str(exc),
+        )
+        raise BootstrapExecutionError(
+            f"bootstrap def resolution failed: {exc}",
+            ctx=ctx,
+        ) from exc
     _resolve_supported_transport_defs(stub, ctx, token=token)
+    _record_prerequisite_resolution(
+        ctx,
+        prerequisite_name="armmex",
+        consumer="live_closeout",
+        callback_path="InvokeCallback/armmex",
+        resolved_def_id=ctx.def_id_by_name.get("armmex"),
+        resolution_status="resolved" if ctx.def_id_by_name.get("armmex") else "missing",
+        reason=(
+            "resolved runtime def id for armmex during live bootstrap"
+            if ctx.def_id_by_name.get("armmex")
+            else "runtime callback results did not include armmex"
+        ),
+    )
 
     starting_snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=5.0) or _latest_snapshot(shared)
     if starting_snapshot is None:
-        raise RuntimeError("no live snapshot available for bootstrap")
+        raise BootstrapExecutionError("no live snapshot available for bootstrap", ctx=ctx)
     commander = _find_commander(starting_snapshot)
     if commander is None:
-        raise RuntimeError("commander missing from bootstrap snapshot")
+        raise BootstrapExecutionError("commander missing from bootstrap snapshot", ctx=ctx)
     ctx.commander_unit_id = commander.unit_id
     ctx.commander_position = _vector3_from_position(commander.position)
     ctx.capability_units["commander"] = commander.unit_id
+    readiness_status, readiness_path, first_required_step, readiness_reason = _assess_bootstrap_readiness(
+        starting_snapshot,
+        ctx,
+    )
+    _record_bootstrap_readiness(
+        ctx,
+        readiness_status=readiness_status,
+        readiness_path=readiness_path,
+        first_required_step=first_required_step,
+        economy_summary=_economy_debug_string(starting_snapshot),
+        reason=readiness_reason,
+    )
+    _capture_callback_diagnostic(
+        stub,
+        shared,
+        ctx,
+        capture_stage="bootstrap_start",
+        token=token,
+    )
+    if readiness_status == "resource_starved":
+        raise BootstrapExecutionError(
+            (
+                f"bootstrap_readiness=resource_starved "
+                f"first_required_step={first_required_step} "
+                f"{readiness_reason} {_economy_debug_string(starting_snapshot)}"
+            ),
+            ctx=ctx,
+        )
 
     commander_steps = tuple(
         step for step in DEFAULT_BOOTSTRAP_PLAN if step.builder_capability == "commander"
@@ -1347,12 +1602,6 @@ def _execute_live_bootstrap(
             ctx.capability_units[step.capability] = completed.unit_id
             ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
             continue
-        if _economy_obviously_starved(starting_snapshot):
-            raise RuntimeError(
-                f"{step.capability}/{step.def_id} builder=commander "
-                f"builder_unit_id={ctx.commander_unit_id} "
-                f"resource_starved {_economy_debug_string(starting_snapshot)}"
-            )
         try:
             completed = _issue_bootstrap_build_step(
                 stub,
@@ -1375,7 +1624,14 @@ def _execute_live_bootstrap(
             if _can_skip_bootstrap_step_failure(step, exc):
                 print(f"bootstrap-optional-skip: {exc}", file=sys.stderr, flush=True)
                 continue
-            raise
+            _capture_callback_diagnostic(
+                stub,
+                shared,
+                ctx,
+                capture_stage="bootstrap_failure",
+                token=token,
+            )
+            raise BootstrapExecutionError(str(exc), ctx=ctx) from exc
         ctx.capability_units[step.capability] = completed.unit_id
         ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
 
@@ -1385,7 +1641,7 @@ def _execute_live_bootstrap(
     )
     factory_snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=5.0) or _latest_snapshot(shared)
     if factory_snapshot is None:
-        raise RuntimeError("no live snapshot available after commander bootstrap")
+        raise BootstrapExecutionError("no live snapshot available after commander bootstrap", ctx=ctx)
     baseline_ids_by_step = {
         step.capability: {
             unit.unit_id
@@ -1407,10 +1663,10 @@ def _execute_live_bootstrap(
             continue
         builder_unit_id = ctx.capability_units.get(step.builder_capability)
         if not builder_unit_id:
-            raise RuntimeError(f"builder capability {step.builder_capability} is not available")
+            raise BootstrapExecutionError(f"builder capability {step.builder_capability} is not available", ctx=ctx)
         builder_unit = ctx.observed_own_units.get(builder_unit_id)
         if builder_unit is None or not _unit_is_ready_fixture_unit(builder_unit):
-            raise RuntimeError(f"builder capability {step.builder_capability} is not ready")
+            raise BootstrapExecutionError(f"builder capability {step.builder_capability} is not ready", ctx=ctx)
         completed = _issue_bootstrap_build_step(
             stub,
             shared,
@@ -1427,10 +1683,17 @@ def _execute_live_bootstrap(
 
     final_snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=5.0) or _latest_snapshot(shared)
     if final_snapshot is None:
-        raise RuntimeError("bootstrap completed without a final snapshot")
+        raise BootstrapExecutionError("bootstrap completed without a final snapshot", ctx=ctx)
     ctx.manifest = compute_manifest(getattr(final_snapshot, "own_units", ()), ctx.def_id_by_name)
     print(f"bootstrap-manifest: {list(ctx.manifest)}", file=sys.stderr, flush=True)
     ctx = _refresh_bootstrap_context(shared, ctx)
+    _capture_callback_diagnostic(
+        stub,
+        shared,
+        ctx,
+        capture_stage="late_refresh",
+        token=token,
+    )
     return _attempt_transport_provisioning(stub, shared, ctx, token=token)
 
 
@@ -1699,7 +1962,9 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         detail = f"bootstrap_failed: {exc}"
         print(f"behavioral-coverage: {detail}", file=sys.stderr, flush=True)
-        return _collect_bootstrap_blocked_rows(detail)
+        rows = _collect_bootstrap_blocked_rows(detail)
+        rows.extend(_bootstrap_metadata_rows(getattr(exc, "ctx", None)))
+        return rows
 
     # ---- Phase 2: per-arm dispatch + verify --------------------------
 
@@ -1734,6 +1999,15 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
                         "error": "bootstrap_reset_failed",
                     }
                 )
+            if shared.get("err"):
+                _capture_callback_diagnostic(
+                    stub,
+                    shared,
+                    ctx,
+                    capture_stage="late_refresh",
+                    token=ai_token,
+                )
+            rows.extend(_bootstrap_metadata_rows(ctx))
             shared["stop"] = True
             return rows
         command_id = f"cmd-{arm_name.replace('_', '-')}"
@@ -1850,6 +2124,19 @@ def collect_live_rows(args: argparse.Namespace) -> list[dict]:
             )
         rows.append(_row_for_outcome(case, dispatched, outcome))
 
+    if any(
+        row.get("error") in {"dispatcher_rejected", "timeout", "bootstrap_reset_failed"}
+        for row in rows
+    ) or shared.get("err"):
+        _capture_callback_diagnostic(
+            stub,
+            shared,
+            ctx,
+            capture_stage="late_refresh",
+            token=ai_token,
+        )
+
+    rows.extend(_bootstrap_metadata_rows(ctx))
     shared["stop"] = True
     return rows
 

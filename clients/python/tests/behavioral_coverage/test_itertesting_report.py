@@ -6,6 +6,48 @@ from highbar_client.behavioral_coverage.itertesting_runner import build_run, run
 from highbar_client.behavioral_coverage.registry import REGISTRY
 
 
+def _hardening_live_rows():
+    return [
+        {
+            "arm_name": "__bootstrap_readiness__",
+            "readiness_status": "seeded_ready",
+            "readiness_path": "explicit_seed",
+            "first_required_step": "armmex",
+            "economy_summary": "economy=metal:0.1/0.0/1500.0",
+            "reason": "prepared live start already contained commander-built bootstrap fixtures: armmex, armsolar, armvp",
+            "recorded_at": "2026-04-23T02:42:47Z",
+        },
+        {
+            "arm_name": "__callback_diagnostic__",
+            "snapshot_id": "callback-01",
+            "capture_stage": "bootstrap_start",
+            "availability_status": "cached",
+            "source": "preserved_earlier_capture",
+            "diagnostic_scope": ["commander_def", "build_options", "economy"],
+            "summary": "late callback refresh unavailable; preserved earlier capture after relay loss",
+            "captured_at": "2026-04-23T02:42:55Z",
+        },
+        {
+            "arm_name": "__prerequisite_resolution__",
+            "prerequisite_name": "armmex",
+            "consumer": "live_closeout",
+            "callback_path": "InvokeCallback/armmex",
+            "resolved_def_id": 42,
+            "resolution_status": "resolved",
+            "reason": "resolved runtime def id for armmex during live bootstrap",
+            "recorded_at": "2026-04-23T02:42:47Z",
+        },
+        {
+            "arm_name": "attack",
+            "category": REGISTRY["attack"].category,
+            "dispatched": "true",
+            "verified": "false",
+            "evidence": "place_target_on_ground Lua rewrite converted the unit target into map coordinates",
+            "error": "effect_not_observed",
+        },
+    ]
+
+
 def test_report_renders_required_sections_and_direct_split(tmp_path):
     campaign, runs = run_campaign(
         reports_dir=tmp_path,
@@ -103,6 +145,24 @@ def test_report_renders_channel_health_and_failure_causes(tmp_path):
     assert "## Channel Health" in rendered
     assert "## Failure Cause Summary" in rendered
     assert "simplified bootstrap" not in rendered.lower()
+
+
+def test_report_renders_bootstrap_callback_and_resolution_sections(tmp_path):
+    run = build_run(
+        campaign_id="campaign-1",
+        sequence_index=0,
+        reports_dir=tmp_path,
+        live_rows=_hardening_live_rows(),
+    )
+
+    rendered = render_run_report(run)
+
+    assert "## Bootstrap Readiness" in rendered
+    assert "- Status: seeded_ready" in rendered
+    assert "## Callback Diagnostics" in rendered
+    assert "preserved_earlier_capture" in rendered
+    assert "## Runtime Prerequisite Resolution" in rendered
+    assert "InvokeCallback/armmex" in rendered
 
 
 def test_report_renders_blocked_contract_health_for_fixture_blocked_runs(tmp_path):

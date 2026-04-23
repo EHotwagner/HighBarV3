@@ -131,6 +131,83 @@ def render_run_report(
             lines.append(f"- Stop reason: {stop_reason}")
         lines.append("")
 
+    if run.bootstrap_readiness is not None:
+        lines.extend(
+            [
+                "## Bootstrap Readiness",
+                "",
+                f"- Status: {run.bootstrap_readiness.readiness_status}",
+                f"- Path: {run.bootstrap_readiness.readiness_path}",
+                f"- First required step: {run.bootstrap_readiness.first_required_step or 'unknown'}",
+                f"- Economy: {run.bootstrap_readiness.economy_summary or 'unknown'}",
+                f"- Reason: {run.bootstrap_readiness.reason or 'none'}",
+                "",
+            ]
+        )
+
+    if run.callback_diagnostics:
+        lines.extend(["## Callback Diagnostics", ""])
+        for snapshot in run.callback_diagnostics:
+            scope = ", ".join(snapshot.diagnostic_scope) or "none"
+            lines.extend(
+                [
+                    (
+                        f"- `{snapshot.snapshot_id}` — {snapshot.capture_stage} — "
+                        f"{snapshot.availability_status} — {snapshot.source}"
+                    ),
+                    f"  scope: {scope}",
+                    f"  summary: {snapshot.summary or 'none'}",
+                ]
+            )
+        lines.append("")
+
+    if run.prerequisite_resolution:
+        lines.extend(["## Runtime Prerequisite Resolution", ""])
+        for item in run.prerequisite_resolution:
+            resolved_def_id = (
+                str(item.resolved_def_id)
+                if item.resolved_def_id is not None
+                else "unresolved"
+            )
+            lines.extend(
+                [
+                    (
+                        f"- `{item.prerequisite_name}` — {item.consumer} — "
+                        f"{item.resolution_status} — def_id: {resolved_def_id}"
+                    ),
+                    f"  callback path: {item.callback_path or 'none'}",
+                    f"  reason: {item.reason or 'none'}",
+                ]
+            )
+        lines.append("")
+
+    if run.standalone_build_probe_outcome is not None:
+        probe = run.standalone_build_probe_outcome
+        resolved_def_id = (
+            str(probe.resolution_record.resolved_def_id)
+            if probe.resolution_record.resolved_def_id is not None
+            else "unresolved"
+        )
+        lines.extend(
+            [
+                "## Standalone Build Probe",
+                "",
+                f"- Probe id: `{probe.probe_id}`",
+                f"- Prerequisite: `{probe.prerequisite_name}`",
+                f"- Dispatch result: {probe.dispatch_result}",
+                (
+                    "- Resolution: "
+                    f"{probe.resolution_record.resolution_status} "
+                    f"(def_id: {resolved_def_id})"
+                ),
+                (
+                    "- Failure reason: "
+                    f"{probe.failure_reason or 'none'}"
+                ),
+                "",
+            ]
+        )
+
     if run.fixture_profile is not None and run.fixture_provisioning is not None:
         refreshed = [
             item.fixture_class

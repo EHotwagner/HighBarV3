@@ -225,6 +225,49 @@ def test_transport_interruption_overrides_other_failure_causes():
     assert classification.source_scope == "channel_health"
 
 
+def test_resource_starved_bootstrap_detail_stays_distinct_from_behavioral_failure():
+    record = CommandVerificationRecord(
+        command_id="cmd-build-unit",
+        command_name="build_unit",
+        category="channel_a_command",
+        attempt_status="blocked",
+        verification_mode="not-attempted",
+        evidence_kind="none",
+        verified=False,
+        source_run_id="run-1",
+        blocking_reason="bootstrap_failed: bootstrap_readiness=resource_starved first_required_step=armvp economy=metal:0.1/0.0/1500.0",
+    )
+    fixture = FixtureProvisioningResult(
+        run_id="run-1",
+        profile_id="default-live-fixture-profile",
+        provisioned_fixture_classes=("commander", "builder"),
+        missing_fixture_classes=(),
+        affected_command_ids=(),
+        completed_at="2026-04-22T10:15:00Z",
+    )
+    channel = ChannelHealthOutcome(
+        run_id="run-1",
+        status="healthy",
+        first_failure_stage=None,
+        failure_signal="",
+        commands_attempted_before_failure=0,
+        recovery_attempted=False,
+        finalized_at="2026-04-22T10:16:00Z",
+    )
+    rule = {item.command_id: item for item in default_verification_rules()}["cmd-build-unit"]
+
+    classification = classify_failure_cause(
+        record,
+        fixture,
+        _empty_transport_provisioning(),
+        channel,
+        rule,
+    )
+
+    assert classification.primary_cause == "missing_fixture"
+    assert classification.supporting_detail.startswith("bootstrap readiness blocker:")
+
+
 def test_authoritative_class_statuses_drive_missing_fixture_classification():
     record = CommandVerificationRecord(
         command_id="cmd-load-units",

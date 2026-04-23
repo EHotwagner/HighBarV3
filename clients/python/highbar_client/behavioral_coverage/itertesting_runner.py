@@ -39,7 +39,9 @@ from .itertesting_retry_policy import (
 )
 from .itertesting_types import (
     ArmVerificationRule,
+    BootstrapReadinessAssessment,
     CampaignStopDecision,
+    CallbackDiagnosticSnapshot,
     ChannelHealthOutcome,
     CommandSemanticGate,
     CommandContractIssue,
@@ -58,6 +60,8 @@ from .itertesting_types import (
     RunProgressSnapshot,
     RunComparison,
     RunSummary,
+    RuntimePrerequisiteResolutionRecord,
+    StandaloneBuildProbeOutcome,
     SupportedTransportVariant,
     TransportCandidate,
     TransportCompatibilityCheck,
@@ -841,6 +845,169 @@ def _channel_health_for_run(
     )
 
 
+def _metadata_rows(
+    live_rows: list[dict] | None,
+    marker: str,
+) -> tuple[dict[str, Any], ...]:
+    if not live_rows:
+        return ()
+    return tuple(
+        row
+        for row in live_rows
+        if str(row.get("arm_name", "")) == marker
+    )
+
+
+def _actual_live_rows(live_rows: list[dict] | None) -> list[dict] | None:
+    if live_rows is None:
+        return None
+    return [
+        row
+        for row in live_rows
+        if not str(row.get("arm_name", "")).startswith("__")
+    ]
+
+
+def _bootstrap_readiness_for_run(
+    run_id: str,
+    live_rows: list[dict] | None,
+) -> BootstrapReadinessAssessment:
+    recorded_at = format_timestamp(utc_now())
+    metadata = _metadata_rows(live_rows, "__bootstrap_readiness__")
+    if metadata:
+        payload = metadata[-1]
+        return BootstrapReadinessAssessment(
+            run_id=run_id,
+            readiness_status=payload.get("readiness_status", "unknown"),
+            readiness_path=payload.get("readiness_path", "unavailable"),
+            first_required_step=payload.get("first_required_step", "armmex"),
+            economy_summary=payload.get("economy_summary", "unknown"),
+            reason=payload.get("reason", "bootstrap readiness metadata recorded"),
+            recorded_at=payload.get("recorded_at", recorded_at),
+        )
+    if not live_rows:
+        return BootstrapReadinessAssessment(
+            run_id=run_id,
+            readiness_status="unknown",
+            readiness_path="unavailable",
+            first_required_step="armmex",
+            economy_summary="unknown",
+            reason="synthetic run without live bootstrap evidence",
+            recorded_at=recorded_at,
+        )
+    detail = " ".join(
+        str(row.get("evidence", "") or "")
+        for row in _actual_live_rows(live_rows) or ()
+    )
+    if "resource_starved" in detail:
+        return BootstrapReadinessAssessment(
+            run_id=run_id,
+            readiness_status="resource_starved",
+            readiness_path="unavailable",
+            first_required_step="armmex",
+            economy_summary="unknown",
+            reason=detail.strip(),
+            recorded_at=recorded_at,
+        )
+    return BootstrapReadinessAssessment(
+        run_id=run_id,
+        readiness_status="unknown",
+        readiness_path="unavailable",
+        first_required_step="armmex",
+        economy_summary="unknown",
+        reason="live rows did not include explicit bootstrap readiness metadata",
+        recorded_at=recorded_at,
+    )
+
+
+def _callback_diagnostics_for_run(
+    live_rows: list[dict] | None,
+) -> tuple[CallbackDiagnosticSnapshot, ...]:
+    recorded_at = format_timestamp(utc_now())
+    metadata = _metadata_rows(live_rows, "__callback_diagnostic__")
+    if metadata:
+        return tuple(
+            CallbackDiagnosticSnapshot(
+                snapshot_id=payload.get("snapshot_id", f"callback-{index:02d}"),
+                capture_stage=payload.get("capture_stage", "bootstrap_start"),
+                availability_status=payload.get("availability_status", "missing"),
+                source=payload.get("source", "not_available"),
+                diagnostic_scope=tuple(payload.get("diagnostic_scope", ())),
+                summary=payload.get("summary", ""),
+                captured_at=payload.get("captured_at", recorded_at),
+            )
+            for index, payload in enumerate(metadata, start=1)
+        )
+    if not live_rows:
+        return (
+            CallbackDiagnosticSnapshot(
+                snapshot_id="callback-01",
+                capture_stage="bootstrap_start",
+                availability_status="missing",
+                source="not_available",
+                diagnostic_scope=("commander_def", "build_options", "economy"),
+                summary="synthetic run without live callback diagnostics",
+                captured_at=recorded_at,
+            ),
+        )
+    return (
+        CallbackDiagnosticSnapshot(
+            snapshot_id="callback-01",
+            capture_stage="bootstrap_failure",
+            availability_status="missing",
+            source="not_available",
+            diagnostic_scope=("commander_def", "build_options", "economy"),
+            summary="live rows did not include callback diagnostic metadata",
+            captured_at=recorded_at,
+        ),
+    )
+
+
+def _prerequisite_resolution_for_run(
+    live_rows: list[dict] | None,
+) -> tuple[RuntimePrerequisiteResolutionRecord, ...]:
+    recorded_at = format_timestamp(utc_now())
+    metadata = _metadata_rows(live_rows, "__prerequisite_resolution__")
+    return tuple(
+        RuntimePrerequisiteResolutionRecord(
+            prerequisite_name=payload.get("prerequisite_name", ""),
+            consumer=payload.get("consumer", "live_closeout"),
+            callback_path=payload.get("callback_path", ""),
+            resolved_def_id=payload.get("resolved_def_id"),
+            resolution_status=payload.get("resolution_status", "missing"),
+            reason=payload.get("reason", ""),
+            recorded_at=payload.get("recorded_at", recorded_at),
+        )
+        for payload in metadata
+    )
+
+
+def _standalone_build_probe_outcome_for_run(
+    live_rows: list[dict] | None,
+) -> StandaloneBuildProbeOutcome | None:
+    metadata = _metadata_rows(live_rows, "__standalone_build_probe__")
+    if not metadata:
+        return None
+    payload = metadata[-1]
+    resolution = RuntimePrerequisiteResolutionRecord(
+        prerequisite_name=payload.get("prerequisite_name", "armmex"),
+        consumer="behavioral_build_probe",
+        callback_path=payload.get("callback_path", ""),
+        resolved_def_id=payload.get("resolved_def_id"),
+        resolution_status=payload.get("resolution_status", "missing"),
+        reason=payload.get("resolution_reason", ""),
+        recorded_at=payload.get("recorded_at", format_timestamp(utc_now())),
+    )
+    return StandaloneBuildProbeOutcome(
+        probe_id=payload.get("probe_id", "behavioral-build"),
+        prerequisite_name=payload.get("prerequisite_name", "armmex"),
+        resolution_record=resolution,
+        dispatch_result=payload.get("dispatch_result", "blocked"),
+        failure_reason=payload.get("failure_reason"),
+        completed_at=payload.get("completed_at", format_timestamp(utc_now())),
+    )
+
+
 def _failure_classifications_for_run(
     records: tuple[CommandVerificationRecord, ...],
     fixture_provisioning: FixtureProvisioningResult,
@@ -1614,6 +1781,7 @@ def build_run(
     started = utc_now()
     run_id = make_run_id(reports_dir, started)
     loaded_instructions = prior_instructions or {}
+    actual_live_rows = _actual_live_rows(live_rows)
     fixture_profile = _fixture_profile()
     verification_rules = default_verification_rules()
     if live_rows is None:
@@ -1633,7 +1801,7 @@ def build_run(
             live_rows=None,
         )
     else:
-        row_map = {item["arm_name"]: item for item in live_rows}
+        row_map = {item["arm_name"]: item for item in actual_live_rows or ()}
         command_records = tuple(
             _record_from_live_row(
                 run_id=run_id,
@@ -1657,9 +1825,13 @@ def build_run(
         fixture_provisioning, transport_provisioning = _fixture_provisioning_for_run(
             run_id,
             cheat_enabled=cheat_enabled,
-            live_rows=live_rows,
+            live_rows=actual_live_rows,
         )
-    channel_health = _channel_health_for_run(run_id, command_records, live_rows)
+    bootstrap_readiness = _bootstrap_readiness_for_run(run_id, live_rows)
+    callback_diagnostics = _callback_diagnostics_for_run(live_rows)
+    prerequisite_resolution = _prerequisite_resolution_for_run(live_rows)
+    standalone_build_probe_outcome = _standalone_build_probe_outcome_for_run(live_rows)
+    channel_health = _channel_health_for_run(run_id, command_records, actual_live_rows)
     failure_classifications = _failure_classifications_for_run(
         command_records,
         fixture_provisioning,
@@ -1733,6 +1905,10 @@ def build_run(
         fixture_profile=fixture_profile,
         fixture_provisioning=fixture_provisioning,
         transport_provisioning=transport_provisioning,
+        bootstrap_readiness=bootstrap_readiness,
+        callback_diagnostics=callback_diagnostics,
+        prerequisite_resolution=prerequisite_resolution,
+        standalone_build_probe_outcome=standalone_build_probe_outcome,
         channel_health=channel_health,
         verification_rules=verification_rules,
         failure_classifications=failure_classifications,

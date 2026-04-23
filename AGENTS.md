@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read
-`specs/015-live-transport-provisioning/plan.md`
+`specs/016-live-bootstrap-hardening/plan.md`
 <!-- SPECKIT END -->

@@ -98,6 +98,26 @@ TransportCompatibilityResult = Literal[
     "payload_incompatible",
 ]
 TransportResolutionStatus = Literal["resolved", "missing", "relay_unavailable"]
+BootstrapReadinessStatus = Literal[
+    "natural_ready",
+    "seeded_ready",
+    "resource_starved",
+    "unknown",
+]
+BootstrapReadinessPath = Literal["prepared_state", "explicit_seed", "unavailable"]
+CallbackDiagnosticCaptureStage = Literal[
+    "bootstrap_start",
+    "bootstrap_failure",
+    "late_refresh",
+]
+CallbackDiagnosticAvailability = Literal["live", "cached", "missing"]
+CallbackDiagnosticSource = Literal[
+    "invoke_callback_live",
+    "preserved_earlier_capture",
+    "not_available",
+]
+RuntimePrerequisiteConsumer = Literal["live_closeout", "behavioral_build_probe"]
+StandaloneBuildDispatchResult = Literal["verified", "blocked", "failed", "skipped"]
 FixtureClassState = Literal[
     "planned",
     "provisioned",
@@ -320,6 +340,49 @@ class TransportProvisioningResult:
     resolution_trace: tuple[TransportResolutionTrace, ...]
     status: TransportProvisioningStatus
     affected_command_ids: tuple[str, ...]
+    completed_at: str
+
+
+@dataclass(frozen=True)
+class BootstrapReadinessAssessment:
+    run_id: str
+    readiness_status: BootstrapReadinessStatus
+    readiness_path: BootstrapReadinessPath
+    first_required_step: str
+    economy_summary: str
+    reason: str
+    recorded_at: str
+
+
+@dataclass(frozen=True)
+class CallbackDiagnosticSnapshot:
+    snapshot_id: str
+    capture_stage: CallbackDiagnosticCaptureStage
+    availability_status: CallbackDiagnosticAvailability
+    source: CallbackDiagnosticSource
+    diagnostic_scope: tuple[str, ...]
+    summary: str
+    captured_at: str
+
+
+@dataclass(frozen=True)
+class RuntimePrerequisiteResolutionRecord:
+    prerequisite_name: str
+    consumer: RuntimePrerequisiteConsumer
+    callback_path: str
+    resolved_def_id: int | None
+    resolution_status: TransportResolutionStatus
+    reason: str
+    recorded_at: str
+
+
+@dataclass(frozen=True)
+class StandaloneBuildProbeOutcome:
+    probe_id: str
+    prerequisite_name: str
+    resolution_record: RuntimePrerequisiteResolutionRecord
+    dispatch_result: StandaloneBuildDispatchResult
+    failure_reason: str | None
     completed_at: str
 
 
@@ -551,6 +614,10 @@ class ItertestingRun:
     fixture_profile: LiveFixtureProfile | None = None
     fixture_provisioning: FixtureProvisioningResult | None = None
     transport_provisioning: TransportProvisioningResult | None = None
+    bootstrap_readiness: BootstrapReadinessAssessment | None = None
+    callback_diagnostics: tuple[CallbackDiagnosticSnapshot, ...] = ()
+    prerequisite_resolution: tuple[RuntimePrerequisiteResolutionRecord, ...] = ()
+    standalone_build_probe_outcome: StandaloneBuildProbeOutcome | None = None
     channel_health: ChannelHealthOutcome | None = None
     verification_rules: tuple[ArmVerificationRule, ...] = ()
     failure_classifications: tuple[FailureCauseClassification, ...] = ()
@@ -734,6 +801,63 @@ def _transport_provisioning_from_dict(
         ),
         status=payload.get("status", "missing"),
         affected_command_ids=tuple(payload.get("affected_command_ids", ())),
+        completed_at=payload["completed_at"],
+    )
+
+
+def _bootstrap_readiness_from_dict(
+    payload: dict[str, Any],
+) -> BootstrapReadinessAssessment:
+    return BootstrapReadinessAssessment(
+        run_id=payload["run_id"],
+        readiness_status=payload.get("readiness_status", "unknown"),
+        readiness_path=payload.get("readiness_path", "unavailable"),
+        first_required_step=payload.get("first_required_step", ""),
+        economy_summary=payload.get("economy_summary", ""),
+        reason=payload.get("reason", ""),
+        recorded_at=payload["recorded_at"],
+    )
+
+
+def _callback_diagnostic_snapshot_from_dict(
+    payload: dict[str, Any],
+) -> CallbackDiagnosticSnapshot:
+    return CallbackDiagnosticSnapshot(
+        snapshot_id=payload["snapshot_id"],
+        capture_stage=payload.get("capture_stage", "bootstrap_start"),
+        availability_status=payload.get("availability_status", "missing"),
+        source=payload.get("source", "not_available"),
+        diagnostic_scope=tuple(payload.get("diagnostic_scope", ())),
+        summary=payload.get("summary", ""),
+        captured_at=payload["captured_at"],
+    )
+
+
+def _runtime_prerequisite_resolution_from_dict(
+    payload: dict[str, Any],
+) -> RuntimePrerequisiteResolutionRecord:
+    return RuntimePrerequisiteResolutionRecord(
+        prerequisite_name=payload["prerequisite_name"],
+        consumer=payload.get("consumer", "live_closeout"),
+        callback_path=payload.get("callback_path", ""),
+        resolved_def_id=payload.get("resolved_def_id"),
+        resolution_status=payload.get("resolution_status", "missing"),
+        reason=payload.get("reason", ""),
+        recorded_at=payload["recorded_at"],
+    )
+
+
+def _standalone_build_probe_outcome_from_dict(
+    payload: dict[str, Any],
+) -> StandaloneBuildProbeOutcome:
+    return StandaloneBuildProbeOutcome(
+        probe_id=payload["probe_id"],
+        prerequisite_name=payload["prerequisite_name"],
+        resolution_record=_runtime_prerequisite_resolution_from_dict(
+            payload["resolution_record"]
+        ),
+        dispatch_result=payload.get("dispatch_result", "blocked"),
+        failure_reason=payload.get("failure_reason"),
         completed_at=payload["completed_at"],
     )
 
@@ -977,6 +1101,26 @@ def run_from_dict(payload: dict[str, Any]) -> ItertestingRun:
         transport_provisioning=(
             _transport_provisioning_from_dict(payload["transport_provisioning"])
             if payload.get("transport_provisioning")
+            else None
+        ),
+        bootstrap_readiness=(
+            _bootstrap_readiness_from_dict(payload["bootstrap_readiness"])
+            if payload.get("bootstrap_readiness")
+            else None
+        ),
+        callback_diagnostics=tuple(
+            _callback_diagnostic_snapshot_from_dict(item)
+            for item in payload.get("callback_diagnostics", ())
+        ),
+        prerequisite_resolution=tuple(
+            _runtime_prerequisite_resolution_from_dict(item)
+            for item in payload.get("prerequisite_resolution", ())
+        ),
+        standalone_build_probe_outcome=(
+            _standalone_build_probe_outcome_from_dict(
+                payload["standalone_build_probe_outcome"]
+            )
+            if payload.get("standalone_build_probe_outcome")
             else None
         ),
         channel_health=(

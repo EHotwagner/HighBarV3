@@ -54,7 +54,7 @@ Live-hardening validation now has a dedicated entrypoint:
 tests/headless/test_live_itertesting_hardening.sh
 ```
 
-The script validates fixture provisioning, channel-health reporting, failure-cause summaries, and tuned repro coverage for `cmd-move-unit`, `cmd-fight`, and `cmd-build-unit`.
+The script validates bootstrap-readiness reporting, callback-diagnostic retention, runtime prerequisite resolution, fixture provisioning, channel-health reporting, failure-cause summaries, and tuned repro coverage for `cmd-move-unit`, `cmd-fight`, and `cmd-build-unit`.
 
 For 015, maintainers should also review the semantic surfaces emitted by
 the run bundle:
@@ -65,12 +65,25 @@ the run bundle:
   unit-shape, and mod-option blockers that are not missing-fixture outcomes
 - `### Transport Provisioning` in `run-report.md` for transport lifecycle,
   compatibility checks, and runtime def-resolution trace
+- `## Bootstrap Readiness` in `run-report.md` for `natural_ready`,
+  `seeded_ready`, or `resource_starved` prepared-live starts
+- `## Callback Diagnostics` in `run-report.md` for live vs cached
+  callback-derived commander/bootstrap evidence
+- `## Runtime Prerequisite Resolution` in `run-report.md` for shared
+  callback-based prerequisite lookup status
 - `transport_provisioning` in `manifest.json` for supported variants,
   candidate chain, and affected transport commands
+- `bootstrap_readiness`, `callback_diagnostics`, and
+  `prerequisite_resolution` in `manifest.json` for the top-level 016
+  hardening evidence
 - `itertesting: semantic_inventory=...` and `itertesting: semantic_gates=...`
   lines from `tests/headless/itertesting.sh` for quick terminal review
 - `itertesting: transport_status=...` and `itertesting: transport_affected_commands=...`
   lines from `tests/headless/itertesting.sh` for quick terminal review
+- `itertesting: bootstrap_readiness=...`,
+  `itertesting: callback_diagnostics=...`, and
+  `itertesting: prerequisite_resolution=...` lines from
+  `tests/headless/itertesting.sh` for quick terminal review
 
 Use `tests/headless/test_itertesting_campaign.sh` to validate that chained runs emit both artifacts.
 

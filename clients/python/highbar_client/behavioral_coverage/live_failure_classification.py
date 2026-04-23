@@ -373,6 +373,16 @@ def classify_failure_cause(
 ) -> FailureCauseClassification:
     detail = record.blocking_reason or record.evidence_summary or "no detail recorded"
     dependency = command_fixture_dependency(record.command_id)
+    lowered_detail = detail.lower()
+
+    if "resource_starved" in lowered_detail or "bootstrap_readiness=resource_starved" in lowered_detail:
+        return FailureCauseClassification(
+            command_id=record.command_id,
+            run_id=record.source_run_id,
+            primary_cause="missing_fixture",
+            supporting_detail=f"bootstrap readiness blocker: {detail}",
+            source_scope="bootstrap",
+        )
 
     if (
         channel_health.status != "healthy"
@@ -414,6 +424,8 @@ def classify_failure_cause(
             if check.command_id == record.command_id and check.blocking_reason:
                 transport_detail = check.blocking_reason
                 break
+        if "relay_unavailable" in lowered_detail or "resolution_status=relay_unavailable" in lowered_detail:
+            transport_detail = f"prerequisite resolution unavailable: {transport_detail}"
         return FailureCauseClassification(
             command_id=record.command_id,
             run_id=record.source_run_id,
@@ -439,6 +451,8 @@ def classify_failure_cause(
         )
 
     if record.attempt_status == "inconclusive" or verification_rule.fallback_classification == "predicate_or_evidence_gap":
+        if "callback_diagnostics=missing" in lowered_detail:
+            detail = f"callback diagnostics unavailable: {detail}"
         return FailureCauseClassification(
             command_id=record.command_id,
             run_id=record.source_run_id,

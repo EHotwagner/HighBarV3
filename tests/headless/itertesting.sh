@@ -153,6 +153,9 @@ with open(manifest_path, "r", encoding="utf-8") as handle:
 
 fixture = manifest.get("fixture_provisioning") or {}
 transport = manifest.get("transport_provisioning") or {}
+bootstrap = manifest.get("bootstrap_readiness") or {}
+callback_diagnostics = manifest.get("callback_diagnostics") or []
+prerequisite_resolution = manifest.get("prerequisite_resolution") or []
 class_statuses = fixture.get("class_statuses") or []
 if not class_statuses:
     raise SystemExit(1)
@@ -180,6 +183,28 @@ print(
         if transport.get("affected_command_ids")
         else "none"
     )
+)
+print(
+    "itertesting: bootstrap_readiness="
+    + bootstrap.get("readiness_status", "none")
+)
+print(
+    "itertesting: callback_diagnostics="
+    + ",".join(
+        f"{item.get('capture_stage')}:{item.get('availability_status')}"
+        for item in callback_diagnostics
+    )
+    if callback_diagnostics
+    else "itertesting: callback_diagnostics=none"
+)
+print(
+    "itertesting: prerequisite_resolution="
+    + ",".join(
+        f"{item.get('prerequisite_name')}:{item.get('resolution_status')}"
+        for item in prerequisite_resolution
+    )
+    if prerequisite_resolution
+    else "itertesting: prerequisite_resolution=none"
 )
 report_path = Path(manifest_path).with_name("run-report.md")
 semantic_inventory = []
