@@ -56,6 +56,7 @@ done
 
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
 PIN_FILE="$REPO_ROOT/data/config/spring-headless.pin"
+LUA_GADGET_SRC_DIR="$REPO_ROOT/tests/headless/LuaRules/Gadgets"
 
 # --- prerequisite checks (exit 77 on missing) --------------------------------
 
@@ -137,6 +138,11 @@ rm -f "$RUNTIME_DIR/highbar-0.sock" \
       "$WRITEDIR/highbar.health" \
       "$WRITEDIR/engine/$PIN_RELEASE/highbar.token" \
       "$WRITEDIR/engine/$PIN_RELEASE/highbar.health"
+
+if [[ -d "$LUA_GADGET_SRC_DIR" ]]; then
+    mkdir -p "$WRITEDIR/LuaRules/Gadgets"
+    cp "$LUA_GADGET_SRC_DIR"/*.lua "$WRITEDIR/LuaRules/Gadgets/"
+fi
 
 "$ENGINE" "$START_SCRIPT" > "$LOG" 2>&1 &
 SPRING_PID=$!

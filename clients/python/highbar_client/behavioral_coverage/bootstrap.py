@@ -75,6 +75,7 @@ class BootstrapContext:
     fixture_unit_ids: dict[str, int] = None                   # type: ignore[assignment]
     fixture_feature_ids: dict[str, int] = None                # type: ignore[assignment]
     fixture_positions: dict[str, Vector3] = None              # type: ignore[assignment]
+    bootstrap_positions: dict[str, Vector3] = None            # type: ignore[assignment]
     enemy_seed_id: Optional[int] = None
     manifest: tuple[tuple[str, int], ...] = ()
     cheats_enabled: bool = False
@@ -97,6 +98,8 @@ class BootstrapContext:
             self.fixture_feature_ids = {}
         if self.fixture_positions is None:
             self.fixture_positions = {}
+        if self.bootstrap_positions is None:
+            self.bootstrap_positions = {}
         if self.def_id_by_name is None:
             self.def_id_by_name = {}
         if self.observed_own_units is None:

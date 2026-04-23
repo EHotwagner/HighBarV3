@@ -36,17 +36,17 @@
 
 	[AI0]
 	{
-		Name=HighBarV3-team0;
-		Team=0;
-		ShortName=BARb;
-		Version=stable;
+		Name=HighBarV3-team1;
+		Team=1;
+		ShortName=NullAI;
+		Version=0.1;
 		Host=0;
 	}
 
 	[AI1]
 	{
-		Name=HighBarV3-team1;
-		Team=1;
+		Name=HighBarV3-team0;
+		Team=0;
 		ShortName=BARb;
 		Version=stable;
 		Host=0;

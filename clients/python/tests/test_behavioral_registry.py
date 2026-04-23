@@ -14,13 +14,16 @@ import highbar_client.behavioral_coverage as behavioral_coverage
 from highbar_client.behavioral_coverage import REGISTRY
 from highbar_client.behavioral_coverage import (
     _assess_bootstrap_readiness,
+    _attempt_enemy_fixture_provisioning,
     _attempt_transport_provisioning,
     _can_skip_bootstrap_step_failure,
     _economy_obviously_starved,
     _execute_live_bootstrap,
+    _issue_bootstrap_seed_step,
     _position_for_bootstrap_step,
     _refresh_bootstrap_context,
     _reset_live_context_to_manifest,
+    _seed_position_for_bootstrap_step,
     _simplified_bootstrap_precondition_message,
 )
 from highbar_client.behavioral_coverage.bootstrap import (
@@ -330,6 +333,124 @@ def test_refresh_bootstrap_context_falls_back_to_secondary_reclaimable_feature_f
     assert refreshed.fixture_feature_ids["wreck_target"] == 250
 
 
+def test_attempt_enemy_fixture_provisioning_spawns_enemy_when_missing(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    enemy = FakeEnemyUnit(
+        unit_id=123,
+        def_id=99,
+        position=FakePosition(458.0, 0.0, 116.0),
+        health=600.0,
+        max_health=600.0,
+    )
+    current = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    spawned = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(enemy,),
+        map_features=(),
+        frame_number=11,
+    )
+    shared = {"snapshots": [current], "deltas": []}
+    dispatched = []
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._refreshing_snapshot",
+        lambda _stub, _shared, token=None, timeout_s=5.0: shared["snapshots"][-1],
+    )
+
+    def fake_request_snapshot(_stub, token=None):
+        del token
+        return spawned.frame_number
+
+    def fake_wait_for_snapshot(_shared, min_frame, timeout_s):
+        del timeout_s
+        if shared["snapshots"][-1].frame_number < spawned.frame_number:
+            shared["snapshots"].append(spawned)
+        latest = shared["snapshots"][-1]
+        if latest.frame_number >= min_frame:
+            return latest
+        return None
+
+    def fake_dispatch(_stub, batch, token=None):
+        del token
+        dispatched.append(batch)
+        return None
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._request_snapshot",
+        fake_request_snapshot,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_snapshot",
+        fake_wait_for_snapshot,
+    )
+    monkeypatch.setattr("highbar_client.behavioral_coverage._dispatch", fake_dispatch)
+
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42},
+    )
+
+    refreshed = _attempt_enemy_fixture_provisioning(object(), shared, ctx, token="tok")
+
+    assert len(dispatched) == 1
+    assert dispatched[0].commands[0].call_lua_rules.data.startswith("highbar_spawn_enemy:corck:")
+    assert refreshed.enemy_seed_id == 123
+    assert refreshed.fixture_unit_ids["hostile_target"] == 123
+    assert refreshed.fixture_unit_ids["capturable_target"] == 123
+
+
+def test_attempt_enemy_fixture_provisioning_skips_spawn_when_enemy_visible(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    enemy = FakeEnemyUnit(
+        unit_id=123,
+        def_id=99,
+        position=FakePosition(50.0, 0.0, 60.0),
+        health=600.0,
+        max_health=600.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(enemy,),
+        map_features=(),
+        frame_number=10,
+    )
+    shared = {"snapshots": [snapshot], "deltas": []}
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._dispatch",
+        lambda *_args, **_kwargs: pytest.fail("enemy spawn dispatch should be skipped"),
+    )
+
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42},
+    )
+
+    refreshed = _attempt_enemy_fixture_provisioning(object(), shared, ctx, token="tok")
+
+    assert refreshed.enemy_seed_id == 123
+    assert refreshed.fixture_unit_ids["custom_target"] == 123
+
+
 def test_custom_builder_prefers_native_cloak_command_when_cloakable_exists():
     ctx = BootstrapContext(
         commander_unit_id=42,
@@ -492,6 +613,40 @@ def test_refresh_bootstrap_context_prefers_builder_payload_over_cloakable():
     refreshed = _refresh_bootstrap_context({"snapshots": [snapshot], "deltas": []}, ctx)
 
     assert refreshed.fixture_unit_ids["payload_unit"] == 77
+
+
+def test_refresh_bootstrap_context_tracks_factory_ground_from_runtime_def_id():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    replacement_factory_ground = FakeOwnUnit(
+        unit_id=303,
+        def_id=13,
+        position=FakePosition(270.0, 0.0, 216.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(commander, replacement_factory_ground),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42, "factory_ground": 103},
+        def_id_by_name={"armvp": 13},
+        observed_own_units={42: commander},
+    )
+
+    refreshed = _refresh_bootstrap_context({"snapshots": [snapshot], "deltas": []}, ctx)
+
+    assert refreshed.capability_units["factory_ground"] == 303
 
 
 def test_self_destruct_precondition_accepts_builder_as_disposable_fixture():
@@ -874,6 +1029,10 @@ def test_execute_live_bootstrap_builds_full_plan(monkeypatch):
         "highbar_client.behavioral_coverage._attempt_transport_provisioning",
         lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
     )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, ctx, token=None, timeout_s=6.0: ctx,
+    )
 
     static_map = type(
         "FakeStaticMap",
@@ -901,6 +1060,151 @@ def test_execute_live_bootstrap_builds_full_plan(monkeypatch):
     assert dict(ctx.manifest)["armap"] == 1
     assert dict(ctx.manifest)["armck"] == 1
     assert dict(ctx.manifest)["armpeep"] == 1
+
+
+def test_seed_position_for_bootstrap_step_prefers_preserved_bootstrap_position():
+    factory_ground = FakeOwnUnit(
+        unit_id=103,
+        def_id=13,
+        position=FakePosition(170.0, 0.0, 116.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    blocker = FakeOwnUnit(
+        unit_id=999,
+        def_id=77,
+        position=FakePosition(268.0, 0.0, 214.0),
+        health=100.0,
+        max_health=100.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(factory_ground, blocker),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    ctx = BootstrapContext(
+        capability_units={"factory_ground": 103},
+        observed_own_units={103: factory_ground, 999: blocker},
+        bootstrap_positions={"builder": Vector3(268.0, 0.0, 214.0)},
+    )
+
+    position = _seed_position_for_bootstrap_step(
+        DEFAULT_BOOTSTRAP_PLAN[5],
+        ctx,
+        snapshot=snapshot,
+    )
+
+    assert (position.x, position.y, position.z) != (266.0, 0.0, 212.0)
+    assert (position.x, position.y, position.z) != (268.0, 0.0, 214.0)
+
+
+def test_seed_position_for_bootstrap_step_reuses_preserved_commander_position():
+    step = DEFAULT_BOOTSTRAP_PLAN[0]
+    blocker = FakeOwnUnit(
+        unit_id=999,
+        def_id=77,
+        position=FakePosition(201.0, 0.0, 300.0),
+        health=100.0,
+        max_health=100.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(blocker,),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        bootstrap_positions={"mex": Vector3(200.0, 0.0, 300.0)},
+    )
+
+    position = _seed_position_for_bootstrap_step(step, ctx, snapshot=snapshot)
+
+    assert (position.x, position.y, position.z) != (200.0, 0.0, 300.0)
+
+
+def test_issue_bootstrap_seed_step_retries_alternate_mex_positions(monkeypatch):
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        def_id_by_name={"armmex": 11},
+    )
+    snapshot = FakeSnapshot(
+        own_units=(),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    static_map = type(
+        "FakeStaticMap",
+        (),
+        {
+            "metal_spots": (
+                FakePosition(106.0, 0.0, 20.0),
+                FakePosition(200.0, 0.0, 300.0),
+                FakePosition(300.0, 0.0, 400.0),
+            )
+        },
+    )()
+    dispatched_positions = []
+    attempt_count = 0
+    completed_unit = FakeOwnUnit(
+        unit_id=101,
+        def_id=11,
+        position=FakePosition(200.0, 0.0, 300.0),
+        health=100.0,
+        max_health=100.0,
+    )
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._dispatch",
+        lambda _stub, batch, token=None: dispatched_positions.append(
+            (
+                batch.commands[0].give_me_new_unit.position.x,
+                batch.commands[0].give_me_new_unit.position.y,
+                batch.commands[0].give_me_new_unit.position.z,
+            )
+        ),
+    )
+
+    def fake_wait_for_new_ready_unit(
+        _shared,
+        *,
+        def_id,
+        baseline_ids,
+        timeout_s,
+        stub=None,
+        token=None,
+    ):
+        nonlocal attempt_count
+        del _shared, def_id, baseline_ids, timeout_s, stub, token
+        attempt_count += 1
+        if attempt_count == 1:
+            raise RuntimeError("timeout waiting for new ready unit def_id=11 saw_new_candidate=0")
+        return completed_unit
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_new_ready_unit",
+        fake_wait_for_new_ready_unit,
+    )
+
+    completed = _issue_bootstrap_seed_step(
+        object(),
+        {"snapshots": [snapshot], "deltas": []},
+        ctx,
+        DEFAULT_BOOTSTRAP_PLAN[0],
+        baseline_ids=set(),
+        token="tok",
+        static_map=static_map,
+        snapshot=snapshot,
+    )
+
+    assert attempt_count == 2
+    assert len(dispatched_positions) == 2
+    assert dispatched_positions[0] != dispatched_positions[1]
+    assert completed.unit_id == 101
 
 
 def test_position_for_bootstrap_step_skips_occupied_metal_spot():
@@ -1206,6 +1510,10 @@ def test_execute_live_bootstrap_reuses_existing_ready_plan_units(monkeypatch):
         "highbar_client.behavioral_coverage._attempt_transport_provisioning",
         lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
     )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, ctx, token=None, timeout_s=6.0: ctx,
+    )
 
     ctx = _execute_live_bootstrap(object(), shared, token="tok")
 
@@ -1327,6 +1635,10 @@ def test_execute_live_bootstrap_uses_explicit_seed_path(monkeypatch):
         "highbar_client.behavioral_coverage._attempt_transport_provisioning",
         lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
     )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, ctx, token=None, timeout_s=6.0: ctx,
+    )
 
     ctx = _execute_live_bootstrap(object(), shared, token="tok", enable_seeded_path=True)
 
@@ -1347,6 +1659,117 @@ def test_execute_live_bootstrap_uses_explicit_seed_path(monkeypatch):
     assert ctx.capability_units["factory_air"] == 104
     assert ctx.capability_units["builder"] == 106
     assert ctx.capability_units["cloakable"] == 107
+
+
+def test_execute_live_bootstrap_provisions_enemy_fixture_after_transport(monkeypatch):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    shared = {
+        "snapshots": [
+            FakeSnapshot(
+                own_units=(commander,),
+                visible_enemies=(),
+                map_features=(),
+                frame_number=0,
+            )
+        ],
+        "deltas": [],
+    }
+    provisioned_ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={
+            "commander": 42,
+            "factory_ground": 103,
+            "factory_air": 104,
+            "builder": 106,
+            "cloakable": 107,
+        },
+        fixture_unit_ids={
+            "hostile_target": 123,
+            "capturable_target": 123,
+            "custom_target": 123,
+        },
+        fixture_positions={"hostile_target": Vector3(50.0, 0.0, 60.0)},
+        enemy_seed_id=123,
+        manifest=(("armap", 1), ("armck", 1), ("armpeep", 1), ("armvp", 1)),
+        def_id_by_name={
+            "armmex": 11,
+            "armsolar": 12,
+            "armvp": 13,
+            "armap": 14,
+            "armrad": 15,
+            "armck": 16,
+            "armpeep": 17,
+        },
+    )
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._resolve_bootstrap_defs",
+        lambda _stub, ctx, token=None: ctx.def_id_by_name.update(
+            {
+                "armmex": 11,
+                "armsolar": 12,
+                "armvp": 13,
+                "armap": 14,
+                "armrad": 15,
+                "armck": 16,
+                "armpeep": 17,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._resolve_supported_transport_defs",
+        lambda _stub, ctx, token=None: setattr(ctx, "transport_resolution_trace", ()),
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._refreshing_snapshot",
+        lambda _stub, _shared, token=None, timeout_s=5.0: shared["snapshots"][-1],
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._assess_bootstrap_readiness",
+        lambda _snapshot, _ctx: ("resource_starved", "natural", "mex", "fixture gap"),
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_seeded_bootstrap",
+        lambda _stub, _shared, ctx, token=None, static_map=None, starting_snapshot=None: (
+            BootstrapContext(
+                commander_unit_id=ctx.commander_unit_id,
+                commander_position=ctx.commander_position,
+                capability_units={
+                    "commander": 42,
+                    "factory_ground": 103,
+                    "factory_air": 104,
+                    "builder": 106,
+                    "cloakable": 107,
+                },
+                def_id_by_name=dict(ctx.def_id_by_name),
+            ),
+            ("armmex", "armvp"),
+        ),
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._capture_callback_diagnostic",
+        lambda _stub, _shared, _ctx, capture_stage, token=None: None,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, ctx, token=None, timeout_s=6.0: provisioned_ctx,
+    )
+
+    ctx = _execute_live_bootstrap(object(), shared, token="tok", enable_seeded_path=True)
+
+    assert ctx.enemy_seed_id == 123
+    assert ctx.fixture_unit_ids["hostile_target"] == 123
 
 
 def test_compute_bootstrap_manifest_excludes_non_bootstrap_units():
@@ -1464,6 +1887,10 @@ def test_execute_live_bootstrap_skips_commander_built_factories_when_downstream_
         "highbar_client.behavioral_coverage._attempt_transport_provisioning",
         lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
     )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, ctx, token=None, timeout_s=6.0: ctx,
+    )
 
     ctx = _execute_live_bootstrap(object(), shared, token="tok")
 
@@ -1570,7 +1997,7 @@ def test_reset_live_context_to_manifest_reissues_missing_builder(monkeypatch):
         commander_unit_id=42,
         commander_position=Vector3(10.0, 0.0, 20.0),
         capability_units={"commander": 42, "factory_ground": 103},
-        manifest=(("armck", 1), ("armcom", 1), ("armvp", 1)),
+        manifest=(("armck", 1), ("armvp", 1)),
         def_id_by_name={"armcom": 1, "armvp": 13, "armck": 16},
         observed_own_units={42: commander, 103: factory_ground},
     )
@@ -1604,6 +2031,10 @@ def test_reset_live_context_to_manifest_reissues_missing_builder(monkeypatch):
     monkeypatch.setattr(
         "highbar_client.behavioral_coverage._attempt_transport_provisioning",
         lambda _stub, _shared, ctx, wait_timeout_s=0.0, token=None: ctx,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, ctx, token=None, timeout_s=6.0: ctx,
     )
 
     refreshed = _reset_live_context_to_manifest(object(), shared, ctx, timeout_s=10.0, token="tok")
@@ -1690,11 +2121,243 @@ def test_reset_live_context_to_manifest_uses_seeded_reissue_when_cheats_enabled(
         "highbar_client.behavioral_coverage._attempt_transport_provisioning",
         lambda _stub, _shared, refreshed_ctx, wait_timeout_s=0.0, token=None: refreshed_ctx,
     )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, refreshed_ctx, token=None, timeout_s=6.0: refreshed_ctx,
+    )
 
     refreshed = _reset_live_context_to_manifest(object(), shared, ctx, timeout_s=10.0, token="tok")
 
     assert seeded_steps == ["armck"]
     assert refreshed.capability_units["builder"] == 106
+
+
+def test_reset_live_context_to_manifest_requests_snapshot_while_waiting_for_restore(
+    monkeypatch,
+):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    factory_ground = FakeOwnUnit(
+        unit_id=103,
+        def_id=13,
+        position=FakePosition(170.0, 0.0, 116.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    current = FakeSnapshot(
+        own_units=(commander, factory_ground),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    restored_builder = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    restored = FakeSnapshot(
+        own_units=(commander, factory_ground, restored_builder),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=11,
+    )
+    shared = {"snapshots": [current], "deltas": []}
+    request_count = 0
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42, "factory_ground": 103},
+        manifest=(("armck", 1), ("armvp", 1)),
+        def_id_by_name={"armvp": 13, "armck": 16},
+        observed_own_units={42: commander, 103: factory_ground},
+    )
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._refreshing_snapshot",
+        lambda _stub, _shared, token=None, timeout_s=3.0: shared["snapshots"][-1],
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._reissue_manifest_shortages",
+        lambda _stub, _shared, refreshed_ctx, shortages, token=None: refreshed_ctx,
+    )
+
+    def fake_request_snapshot(_stub, token=None):
+        nonlocal request_count
+        del token
+        request_count += 1
+        return restored.frame_number
+
+    def fake_wait_for_snapshot(_shared, min_frame, timeout_s):
+        del timeout_s
+        if request_count <= 0:
+            return None
+        if shared["snapshots"][-1].frame_number < restored.frame_number:
+            shared["snapshots"].append(restored)
+        latest = shared["snapshots"][-1]
+        if latest.frame_number >= min_frame:
+            return latest
+        return None
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._request_snapshot",
+        fake_request_snapshot,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_snapshot",
+        fake_wait_for_snapshot,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, refreshed_ctx, wait_timeout_s=0.0, token=None: refreshed_ctx,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, refreshed_ctx, token=None, timeout_s=6.0: refreshed_ctx,
+    )
+
+    refreshed = _reset_live_context_to_manifest(object(), shared, ctx, timeout_s=0.5, token="tok")
+
+    assert request_count >= 1
+    assert refreshed.capability_units["builder"] == 106
+
+
+def test_reset_live_context_to_manifest_falls_back_to_seeded_bootstrap_after_wait_timeout(
+    monkeypatch,
+):
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    factory_ground = FakeOwnUnit(
+        unit_id=103,
+        def_id=13,
+        position=FakePosition(170.0, 0.0, 116.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    factory_air = FakeOwnUnit(
+        unit_id=104,
+        def_id=14,
+        position=FakePosition(-150.0, 0.0, 116.0),
+        health=2050.0,
+        max_health=2050.0,
+    )
+    restored_builder = FakeOwnUnit(
+        unit_id=106,
+        def_id=16,
+        position=FakePosition(172.0, 0.0, 118.0),
+        health=690.0,
+        max_health=690.0,
+    )
+    restored_cloakable = FakeOwnUnit(
+        unit_id=107,
+        def_id=17,
+        position=FakePosition(-148.0, 0.0, 118.0),
+        health=89.0,
+        max_health=89.0,
+    )
+    current = FakeSnapshot(
+        own_units=(commander, factory_ground, factory_air),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=10,
+    )
+    restored = FakeSnapshot(
+        own_units=(
+            commander,
+            factory_ground,
+            factory_air,
+            restored_builder,
+            restored_cloakable,
+        ),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=11,
+    )
+    shared = {"snapshots": [current], "deltas": []}
+    wait_call_count = 0
+    fallback_calls = []
+    ctx = BootstrapContext(
+        commander_unit_id=42,
+        commander_position=Vector3(10.0, 0.0, 20.0),
+        capability_units={"commander": 42, "factory_ground": 103, "factory_air": 104},
+        manifest=(("armap", 1), ("armck", 1), ("armpeep", 1), ("armvp", 1)),
+        cheats_enabled=True,
+        def_id_by_name={"armvp": 13, "armap": 14, "armck": 16, "armpeep": 17},
+        observed_own_units={42: commander, 103: factory_ground, 104: factory_air},
+    )
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._refreshing_snapshot",
+        lambda _stub, _shared, token=None, timeout_s=5.0: shared["snapshots"][-1],
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._reissue_manifest_shortages",
+        lambda _stub, _shared, refreshed_ctx, shortages, token=None: refreshed_ctx,
+    )
+
+    def fake_wait_for_manifest_match(
+        _shared,
+        _ctx,
+        *,
+        timeout_s,
+        stub=None,
+        token=None,
+    ):
+        nonlocal wait_call_count
+        del timeout_s, stub, token
+        wait_call_count += 1
+        if wait_call_count == 1:
+            raise RuntimeError("timeout waiting for bootstrap manifest to be restored")
+        return restored
+
+    def fake_attempt_seeded_bootstrap(
+        _stub,
+        _shared,
+        fallback_ctx,
+        *,
+        token=None,
+        static_map=None,
+        starting_snapshot=None,
+    ):
+        del token, static_map
+        fallback_calls.append(starting_snapshot)
+        shared["snapshots"].append(restored)
+        return fallback_ctx, ("armck", "armpeep")
+
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._wait_for_manifest_match",
+        fake_wait_for_manifest_match,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_seeded_bootstrap",
+        fake_attempt_seeded_bootstrap,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_transport_provisioning",
+        lambda _stub, _shared, refreshed_ctx, wait_timeout_s=0.0, token=None: refreshed_ctx,
+    )
+    monkeypatch.setattr(
+        "highbar_client.behavioral_coverage._attempt_enemy_fixture_provisioning",
+        lambda _stub, _shared, refreshed_ctx, token=None, timeout_s=6.0: refreshed_ctx,
+    )
+
+    refreshed = _reset_live_context_to_manifest(object(), shared, ctx, timeout_s=10.0, token="tok")
+
+    assert wait_call_count == 2
+    assert fallback_calls == [current]
+    assert refreshed.capability_units["builder"] == 106
+    assert refreshed.capability_units["cloakable"] == 107
 
 
 def test_custom_arm_exposes_exact_bar_command_inventory_ids():

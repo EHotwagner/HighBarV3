@@ -346,7 +346,9 @@ _FIXTURE_HEALTH_HINTS = {
     "transport_unit": 265.0,
 }
 
-_DERIVED_CAPABILITY_UNITS = frozenset({"builder", "cloakable", "factory_air"})
+_DERIVED_CAPABILITY_UNITS = frozenset(
+    {"builder", "cloakable", "factory_air", "factory_ground"}
+)
 _DERIVED_FIXTURE_UNITS = frozenset(
     {
         "builder",
@@ -564,6 +566,13 @@ def _matches_factory_air(unit: Any, ctx: BootstrapContext) -> bool:
     return _matches_health(unit, _FIXTURE_HEALTH_HINTS["factory_air"])
 
 
+def _matches_factory_ground(unit: Any, ctx: BootstrapContext) -> bool:
+    factory_ground_def_id = ctx.def_id_by_name.get("armvp", 0)
+    if factory_ground_def_id:
+        return getattr(unit, "def_id", 0) == factory_ground_def_id
+    return getattr(unit, "unit_id", 0) == ctx.capability_units.get("factory_ground", 0)
+
+
 def _clear_derived_live_context(ctx: BootstrapContext) -> None:
     for key in _DERIVED_CAPABILITY_UNITS:
         ctx.capability_units.pop(key, None)
@@ -663,6 +672,16 @@ def _give_me_new_unit_batch(unit_def_id: int, position: Vector3):
     return batch
 
 
+def _call_lua_rules_batch(data: str):
+    from ..highbar import commands_pb2
+
+    batch = commands_pb2.CommandBatch()
+    batch.batch_seq = 1
+    cmd = batch.commands.add()
+    cmd.call_lua_rules.data = data
+    return batch
+
+
 def _latest_snapshot(shared: dict) -> Any | None:
     snapshots = shared.get("snapshots") or ()
     if not snapshots:
@@ -747,6 +766,45 @@ def _wait_for_new_ready_unit(
     raise RuntimeError(f"timeout waiting for new ready unit def_id={def_id} {state}")
 
 
+def _wait_for_visible_enemy(
+    shared: dict,
+    *,
+    baseline_ids: set[int],
+    timeout_s: float,
+    stub: Any | None = None,
+    token: str | None = None,
+) -> Any:
+    deadline = time.monotonic() + timeout_s
+    latest = _latest_snapshot(shared)
+    min_frame = (getattr(latest, "frame_number", 0) if latest is not None else 0) + 1
+    refresh_due = 0.0
+    while time.monotonic() < deadline:
+        now = time.monotonic()
+        if stub is not None and now >= refresh_due:
+            _request_snapshot(stub, token=token)
+            refresh_due = now + 0.5
+        snapshot = _wait_for_snapshot(
+            shared,
+            min_frame=min_frame,
+            timeout_s=min(1.0, max(0.1, deadline - time.monotonic())),
+        )
+        if snapshot is None:
+            snapshot = _latest_snapshot(shared)
+        if snapshot is None:
+            continue
+        min_frame = getattr(snapshot, "frame_number", 0) + 1
+        visible_enemies = tuple(getattr(snapshot, "visible_enemies", ()))
+        if not visible_enemies:
+            continue
+        new_enemies = [
+            enemy for enemy in visible_enemies
+            if getattr(enemy, "unit_id", 0) not in baseline_ids
+        ]
+        candidates = new_enemies or list(visible_enemies)
+        return min(candidates, key=lambda item: getattr(item, "unit_id", 0))
+    raise RuntimeError("timeout waiting for visible enemy fixture")
+
+
 def _seed_position_for_bootstrap_step(
     step: Any,
     ctx: BootstrapContext,
@@ -754,6 +812,21 @@ def _seed_position_for_bootstrap_step(
     static_map: Any | None = None,
     snapshot: Any | None = None,
 ) -> Vector3:
+    preserved_position = ctx.bootstrap_positions.get(getattr(step, "capability", ""))
+    if preserved_position is not None:
+        builder_unit_id = (
+            ctx.commander_unit_id
+            if step.builder_capability == "commander"
+            else ctx.capability_units.get(step.builder_capability)
+        )
+        return _find_clear_build_position(
+            preserved_position,
+            snapshot=snapshot,
+            ignore_unit_ids={builder_unit_id} if builder_unit_id else None,
+            clearance_radius=96.0,
+            search_step=96.0,
+            max_ring=8,
+        )
     if step.builder_capability == "commander":
         return _position_for_bootstrap_step(
             step,
@@ -781,6 +854,61 @@ def _seed_position_for_bootstrap_step(
     )
 
 
+def _seed_position_candidates_for_bootstrap_step(
+    step: Any,
+    ctx: BootstrapContext,
+    *,
+    static_map: Any | None = None,
+    snapshot: Any | None = None,
+) -> tuple[Vector3, ...]:
+    candidates: list[Vector3] = []
+    seen: set[tuple[int, int, int]] = set()
+
+    def add(position: Vector3) -> None:
+        key = (
+            int(round(position.x * 10.0)),
+            int(round(position.y * 10.0)),
+            int(round(position.z * 10.0)),
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(position)
+
+    add(
+        _seed_position_for_bootstrap_step(
+            step,
+            ctx,
+            static_map=static_map,
+            snapshot=snapshot,
+        )
+    )
+    if step.def_id != "armmex" or static_map is None:
+        return tuple(candidates)
+
+    ignore_unit_ids = {ctx.commander_unit_id} if ctx.commander_unit_id else None
+    metal_spots = tuple(getattr(static_map, "metal_spots", ()) or ())
+    ordered_spots = sorted(
+        metal_spots,
+        key=lambda spot: _distance_sq(
+            _vector3_from_position(spot),
+            ctx.commander_position,
+        ),
+    )
+    for spot in ordered_spots[:4]:
+        add(
+            _find_clear_build_position(
+                _vector3_from_position(spot),
+                snapshot=snapshot,
+                ignore_unit_ids=ignore_unit_ids,
+                clearance_radius=64.0,
+                search_step=64.0,
+                max_ring=6,
+            )
+        )
+    return tuple(candidates)
+
+
 def _issue_bootstrap_seed_step(
     stub: Any,
     shared: dict,
@@ -795,32 +923,59 @@ def _issue_bootstrap_seed_step(
     resolved_def_id = ctx.def_id_by_name.get(step.def_id, 0)
     if not resolved_def_id:
         raise RuntimeError(f"runtime def id for {step.def_id} was not resolved")
-    target_position = _seed_position_for_bootstrap_step(
+    candidate_positions = _seed_position_candidates_for_bootstrap_step(
         step,
         ctx,
         static_map=static_map,
         snapshot=snapshot,
     )
-    _dispatch(
-        stub,
-        _give_me_new_unit_batch(resolved_def_id, target_position),
-        token=token,
-    )
-    try:
-        return _wait_for_new_ready_unit(
-            shared,
-            def_id=resolved_def_id,
-            baseline_ids=baseline_ids,
-            timeout_s=min(step.timeout_seconds, 10.0),
-            stub=stub,
+    deadline = time.monotonic() + min(step.timeout_seconds, 10.0)
+    last_exc: RuntimeError | None = None
+    for index, target_position in enumerate(candidate_positions):
+        _dispatch(
+            stub,
+            _give_me_new_unit_batch(resolved_def_id, target_position),
             token=token,
         )
-    except RuntimeError as exc:
-        raise RuntimeError(
-            f"seed/{step.capability}/{step.def_id} "
-            f"spawn_pos={_format_vector3(target_position)} "
-            f"{exc}"
-        ) from exc
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
+        remaining_candidates = len(candidate_positions) - index
+        attempt_timeout = remaining
+        if remaining_candidates > 1:
+            attempt_timeout = min(3.0, max(1.0, remaining / remaining_candidates))
+        try:
+            return _wait_for_new_ready_unit(
+                shared,
+                def_id=resolved_def_id,
+                baseline_ids=baseline_ids,
+                timeout_s=attempt_timeout,
+                stub=stub,
+                token=token,
+            )
+        except RuntimeError as exc:
+            last_exc = RuntimeError(
+                f"seed/{step.capability}/{step.def_id} "
+                f"spawn_pos={_format_vector3(target_position)} "
+                f"{exc}"
+            )
+            if "saw_new_candidate=0" in str(exc) and index + 1 < len(candidate_positions):
+                continue
+            raise last_exc from exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(
+        f"seed/{step.capability}/{step.def_id} no candidate positions were available"
+    )
+
+
+def _remember_bootstrap_step_position(
+    ctx: BootstrapContext,
+    capability: str,
+    position: Vector3,
+) -> None:
+    ctx.fixture_positions[capability] = position
+    ctx.bootstrap_positions[capability] = position
 
 
 def _attempt_seeded_bootstrap(
@@ -849,7 +1004,11 @@ def _attempt_seeded_bootstrap(
         if existing_units:
             completed = min(existing_units, key=lambda item: item.unit_id)
             ctx.capability_units[step.capability] = completed.unit_id
-            ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+            _remember_bootstrap_step_position(
+                ctx,
+                step.capability,
+                _vector3_from_position(completed.position),
+            )
             continue
         completed = _issue_bootstrap_seed_step(
             stub,
@@ -867,7 +1026,11 @@ def _attempt_seeded_bootstrap(
         )
         seeded_steps.append(step.def_id)
         ctx.capability_units[step.capability] = completed.unit_id
-        ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+        _remember_bootstrap_step_position(
+            ctx,
+            step.capability,
+            _vector3_from_position(completed.position),
+        )
         ctx = _refresh_bootstrap_context(shared, ctx)
         snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=3.0) or _latest_snapshot(shared)
         if snapshot is None:
@@ -885,7 +1048,11 @@ def _attempt_seeded_bootstrap(
         if existing_units:
             completed = min(existing_units, key=lambda item: item.unit_id)
             ctx.capability_units[step.capability] = completed.unit_id
-            ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+            _remember_bootstrap_step_position(
+                ctx,
+                step.capability,
+                _vector3_from_position(completed.position),
+            )
             ctx = _refresh_bootstrap_context(shared, ctx)
             continue
         completed = _issue_bootstrap_seed_step(
@@ -903,7 +1070,11 @@ def _attempt_seeded_bootstrap(
         )
         seeded_steps.append(step.def_id)
         ctx.capability_units[step.capability] = completed.unit_id
-        ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+        _remember_bootstrap_step_position(
+            ctx,
+            step.capability,
+            _vector3_from_position(completed.position),
+        )
         ctx = _refresh_bootstrap_context(shared, ctx)
     return ctx, tuple(seeded_steps)
 
@@ -997,13 +1168,22 @@ def _wait_for_manifest_match(
     ctx: BootstrapContext,
     *,
     timeout_s: float,
+    stub: Any | None = None,
+    token: str | None = None,
 ) -> Any:
     deadline = time.monotonic() + timeout_s
     latest = _latest_snapshot(shared)
     min_frame = (getattr(latest, "frame_number", 0) if latest is not None else 0) + 1
+    refresh_due = 0.0
     last_current: tuple[tuple[str, int], ...] = ()
     last_shortages: dict[str, int] = {}
     while time.monotonic() < deadline:
+        now = time.monotonic()
+        if stub is not None and now >= refresh_due:
+            scheduled_frame = _request_snapshot(stub, token=token)
+            if scheduled_frame > 0:
+                min_frame = max(min_frame, scheduled_frame)
+            refresh_due = now + 0.5
         snapshot = _wait_for_snapshot(
             shared,
             min_frame=min_frame,
@@ -1014,12 +1194,26 @@ def _wait_for_manifest_match(
         if snapshot is None:
             continue
         min_frame = getattr(snapshot, "frame_number", 0) + 1
-        current = compute_manifest(getattr(snapshot, "own_units", ()), ctx.def_id_by_name)
+        current = compute_bootstrap_manifest(
+            getattr(snapshot, "own_units", ()),
+            ctx.def_id_by_name,
+        )
         shortages = manifest_shortages(current, ctx.manifest)
         last_current = current
         last_shortages = shortages
         if not shortages:
             return snapshot
+    latest = _latest_snapshot(shared)
+    if latest is not None:
+        current = compute_bootstrap_manifest(
+            getattr(latest, "own_units", ()),
+            ctx.def_id_by_name,
+        )
+        shortages = manifest_shortages(current, ctx.manifest)
+        if not shortages:
+            return latest
+        last_current = current
+        last_shortages = shortages
     raise RuntimeError(
         "timeout waiting for bootstrap manifest to be restored "
         f"remaining_shortages={last_shortages} current_manifest={list(last_current)} "
@@ -1728,6 +1922,76 @@ def _resolve_bootstrap_defs(stub: Any, ctx: BootstrapContext, *, token: str | No
     _resolve_live_def_ids(stub, ctx, wanted_names=wanted_names, token=token)
 
 
+def _attempt_enemy_fixture_provisioning(
+    stub: Any,
+    shared: dict,
+    ctx: BootstrapContext,
+    *,
+    token: str | None = None,
+    timeout_s: float = 6.0,
+) -> BootstrapContext:
+    refreshed = _refresh_bootstrap_context(shared, ctx)
+    if refreshed.enemy_seed_id is not None:
+        return refreshed
+
+    snapshot = (
+        _refreshing_snapshot(stub, shared, token=token, timeout_s=min(5.0, timeout_s))
+        or _latest_snapshot(shared)
+    )
+    if snapshot is None:
+        raise RuntimeError("no live snapshot available for enemy fixture provisioning")
+    refreshed = _refresh_bootstrap_context(shared, refreshed)
+    baseline_enemy_ids = {
+        getattr(enemy, "unit_id", 0)
+        for enemy in getattr(snapshot, "visible_enemies", ())
+    }
+    if baseline_enemy_ids:
+        return refreshed
+
+    target_position = _find_clear_build_position(
+        Vector3(
+            x=refreshed.commander_position.x + 448.0,
+            y=refreshed.commander_position.y,
+            z=refreshed.commander_position.z + 96.0,
+        ),
+        snapshot=snapshot,
+        ignore_unit_ids={refreshed.commander_unit_id} if refreshed.commander_unit_id else None,
+        clearance_radius=96.0,
+        search_step=96.0,
+        max_ring=6,
+    )
+    _dispatch(
+        stub,
+        _call_lua_rules_batch(
+            (
+                "highbar_spawn_enemy:"
+                f"corck:{target_position.x:.1f}:{target_position.z:.1f}:west"
+            )
+        ),
+        token=token,
+    )
+    try:
+        _wait_for_visible_enemy(
+            shared,
+            baseline_ids=baseline_enemy_ids,
+            timeout_s=timeout_s,
+            stub=stub,
+            token=token,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "enemy_fixture_provision_failed: "
+            f"spawn_pos={_format_vector3(target_position)} {exc}"
+        ) from exc
+    refreshed = _refresh_bootstrap_context(shared, refreshed)
+    if refreshed.enemy_seed_id is None:
+        raise RuntimeError(
+            "enemy_fixture_provision_failed: "
+            f"spawn_pos={_format_vector3(target_position)} visible enemy did not refresh"
+        )
+    return refreshed
+
+
 def _refresh_bootstrap_context(shared: dict, ctx: BootstrapContext) -> BootstrapContext:
     snapshot = shared["snapshots"][-1] if shared.get("snapshots") else None
     if snapshot is None:
@@ -1748,6 +2012,11 @@ def _refresh_bootstrap_context(shared: dict, ctx: BootstrapContext) -> Bootstrap
     ctx.observed_own_units = {
         unit.unit_id: unit for unit in getattr(snapshot, "own_units", ())
     }
+
+    for unit in own_units:
+        if _matches_factory_ground(unit, ctx) and _unit_is_ready_fixture_unit(unit):
+            ctx.capability_units["factory_ground"] = unit.unit_id
+            break
 
     for unit in own_units:
         if _matches_factory_air(unit, ctx) and _unit_is_ready_fixture_unit(unit):
@@ -2031,11 +2300,17 @@ def _execute_live_bootstrap(
             capture_stage="late_refresh",
             token=token,
         )
-        return _attempt_transport_provisioning(
+        ctx = _attempt_transport_provisioning(
             stub,
             shared,
             ctx,
             wait_timeout_s=6.0,
+            token=token,
+        )
+        return _attempt_enemy_fixture_provisioning(
+            stub,
+            shared,
+            ctx,
             token=token,
         )
 
@@ -2058,7 +2333,11 @@ def _execute_live_bootstrap(
         if existing_units:
             completed = min(existing_units, key=lambda item: item.unit_id)
             ctx.capability_units[step.capability] = completed.unit_id
-            ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+            _remember_bootstrap_step_position(
+                ctx,
+                step.capability,
+                _vector3_from_position(completed.position),
+            )
             continue
         try:
             completed = _issue_bootstrap_build_step(
@@ -2091,7 +2370,11 @@ def _execute_live_bootstrap(
             )
             raise BootstrapExecutionError(str(exc), ctx=ctx) from exc
         ctx.capability_units[step.capability] = completed.unit_id
-        ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+        _remember_bootstrap_step_position(
+            ctx,
+            step.capability,
+            _vector3_from_position(completed.position),
+        )
 
     ctx = _refresh_bootstrap_context(shared, ctx)
     factory_steps = tuple(
@@ -2116,7 +2399,11 @@ def _execute_live_bootstrap(
         if existing_units:
             completed = min(existing_units, key=lambda item: item.unit_id)
             ctx.capability_units[step.capability] = completed.unit_id
-            ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+            _remember_bootstrap_step_position(
+                ctx,
+                step.capability,
+                _vector3_from_position(completed.position),
+            )
             ctx = _refresh_bootstrap_context(shared, ctx)
             continue
         builder_unit_id = ctx.capability_units.get(step.builder_capability)
@@ -2150,7 +2437,11 @@ def _execute_live_bootstrap(
             )
             raise BootstrapExecutionError(str(exc), ctx=ctx) from exc
         ctx.capability_units[step.capability] = completed.unit_id
-        ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+        _remember_bootstrap_step_position(
+            ctx,
+            step.capability,
+            _vector3_from_position(completed.position),
+        )
         ctx = _refresh_bootstrap_context(shared, ctx)
 
     final_snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=5.0) or _latest_snapshot(shared)
@@ -2169,11 +2460,17 @@ def _execute_live_bootstrap(
         capture_stage="late_refresh",
         token=token,
     )
-    return _attempt_transport_provisioning(
+    ctx = _attempt_transport_provisioning(
         stub,
         shared,
         ctx,
         wait_timeout_s=6.0,
+        token=token,
+    )
+    return _attempt_enemy_fixture_provisioning(
+        stub,
+        shared,
+        ctx,
         token=token,
     )
 
@@ -2213,7 +2510,11 @@ def _reissue_manifest_shortages(
                     snapshot=snapshot,
                 )
                 ctx.capability_units[step.capability] = completed.unit_id
-                ctx.fixture_positions[step.capability] = _vector3_from_position(completed.position)
+                _remember_bootstrap_step_position(
+                    ctx,
+                    step.capability,
+                    _vector3_from_position(completed.position),
+                )
                 ctx = _refresh_bootstrap_context(shared, ctx)
                 continue
             if step.builder_capability == "commander":
@@ -2246,7 +2547,13 @@ def _reissue_manifest_shortages(
                         {prerequisite_step.def_id: 1},
                         token=token,
                     )
-                    _wait_for_manifest_match(shared, ctx, timeout_s=10.0)
+                    _wait_for_manifest_match(
+                        shared,
+                        ctx,
+                        timeout_s=10.0,
+                        stub=stub,
+                        token=token,
+                    )
                     ctx = _refresh_bootstrap_context(shared, ctx)
                     builder_unit_id = ctx.capability_units.get(step.builder_capability, 0)
                 builder_unit = ctx.observed_own_units.get(builder_unit_id)
@@ -2274,19 +2581,60 @@ def _reset_live_context_to_manifest(
     snapshot = _refreshing_snapshot(stub, shared, token=token, timeout_s=min(5.0, timeout_s)) or _latest_snapshot(shared)
     if snapshot is None:
         raise RuntimeError("no live snapshot available for bootstrap reset")
-    current = compute_manifest(getattr(snapshot, "own_units", ()), ctx.def_id_by_name)
+    current = compute_bootstrap_manifest(
+        getattr(snapshot, "own_units", ()),
+        ctx.def_id_by_name,
+    )
     shortages = manifest_shortages(current, ctx.manifest)
     if not shortages:
         return _refresh_bootstrap_context(shared, ctx)
     ctx = _reissue_manifest_shortages(stub, shared, ctx, shortages, token=token)
-    _wait_for_manifest_match(shared, ctx, timeout_s=timeout_s)
+    try:
+        _wait_for_manifest_match(
+            shared,
+            ctx,
+            timeout_s=timeout_s,
+            stub=stub,
+            token=token,
+        )
+    except RuntimeError as exc:
+        if not ctx.cheats_enabled:
+            raise
+        fallback_snapshot = (
+            _refreshing_snapshot(stub, shared, token=token, timeout_s=min(5.0, timeout_s))
+            or _latest_snapshot(shared)
+        )
+        if fallback_snapshot is None:
+            raise
+        fallback_ctx, _seeded_steps = _attempt_seeded_bootstrap(
+            stub,
+            shared,
+            ctx,
+            token=token,
+            starting_snapshot=fallback_snapshot,
+        )
+        _wait_for_manifest_match(
+            shared,
+            fallback_ctx,
+            timeout_s=timeout_s,
+            stub=stub,
+            token=token,
+        )
+        ctx = fallback_ctx
     refreshed = _refresh_bootstrap_context(shared, ctx)
-    return _attempt_transport_provisioning(
+    refreshed = _attempt_transport_provisioning(
         stub,
         shared,
         refreshed,
         wait_timeout_s=min(timeout_s, 6.0),
         token=token,
+    )
+    return _attempt_enemy_fixture_provisioning(
+        stub,
+        shared,
+        refreshed,
+        token=token,
+        timeout_s=min(timeout_s, 6.0),
     )
 
 
