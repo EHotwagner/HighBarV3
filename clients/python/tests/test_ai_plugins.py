@@ -191,3 +191,56 @@ def test_turtle1_macros_without_enemy_seeking_and_stays_on_own_side():
         for command in batch.commands:
             assert command.WhichOneof("command") == "build_unit"
             assert command.build_unit.build_position.x <= 4096.0 - plugin.side_padding
+
+
+def test_turtle1_falls_back_when_build_options_are_unavailable():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 2,
+            "build_interval_frames": 1,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armmex": 11,
+                "armsolar": 12,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+    context.build_options = {}
+    update = state_pb2.StateUpdate(seq=1, frame=100)
+    update.snapshot.frame_number = 100
+    update.snapshot.static_map.CopyFrom(static_map)
+    update.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    batches = list(plugin.on_state(context, update))
+
+    assert batches
+    assert all(batch.target_unit_id == 101 for batch in batches)
+    assert all(batch.commands[0].build_unit.options == 0 for batch in batches)
+
+
+def test_turtle1_can_queue_macro_orders_when_configured():
+    static_map = _left_side_map()
+    plugin = Turtle1AI(
+        {
+            "max_batches_per_update": 1,
+            "build_interval_frames": 1,
+            "queue_macro_orders": True,
+            "def_id_by_name": {
+                "armcom": 1,
+                "armsolar": 12,
+            },
+        }
+    )
+    context = _FakeTurtleContext(static_map)
+    context.build_options = {}
+    update = state_pb2.StateUpdate(seq=1, frame=100)
+    update.snapshot.frame_number = 100
+    update.snapshot.static_map.CopyFrom(static_map)
+    update.snapshot.own_units.append(_unit(101, 1, 1024.0, 4096.0))
+
+    batches = list(plugin.on_state(context, update))
+
+    assert batches
+    assert batches[0].commands[0].build_unit.options & 1

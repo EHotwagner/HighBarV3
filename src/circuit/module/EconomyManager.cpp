@@ -605,6 +605,10 @@ void CEconomyManager::Init()
 	std::sort(mspInfos.begin(), mspInfos.end());
 	pullMtoS = mspInfos.front().pull;
 
+	if (!circuit->IsBuiltinEnabled()) {
+		return;
+	}
+
 	CSetupManager::StartFunc subinit = [this](const AIFloat3& pos) {
 		metalProduced = GetMetalCur() * metalMod;
 

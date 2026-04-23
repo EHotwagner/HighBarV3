@@ -499,6 +499,10 @@ void CMilitaryManager::InitEconomyScores(const std::vector<CCircuitDef*>&& build
 
 void CMilitaryManager::Init()
 {
+	if (!circuit->IsBuiltinEnabled()) {
+		return;
+	}
+
 	CMetalManager* metalMgr = circuit->GetMetalManager();
 	const CMetalData::Clusters& clusters = metalMgr->GetClusters();
 

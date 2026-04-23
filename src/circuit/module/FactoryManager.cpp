@@ -709,6 +709,10 @@ void CFactoryManager::ReadConfig()
 
 void CFactoryManager::Init()
 {
+	if (!circuit->IsBuiltinEnabled()) {
+		return;
+	}
+
 	CSetupManager::StartFunc subinit = [this](const AIFloat3& pos) {
 		CScheduler* scheduler = circuit->GetScheduler().get();
 		const int interval = 4;

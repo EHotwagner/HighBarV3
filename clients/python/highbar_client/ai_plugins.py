@@ -300,6 +300,7 @@ class Turtle1AI(BaseAIPlugin):
         self.target_army = int(cfg.get("target_army", 45))
         self.target_advanced_factories = int(cfg.get("target_advanced_factories", 1))
         self.enable_advanced = _config_bool(cfg.get("enable_advanced", True))
+        self.queue_macro_orders = _config_bool(cfg.get("queue_macro_orders", False))
         self.unit_names = {
             key: tuple(cfg.get(key, default))
             for key, default in self.DEFAULT_UNIT_NAMES.items()
@@ -320,7 +321,10 @@ class Turtle1AI(BaseAIPlugin):
         self._build_site_cursor = 0
 
     def on_start(self, context: AIPluginContext) -> None:
-        self._resolve_defs(context)
+        # Runtime callback relay can appear after Hello in client-mode runs.
+        # Resolve lazily from the first usable state update instead of
+        # blocking startup before the state stream is open.
+        return None
 
     def on_state(
         self,
@@ -433,7 +437,7 @@ class Turtle1AI(BaseAIPlugin):
             if target_name is None:
                 continue
             target_def_id = self.def_id_by_name[target_name]
-            builder = self._find_builder(context, ready_units, target_def_id)
+            builder = self._find_builder(context, ready_units, target_def_id, category)
             if builder is None:
                 continue
             position = self._position_for_category(
@@ -456,6 +460,11 @@ class Turtle1AI(BaseAIPlugin):
                             position.z,
                         )
                     ],
+                    opts=(
+                        commands.OptionBits.SHIFT
+                        if self.queue_macro_orders
+                        else commands.OptionBits.NONE
+                    ),
                 )
             )
 
@@ -514,11 +523,40 @@ class Turtle1AI(BaseAIPlugin):
         context: AIPluginContext,
         ready_units: list[state_pb2.OwnUnit],
         target_def_id: int,
+        category: str,
     ) -> state_pb2.OwnUnit | None:
         for unit in ready_units:
-            if target_def_id in self._build_options_for_unit(context, unit):
+            build_options = self._build_options_for_unit(context, unit)
+            if target_def_id in build_options:
+                return unit
+            if not build_options and self._can_fallback_build(unit, category):
                 return unit
         return None
+
+    def _can_fallback_build(self, unit: state_pb2.OwnUnit, category: str) -> bool:
+        def_id = int(unit.def_id)
+        if category in {"mex", "energy", "factory", "defense", "advanced_factory"}:
+            base_builders = self._def_ids_for(
+                (*self.unit_names["commanders"], *self.unit_names["builders"])
+            )
+            if base_builders:
+                return def_id in base_builders
+            non_base_builders = self._def_ids_for(
+                (
+                    *self.unit_names["factories"],
+                    *self.unit_names["advanced_factories"],
+                    *self.unit_names["army"],
+                    *self.unit_names["advanced_army"],
+                    *self.unit_names["economy"],
+                    *self.unit_names["defense"],
+                )
+            )
+            return def_id not in non_base_builders
+        if category in {"builder", "army", "advanced_army"}:
+            return def_id in self._def_ids_for(
+                (*self.unit_names["factories"], *self.unit_names["advanced_factories"])
+            )
+        return False
 
     def _position_for_category(
         self,
