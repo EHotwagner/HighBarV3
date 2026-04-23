@@ -1378,6 +1378,51 @@ def test_assess_bootstrap_readiness_ignores_optional_missing_steps_when_downstre
     assert "optional commander-built gaps" in reason
 
 
+def test_assess_bootstrap_readiness_keeps_armmex_as_first_required_step_when_start_is_starved():
+    commander = FakeOwnUnit(
+        unit_id=42,
+        def_id=1,
+        position=FakePosition(10.0, 0.0, 20.0),
+        health=3250.0,
+        max_health=3250.0,
+    )
+    snapshot = FakeSnapshot(
+        own_units=(commander,),
+        visible_enemies=(),
+        map_features=(),
+        frame_number=0,
+        economy=type(
+            "Economy",
+            (),
+            {
+                "metal": 0.0,
+                "metal_income": 0.0,
+                "metal_storage": 1500.0,
+                "energy": 6000.0,
+                "energy_income": 0.0,
+                "energy_storage": 8000.0,
+            },
+        )(),
+    )
+    ctx = BootstrapContext(
+        capability_units={"commander": 42},
+        def_id_by_name={
+            "armmex": 11,
+            "armsolar": 12,
+            "armvp": 13,
+            "armap": 14,
+            "armrad": 15,
+        },
+    )
+
+    status, path, first_required_step, reason = _assess_bootstrap_readiness(snapshot, ctx)
+
+    assert status == "resource_starved"
+    assert path == "unavailable"
+    assert first_required_step == "armmex"
+    assert "resource-starved state" in reason
+
+
 def test_execute_live_bootstrap_records_resource_starved_readiness(monkeypatch):
     commander = FakeOwnUnit(
         unit_id=42,
@@ -1441,7 +1486,7 @@ def test_execute_live_bootstrap_records_resource_starved_readiness(monkeypatch):
     assert err.ctx is not None
     assert err.ctx.bootstrap_readiness is not None
     assert err.ctx.bootstrap_readiness["readiness_status"] == "resource_starved"
-    assert err.ctx.bootstrap_readiness["first_required_step"] == "armvp"
+    assert err.ctx.bootstrap_readiness["first_required_step"] == "armmex"
     assert err.ctx.prerequisite_resolution_records[0]["prerequisite_name"] == "armmex"
     assert err.ctx.runtime_capability_profile is not None
     assert 47 in err.ctx.runtime_capability_profile["supported_callbacks"]

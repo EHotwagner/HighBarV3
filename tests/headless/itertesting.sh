@@ -3,7 +3,7 @@
 
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
 HEADLESS_DIR="$REPO_ROOT/tests/headless"
 EXAMPLES_DIR="$REPO_ROOT/specs/002-live-headless-e2e/examples"
 
@@ -39,6 +39,7 @@ GAMESEED="${HIGHBAR_GAMESEED:-0x42424242}"
 MAX_RUNS="${HIGHBAR_ITERTESTING_MAX_IMPROVEMENT_RUNS:-}"
 BOOTSTRAP_WAIT_SECONDS="${HIGHBAR_ITERTESTING_BOOTSTRAP_WAIT_SECONDS:-12}"
 ENABLE_BUILTIN="${HIGHBAR_ITERTESTING_ENABLE_BUILTIN:-false}"
+EXPLICIT_CALLBACK_PROXY_ENDPOINT="${HIGHBAR_CALLBACK_PROXY_ENDPOINT:-}"
 # The maintainer-facing live path is documented as a default single run.
 # Keep profile-driven defaults for synthetic campaign validation, but
 # clamp the live wrapper to one run unless the maintainer explicitly
@@ -53,8 +54,89 @@ COORD_LOG=""
 ENGINE_LOG=""
 ENGINE_PID_FILE=""
 COORD_PID=""
+BYAR_USER_CONFIG_PATH=""
+BYAR_USER_CONFIG_BACKUP=""
+BYAR_ENGINE_CONFIG_PATH=""
+BYAR_ENGINE_CONFIG_BACKUP=""
 
 mkdir -p "$RUN_DIR"
+
+patch_autoquit_config() {
+    local config_path="$1"
+    local backup_path="$2"
+    if [[ ! -f "$config_path" ]]; then
+        return 1
+    fi
+    cp "$config_path" "$backup_path"
+    python3 - "$config_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+updated_lines: list[str] = []
+inside_order = False
+order_depth = 0
+updated = False
+
+for line in lines:
+    if not inside_order and re.match(r'^\s*order\s*=\s*{', line):
+        inside_order = True
+        order_depth = line.count("{") - line.count("}")
+        updated_lines.append(line)
+        continue
+
+    if inside_order and not updated:
+        replaced, count = re.subn(r'^(\s*Autoquit\s*=\s*)\d+(,\s*)$', r'\g<1>0\2', line)
+        if count:
+            line = replaced
+            updated = True
+
+    updated_lines.append(line)
+
+    if inside_order:
+        order_depth += line.count("{") - line.count("}")
+        if order_depth <= 0:
+            inside_order = False
+
+if not updated:
+    raise SystemExit(1)
+
+path.write_text("".join(updated_lines), encoding="utf-8")
+PY
+    return $?
+}
+
+disable_autoquit_for_attempt() {
+    local engine_release="${HIGHBAR_ENGINE_RELEASE:-recoil_2025.06.19}"
+    BYAR_USER_CONFIG_PATH="$WRITE_DIR/LuaUI/Config/BYAR.lua"
+    BYAR_USER_CONFIG_BACKUP="$ACTIVE_RUN_DIR/BYAR.user.pre-highbar"
+    BYAR_ENGINE_CONFIG_PATH="$WRITE_DIR/engine/$engine_release/LuaUI/Config/BYAR.lua"
+    BYAR_ENGINE_CONFIG_BACKUP="$ACTIVE_RUN_DIR/BYAR.engine.pre-highbar"
+
+    if ! patch_autoquit_config "$BYAR_USER_CONFIG_PATH" "$BYAR_USER_CONFIG_BACKUP"; then
+        BYAR_USER_CONFIG_PATH=""
+        BYAR_USER_CONFIG_BACKUP=""
+    fi
+    if ! patch_autoquit_config "$BYAR_ENGINE_CONFIG_PATH" "$BYAR_ENGINE_CONFIG_BACKUP"; then
+        BYAR_ENGINE_CONFIG_PATH=""
+        BYAR_ENGINE_CONFIG_BACKUP=""
+    fi
+}
+
+restore_autoquit_config() {
+    if [[ -n "$BYAR_USER_CONFIG_PATH" && -n "$BYAR_USER_CONFIG_BACKUP" && -f "$BYAR_USER_CONFIG_BACKUP" ]]; then
+        cp "$BYAR_USER_CONFIG_BACKUP" "$BYAR_USER_CONFIG_PATH"
+    fi
+    if [[ -n "$BYAR_ENGINE_CONFIG_PATH" && -n "$BYAR_ENGINE_CONFIG_BACKUP" && -f "$BYAR_ENGINE_CONFIG_BACKUP" ]]; then
+        cp "$BYAR_ENGINE_CONFIG_BACKUP" "$BYAR_ENGINE_CONFIG_PATH"
+    fi
+    BYAR_USER_CONFIG_PATH=""
+    BYAR_USER_CONFIG_BACKUP=""
+    BYAR_ENGINE_CONFIG_PATH=""
+    BYAR_ENGINE_CONFIG_BACKUP=""
+}
 
 stop_live_topology() {
     if [[ -f "$ENGINE_PID_FILE" ]]; then
@@ -64,6 +146,7 @@ stop_live_topology() {
         kill -TERM "$COORD_PID" 2>/dev/null || true
     fi
     sleep 1
+    restore_autoquit_config
 }
 
 prepare_attempt_dir() {
@@ -77,6 +160,18 @@ prepare_attempt_dir() {
     ENGINE_LOG="$ACTIVE_RUN_DIR/highbar-launch.log"
     ENGINE_PID_FILE="$ACTIVE_RUN_DIR/highbar-launch.pid"
     COORD_PID=""
+}
+
+configure_live_attempt_env() {
+    export HIGHBAR_WRITE_DIR="$WRITE_DIR"
+    export HIGHBAR_ENGINE_RELEASE="recoil_2025.06.19"
+    export HIGHBAR_COORDINATOR_OWNER_SKIRMISH_AI_ID="${HIGHBAR_COORDINATOR_OWNER_SKIRMISH_AI_ID:-1}"
+    export HIGHBAR_TOKEN_PATH="${HIGHBAR_TOKEN_PATH:-/tmp/highbar.token}"
+    if [[ -n "$EXPLICIT_CALLBACK_PROXY_ENDPOINT" ]]; then
+        export HIGHBAR_CALLBACK_PROXY_ENDPOINT="$EXPLICIT_CALLBACK_PROXY_ENDPOINT"
+    else
+        export HIGHBAR_CALLBACK_PROXY_ENDPOINT="unix:$ACTIVE_RUN_DIR/highbar-1.sock"
+    fi
 }
 
 wait_for_gateway_startup() {
@@ -336,11 +431,8 @@ PY
 }
 
 launch_live_topology() {
-    export HIGHBAR_WRITE_DIR="$WRITE_DIR"
-    export HIGHBAR_ENGINE_RELEASE="recoil_2025.06.19"
-    export HIGHBAR_COORDINATOR_OWNER_SKIRMISH_AI_ID="${HIGHBAR_COORDINATOR_OWNER_SKIRMISH_AI_ID:-1}"
-    export HIGHBAR_TOKEN_PATH="${HIGHBAR_TOKEN_PATH:-/tmp/highbar.token}"
-    export HIGHBAR_CALLBACK_PROXY_ENDPOINT="${HIGHBAR_CALLBACK_PROXY_ENDPOINT:-unix:$ACTIVE_RUN_DIR/highbar-1.sock}"
+    configure_live_attempt_env
+    disable_autoquit_for_attempt
     if ! highbar_start_coordinator "$EXAMPLES_DIR" "$ACTIVE_RUN_DIR" "bcov" "$COORD_LOG"; then
         echo "itertesting: coordinator failed to bind on unix or tcp — skip" >&2
         cat "$COORD_LOG" >&2
@@ -438,52 +530,59 @@ run_live_campaign() {
 cleanup() {
     stop_live_topology
 }
-trap cleanup EXIT
 
-if [[ "$SKIP_LIVE" == "true" ]]; then
-    ARGS=(
-        itertesting
-        --reports-dir "$REPORTS_DIR"
-        --retry-intensity "$RETRY_INTENSITY"
-        --runtime-target-minutes "$RUNTIME_TARGET_MINUTES"
-        --threshold "$THRESHOLD"
-        --gameseed "$GAMESEED"
-        --cheat-startscript "$CHEAT_STARTSCRIPT"
-        --skip-live
-    )
-    if [[ -n "$MAX_RUNS" ]]; then
-        ARGS+=(--max-improvement-runs "$MAX_RUNS")
+main() {
+    trap cleanup EXIT
+
+    if [[ "$SKIP_LIVE" == "true" ]]; then
+        ARGS=(
+            itertesting
+            --reports-dir "$REPORTS_DIR"
+            --retry-intensity "$RETRY_INTENSITY"
+            --runtime-target-minutes "$RUNTIME_TARGET_MINUTES"
+            --threshold "$THRESHOLD"
+            --gameseed "$GAMESEED"
+            --cheat-startscript "$CHEAT_STARTSCRIPT"
+            --skip-live
+        )
+        if [[ -n "$MAX_RUNS" ]]; then
+            ARGS+=(--max-improvement-runs "$MAX_RUNS")
+        fi
+
+        if [[ "${HIGHBAR_ITERTESTING_ALLOW_CHEAT_ESCALATION:-false}" == "true" ]]; then
+            ARGS+=(--allow-cheat-escalation)
+        fi
+
+        echo "itertesting: invoking synthetic campaign: ${ARGS[*]}"
+        uv run --project "$REPO_ROOT/clients/python" python -m highbar_client.behavioral_coverage "${ARGS[@]}" "$@"
+        rc=$?
+        emit_contract_health_notice "$(latest_run_manifest_path)" || true
+        emit_fixture_provisioning_notice "$(latest_run_manifest_path)" || true
+        return $rc
     fi
 
-    if [[ "${HIGHBAR_ITERTESTING_ALLOW_CHEAT_ESCALATION:-false}" == "true" ]]; then
-        ARGS+=(--allow-cheat-escalation)
-    fi
+    attempt=1
+    total_attempts=$((LIVE_RETRIES + 1))
+    while [[ $attempt -le $total_attempts ]]; do
+        prepare_attempt_dir "$attempt"
+        launch_live_topology
+        launch_rc=$?
+        if [[ $launch_rc -ne 0 ]]; then
+            return $launch_rc
+        fi
 
-    echo "itertesting: invoking synthetic campaign: ${ARGS[*]}"
-    uv run --project "$REPO_ROOT/clients/python" python -m highbar_client.behavioral_coverage "${ARGS[@]}" "$@"
-    rc=$?
-    emit_contract_health_notice "$(latest_run_manifest_path)" || true
-    emit_fixture_provisioning_notice "$(latest_run_manifest_path)" || true
-    exit $rc
+        run_live_campaign "$attempt"
+        campaign_rc=$?
+        if [[ $campaign_rc -eq 86 && $attempt -lt $total_attempts ]]; then
+            echo "itertesting: retrying live run with a clean coordinator/engine session" >&2
+            stop_live_topology
+            attempt=$((attempt + 1))
+            continue
+        fi
+        return $campaign_rc
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
 fi
-
-attempt=1
-total_attempts=$((LIVE_RETRIES + 1))
-while [[ $attempt -le $total_attempts ]]; do
-    prepare_attempt_dir "$attempt"
-    launch_live_topology
-    launch_rc=$?
-    if [[ $launch_rc -ne 0 ]]; then
-        exit $launch_rc
-    fi
-
-    run_live_campaign "$attempt"
-    campaign_rc=$?
-    if [[ $campaign_rc -eq 86 && $attempt -lt $total_attempts ]]; then
-        echo "itertesting: retrying live run with a clean coordinator/engine session" >&2
-        stop_live_topology
-        attempt=$((attempt + 1))
-        continue
-    fi
-    exit $campaign_rc
-done

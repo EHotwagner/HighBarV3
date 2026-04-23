@@ -1143,6 +1143,35 @@ def _can_skip_bootstrap_step_failure(
     return False
 
 
+def _prepared_state_can_skip_bootstrap_step(
+    step: Any,
+    ctx: BootstrapContext,
+) -> bool:
+    capability = getattr(step, "capability", "")
+    if capability == "radar":
+        return True
+    if capability == "factory_ground":
+        return bool(
+            ctx.capability_units.get("builder")
+            or ctx.fixture_unit_ids.get("builder")
+        )
+    if capability == "factory_air":
+        return bool(
+            ctx.capability_units.get("cloakable")
+            or ctx.fixture_unit_ids.get("cloakable")
+        )
+    if capability in {"mex", "solar"}:
+        return bool(
+            ctx.capability_units.get("factory_ground")
+            or ctx.capability_units.get("factory_air")
+            or ctx.capability_units.get("builder")
+            or ctx.capability_units.get("cloakable")
+            or ctx.fixture_unit_ids.get("builder")
+            or ctx.fixture_unit_ids.get("cloakable")
+        )
+    return False
+
+
 def _wait_for_manifest_match(
     shared: dict,
     ctx: BootstrapContext,
@@ -1520,18 +1549,12 @@ def _assess_bootstrap_readiness(
         iter(missing_steps),
         None,
     )
-    first_required_step = next(
-        (
-            step
-            for step in missing_steps
-            if not _can_skip_bootstrap_step_failure(
-                step,
-                RuntimeError("timeout waiting for new ready unit def_id=0 saw_new_candidate=0"),
-                ctx,
-            )
-        ),
-        None,
-    )
+    required_missing_steps = [
+        step
+        for step in missing_steps
+        if not _prepared_state_can_skip_bootstrap_step(step, ctx)
+    ]
+    first_required_step = next(iter(required_missing_steps), None)
     economy_summary = _economy_debug_string(starting_snapshot)
     if first_missing_step is None:
         return (

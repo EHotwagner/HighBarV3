@@ -120,6 +120,112 @@ assert_wrapper_semantic_inventory() {
     fi
 }
 
+assert_callback_proxy_endpoint_rebinds_per_attempt() {
+    local expected_run_dir="${HIGHBAR_RUN_DIR:-/tmp/hb-run-itertesting}"
+    mapfile -t rebound_endpoints < <(
+        env WRAPPER_PATH="$WRAPPER" bash -lc '
+            set -euo pipefail
+            source "$WRAPPER_PATH"
+            prepare_attempt_dir 1
+            configure_live_attempt_env
+            printf "%s\n" "$HIGHBAR_CALLBACK_PROXY_ENDPOINT"
+            prepare_attempt_dir 2
+            configure_live_attempt_env
+            printf "%s\n" "$HIGHBAR_CALLBACK_PROXY_ENDPOINT"
+        '
+    )
+    if [[ "${rebound_endpoints[0]:-}" != "unix:$expected_run_dir/attempt-1/highbar-1.sock" ]]; then
+        echo "test_itertesting_campaign: attempt 1 callback proxy endpoint did not bind to its run dir" >&2
+        exit 1
+    fi
+    if [[ "${rebound_endpoints[1]:-}" != "unix:$expected_run_dir/attempt-2/highbar-1.sock" ]]; then
+        echo "test_itertesting_campaign: attempt 2 callback proxy endpoint reused stale state" >&2
+        exit 1
+    fi
+
+    mapfile -t overridden_endpoints < <(
+        env WRAPPER_PATH="$WRAPPER" HIGHBAR_CALLBACK_PROXY_ENDPOINT="unix:/tmp/highbar-custom.sock" bash -lc '
+            set -euo pipefail
+            source "$WRAPPER_PATH"
+            prepare_attempt_dir 1
+            configure_live_attempt_env
+            printf "%s\n" "$HIGHBAR_CALLBACK_PROXY_ENDPOINT"
+            prepare_attempt_dir 2
+            configure_live_attempt_env
+            printf "%s\n" "$HIGHBAR_CALLBACK_PROXY_ENDPOINT"
+        '
+    )
+    if [[ "${overridden_endpoints[0]:-}" != "unix:/tmp/highbar-custom.sock" || "${overridden_endpoints[1]:-}" != "unix:/tmp/highbar-custom.sock" ]]; then
+        echo "test_itertesting_campaign: explicit callback proxy override was not preserved" >&2
+        exit 1
+    fi
+}
+
+assert_autoquit_config_is_temporarily_disabled() {
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$tmpdir"' RETURN
+    mkdir -p "$tmpdir/LuaUI/Config" "$tmpdir/engine/recoil_2025.06.19/LuaUI/Config" "$tmpdir/run/attempt-1"
+    cat > "$tmpdir/LuaUI/Config/BYAR.lua" <<'EOF'
+return {
+  data = {
+    Autoquit = 43,
+  },
+  order = {
+    Autoquit = 82,
+    Awards = 31,
+  }
+}
+EOF
+    cat > "$tmpdir/engine/recoil_2025.06.19/LuaUI/Config/BYAR.lua" <<'EOF'
+return {
+  data = {
+    Autoquit = 12,
+  },
+  order = {
+    Autoquit = 43,
+    Awards = 31,
+  }
+}
+EOF
+    env WRAPPER_PATH="$WRAPPER" TEST_WRITE_DIR="$tmpdir" TEST_ACTIVE_RUN_DIR="$tmpdir/run/attempt-1" bash -lc '
+        set -euo pipefail
+        source "$WRAPPER_PATH"
+        WRITE_DIR="$TEST_WRITE_DIR"
+        ACTIVE_RUN_DIR="$TEST_ACTIVE_RUN_DIR"
+        disable_autoquit_for_attempt
+        python3 - "$WRITE_DIR/LuaUI/Config/BYAR.lua" "$WRITE_DIR/engine/recoil_2025.06.19/LuaUI/Config/BYAR.lua" <<'"'"'PY'"'"'
+from pathlib import Path
+import sys
+user_text = Path(sys.argv[1]).read_text(encoding="utf-8")
+engine_text = Path(sys.argv[2]).read_text(encoding="utf-8")
+assert "order = {" in user_text
+assert "order = {" in engine_text
+assert "Autoquit = 0," in user_text
+assert "Autoquit = 0," in engine_text
+assert "Awards = 31," in user_text
+assert "Awards = 31," in engine_text
+assert "data = {\n    Autoquit = 43," in user_text
+assert "data = {\n    Autoquit = 12," in engine_text
+PY
+        restore_autoquit_config
+        python3 - "$WRITE_DIR/LuaUI/Config/BYAR.lua" "$WRITE_DIR/engine/recoil_2025.06.19/LuaUI/Config/BYAR.lua" <<'"'"'PY'"'"'
+from pathlib import Path
+import sys
+user_text = Path(sys.argv[1]).read_text(encoding="utf-8")
+engine_text = Path(sys.argv[2]).read_text(encoding="utf-8")
+assert "Autoquit = 82," in user_text
+assert "Autoquit = 43," in engine_text
+assert "Awards = 31," in user_text
+assert "Awards = 31," in engine_text
+assert "data = {\n    Autoquit = 43," in user_text
+assert "data = {\n    Autoquit = 12," in engine_text
+PY
+    '
+    trap - RETURN
+    rm -rf "$tmpdir"
+}
+
 assert_semantic_gate_bundle() {
     local reports_dir="$1"
     uv run --project "$REPO_ROOT/clients/python" python - "$reports_dir" <<'PY'
@@ -230,6 +336,8 @@ assert_fixture_bundle_shape "$QUICK_DIR"
 assert_fixture_bundle_shape "$STANDARD_DIR"
 assert_fixture_bundle_shape "$DEEP_DIR"
 assert_wrapper_semantic_inventory "$QUICK_DIR"
+assert_callback_proxy_endpoint_rebinds_per_attempt
+assert_autoquit_config_is_temporarily_disabled
 assert_semantic_gate_bundle "$QUICK_DIR"
 
 # Scenario 3 (US3): back-to-back campaigns should reuse and revise instruction files.
