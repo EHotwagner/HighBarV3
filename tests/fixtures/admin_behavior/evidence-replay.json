@@ -1,0 +1,107 @@
+{
+  "pause_match": {
+    "result_status": "ADMIN_ACTION_EXECUTED",
+    "evidence_source": "state_stream",
+    "before": {"frame": 100, "speed": 1.0},
+    "after": {"frame": 100, "speed": 1.0}
+  },
+  "resume_match": {
+    "result_status": "ADMIN_ACTION_EXECUTED",
+    "evidence_source": "state_stream",
+    "before": {"frame": 100, "speed": 1.0},
+    "after": {"frame": 130, "speed": 1.0}
+  },
+  "set_speed_fast": {
+    "result_status": "ADMIN_ACTION_EXECUTED",
+    "evidence_source": "snapshot_delta",
+    "before": {"frame": 100, "speed": 1.0},
+    "after": {"frame": 130, "speed": 2.0}
+  },
+  "grant_resource": {
+    "result_status": "ADMIN_ACTION_EXECUTED",
+    "evidence_source": "snapshot_delta",
+    "before": {"resources": [{"team_id": 0, "resource_id": 0, "amount": 50.0}]},
+    "after": {"resources": [{"team_id": 0, "resource_id": 0, "amount": 150.0}]}
+  },
+  "spawn_enemy_unit": {
+    "result_status": "ADMIN_ACTION_EXECUTED",
+    "evidence_source": "snapshot_delta",
+    "before": {
+      "units": [
+        {"unit_id": 1, "team_id": 0, "unit_def_id": 1, "position": [0.0, 0.0, 0.0]}
+      ]
+    },
+    "after": {
+      "units": [
+        {"unit_id": 1, "team_id": 0, "unit_def_id": 1, "position": [0.0, 0.0, 0.0]},
+        {"unit_id": 2, "team_id": 1, "unit_def_id": 1, "position": [1024.0, 0.0, 1024.0]}
+      ]
+    }
+  },
+  "transfer_unit": {
+    "result_status": "ADMIN_ACTION_EXECUTED",
+    "evidence_source": "snapshot_delta",
+    "before": {
+      "units": [
+        {"unit_id": 1, "team_id": 0, "unit_def_id": 1, "position": [0.0, 0.0, 0.0]}
+      ]
+    },
+    "after": {
+      "units": [
+        {"unit_id": 1, "team_id": 1, "unit_def_id": 1, "position": [0.0, 0.0, 0.0]}
+      ]
+    }
+  },
+  "reject_unauthorized": {
+    "result_status": "ADMIN_ACTION_REJECTED_PERMISSION_DENIED",
+    "evidence_source": "snapshot_delta",
+    "before": {"frame": 200, "speed": 1.0},
+    "after": {"frame": 200, "speed": 1.0}
+  },
+  "reject_invalid_speed": {
+    "result_status": "ADMIN_ACTION_REJECTED_INVALID_VALUE",
+    "evidence_source": "snapshot_delta",
+    "before": {"speed": 1.0},
+    "after": {"speed": 1.0}
+  },
+  "reject_invalid_resource": {
+    "result_status": "ADMIN_ACTION_REJECTED_INVALID_TARGET",
+    "evidence_source": "snapshot_delta",
+    "before": {"resources": [{"team_id": 0, "resource_id": 0, "amount": 50.0}]},
+    "after": {"resources": [{"team_id": 0, "resource_id": 0, "amount": 50.0}]}
+  },
+  "reject_invalid_spawn": {
+    "result_status": "ADMIN_ACTION_REJECTED_INVALID_TARGET",
+    "evidence_source": "snapshot_delta",
+    "before": {
+      "units": [
+        {"unit_id": 1, "team_id": 0, "unit_def_id": 1, "position": [0.0, 0.0, 0.0]}
+      ]
+    },
+    "after": {
+      "units": [
+        {"unit_id": 1, "team_id": 0, "unit_def_id": 1, "position": [0.0, 0.0, 0.0]}
+      ]
+    }
+  },
+  "reject_invalid_transfer": {
+    "result_status": "ADMIN_ACTION_REJECTED_INVALID_TARGET",
+    "evidence_source": "snapshot_delta",
+    "before": {
+      "units": [
+        {"unit_id": 1, "team_id": 0, "unit_def_id": 1, "position": [0.0, 0.0, 0.0]}
+      ]
+    },
+    "after": {
+      "units": [
+        {"unit_id": 1, "team_id": 0, "unit_def_id": 1, "position": [0.0, 0.0, 0.0]}
+      ]
+    }
+  },
+  "reject_lease_conflict": {
+    "result_status": "ADMIN_ACTION_REJECTED_CONFLICT",
+    "evidence_source": "snapshot_delta",
+    "before": {"frame": 300, "speed": 1.0, "leases": {"pause": "admin-suite"}},
+    "after": {"frame": 300, "speed": 1.0, "leases": {"pause": "admin-suite"}}
+  }
+}

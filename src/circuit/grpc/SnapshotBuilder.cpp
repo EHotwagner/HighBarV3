@@ -74,6 +74,7 @@ void SnapshotBuilder::FillOwnUnits(::highbar::v1::StateSnapshot* out) const {
 		if (unit == nullptr) continue;
 		auto* ou = out->add_own_units();
 		ou->set_unit_id(static_cast<std::uint32_t>(unit_id));
+		ou->set_team_id(ai_->GetTeamId());
 		const auto* cdef = unit->GetCircuitDef();
 		ou->set_def_id(cdef != nullptr
 		               ? static_cast<std::uint32_t>(cdef->GetId()) : 0);
@@ -114,6 +115,7 @@ void SnapshotBuilder::FillEnemies(::highbar::v1::StateSnapshot* out) const {
 		if (eu->IsInLOS()) {
 			auto* out_e = out->add_visible_enemies();
 			out_e->set_unit_id(static_cast<std::uint32_t>(enemy_id));
+			out_e->set_team_id(-1);
 			out_e->set_def_id(cdef != nullptr
 			                  ? static_cast<std::uint32_t>(cdef->GetId()) : 0);
 			SetVec3(out_e->mutable_position(), eu->GetPos());

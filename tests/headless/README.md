@@ -1,12 +1,31 @@
 # Headless Workflow Notes
 
+`tests/headless/admin-behavioral-control.sh` is the maintainer entrypoint
+for comprehensive admin channel behavior. It uses
+`tests/headless/scripts/admin-behavior.startscript`, validates local runtime
+prerequisites, launches the fixture when available, and writes:
+
+- `build/reports/admin-behavior/run-report.md`
+- `build/reports/admin-behavior/evidence.jsonl`
+- `build/reports/admin-behavior/summary.csv`
+- `build/reports/admin-behavior/logs/`
+
+Exit codes are `0` for pass, `1` for behavioral evidence failures, `2` for
+harness/report errors, and `77` for missing local BAR/Spring prerequisites.
+Repeatability runs pass `--repeat-index 1`, `2`, and `3`; each run restores
+pause, speed, and lease state before exit where possible.
+
+`--skip-launch` is fail-closed unless paired with
+`--evidence-replay tests/fixtures/admin_behavior/evidence-replay.json`. Replay
+mode validates the evaluator with explicit before/after behavioral state; it
+does not replace the live fixture run.
+
 `tests/headless/itertesting.sh` is the maintainer entrypoint for the Itertesting CLI from the repo root.
 The live wrappers prefer a Unix-socket coordinator endpoint and fall back to
 loopback TCP when the local gRPC runtime cannot bind `unix:` endpoints.
-The live Itertesting wrapper now defaults to `enable_builtin=false` so prepared
-closeout bootstrap runs against the external control path instead of a BARb
-economy that has already been consumed by the built-in planner. Override with
-`HIGHBAR_ITERTESTING_ENABLE_BUILTIN=true` if you explicitly want the mixed mode.
+The live Itertesting wrapper runs with BARb/Circuit built-in behavior disabled.
+HighBarV3 is an external-control proxy: older `enable_builtin=true` settings are
+ignored by the plugin and cannot re-enable the built-in planner.
 
 The command-contract completion suite also depends on the standard
 build-root CTest entrypoints:

@@ -10,6 +10,8 @@ from highbar_client.live_topology import (
     TopologyOptions,
     TopologyPrerequisiteError,
     _ResolvedOptions,
+    adminbehaviornullbnv,
+    inject_autohost_startscript,
     render_host_startscript,
     render_viewer_startscript,
     turtlevsnull,
@@ -49,6 +51,14 @@ def test_turtlevsnull_preset_is_saved_topology_object():
     assert Path(turtlevsnull.run_dir).name == "hb-run-turtlevsnull"
 
 
+def test_adminbehaviornullbnv_preset_runs_admin_suite_without_python_ai():
+    assert adminbehaviornullbnv.ai_plugin is None
+    assert adminbehaviornullbnv.admin_behavior is True
+    assert adminbehaviornullbnv.autohost_relay is True
+    assert adminbehaviornullbnv.gateway_skirmish_ai_id == 0
+    assert adminbehaviornullbnv.attach_bnv is True
+
+
 def test_render_host_startscript_rewrites_port_speed_and_ai_names():
     options = replace(
         turtlevsnull,
@@ -71,6 +81,25 @@ def test_render_host_startscript_rewrites_port_speed_and_ai_names():
     assert "ShortName=highBar;" in rendered
 
 
+def test_render_host_startscript_can_inject_autohost_relay():
+    options = replace(turtlevsnull, host_port=18470)
+
+    rendered = render_host_startscript(MINIMAL_STARTSCRIPT, options, autohost_port=45454)
+
+    assert "HostPort=18470;" in rendered
+    assert "AutohostIP=127.0.0.1;" in rendered
+    assert "AutohostPort=45454;" in rendered
+
+
+def test_inject_autohost_startscript_rewrites_existing_port():
+    text = "HostPort=1;\nAutohostIP=10.0.0.1;\nAutohostPort=2;\n"
+
+    rendered = inject_autohost_startscript(text, 33333)
+
+    assert "AutohostIP=127.0.0.1;" in rendered
+    assert "AutohostPort=33333;" in rendered
+
+
 def test_render_host_startscript_requires_expected_speed_keys():
     options = TopologyOptions(name="broken", run_dir="/tmp/broken")
 
@@ -79,11 +108,11 @@ def test_render_host_startscript_requires_expected_speed_keys():
 
 
 def test_render_viewer_startscript_joins_host_port():
-    rendered = render_viewer_startscript("127.0.0.1", 18470)
+    rendered = render_viewer_startscript("127.0.0.1", 18470, "DemoViewer")
 
     assert "HostIP=127.0.0.1;" in rendered
     assert "HostPort=18470;" in rendered
-    assert "MyPlayerName=HighBarV3BNV;" in rendered
+    assert "MyPlayerName=DemoViewer;" in rendered
     assert "IsHost=0;" in rendered
 
 

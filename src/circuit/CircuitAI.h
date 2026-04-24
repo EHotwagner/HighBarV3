@@ -142,8 +142,8 @@ public:
 // >>> Units ---- BEGIN
 public:
 	using Units = std::map<ICoreUnit::Id, CCircuitUnit*>;
-private:
 	CCircuitUnit* GetOrRegTeamUnit(ICoreUnit::Id unitId);
+private:
 	CCircuitUnit* RegisterTeamUnit(ICoreUnit::Id unitId);
 	CCircuitUnit* RegisterTeamUnit(ICoreUnit::Id unitId, springai::Unit* u);
 	void UnregisterTeamUnit(CCircuitUnit* unit);
@@ -198,9 +198,9 @@ public:
 	bool IsAllyAware() const { return isAllyAware; }  // mark ally buildings, check taken mexes
 	bool IsCommMerge() const { return isCommMerge; }
 	bool IsAllyBaseAvoid() const { return isAllyBaseAvoid; }  // avoid building in allied bases
-	// HighBarV3 T079/T080 (US3 / FR-016, FR-017). When false, the gateway
-	// still binds but CircuitAI does not register its built-in decision
-	// modules — the external client is the sole decision authority.
+	// HighBarV3 external proxy mode. The gateway still binds, but CircuitAI
+	// does not register BARb's built-in decision modules; the external client
+	// is the sole decision authority.
 	bool IsBuiltinEnabled() const { return enableBuiltin; }
 private:
 	std::string InitOptions();
@@ -208,7 +208,7 @@ private:
 	bool isAllyAware;
 	bool isCommMerge;
 	bool isAllyBaseAvoid;
-	bool enableBuiltin = true;  // HighBarV3 — default Phase 1 semantics
+	bool enableBuiltin = false;
 // <<< AIOptions.lua ---- END
 
 // >>> UnitDefs ---- BEGIN

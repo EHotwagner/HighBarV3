@@ -33,6 +33,12 @@
 
 [Gates determined based on constitution file]
 
+Plans involving Python-driven live, headless, topology, or BNV runs MUST
+explicitly state whether they use
+`highbar_client.live_topology.run_topology(TopologyOptions)`. Any direct
+Python launch wiring or `_launch.sh` usage for a Python-owned topology
+MUST be listed as a Principle VI exception in Complexity Tracking.
+
 ## Project Structure
 
 ### Documentation (this feature)

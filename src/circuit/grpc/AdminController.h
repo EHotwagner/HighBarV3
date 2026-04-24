@@ -24,7 +24,19 @@ public:
 	struct Settings {
 		bool enabled = true;
 		bool cheats_allowed = false;
+		bool unit_transfer_enabled = true;
+		bool headless_fixture = false;
 		std::uint32_t lease_ttl_frames = 90;
+		float min_speed = 0.1f;
+		float max_speed = 10.0f;
+		float map_min_x = 0.0f;
+		float map_min_z = 0.0f;
+		float map_max_x = 0.0f;
+		float map_max_z = 0.0f;
+		std::vector<int> valid_team_ids;
+		std::vector<int> valid_resource_ids;
+		std::vector<int> valid_unit_def_ids;
+		std::unordered_map<int, int> live_unit_owners;
 	};
 
 	AdminController();
@@ -51,6 +63,12 @@ public:
 
 private:
 	bool RoleCanExecute(::highbar::v1::AdminRole role) const;
+	bool HasFixtureTeams() const;
+	bool HasMapExtents() const;
+	bool IsValidTeam(int team_id) const;
+	bool IsValidResource(int resource_id) const;
+	bool IsValidUnitDef(int unit_def_id) const;
+	bool IsWithinMap(const ::highbar::v1::Vector3& position) const;
 	std::string ControlName(const ::highbar::v1::AdminAction& action) const;
 	::highbar::v1::AdminActionResult Reject(
 		const ::highbar::v1::AdminAction& action,

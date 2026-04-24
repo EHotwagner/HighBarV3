@@ -95,6 +95,7 @@ message OwnUnit {
   float  max_health         = 5;
   bool   under_construction = 6;
   float  build_progress     = 7;
+  int32  team_id            = 8;
 }
 
 message EnemyUnit {
@@ -104,6 +105,7 @@ message EnemyUnit {
   float  health      = 4;
   float  max_health  = 5;
   LosQuality los_quality = 6;
+  int32 team_id      = 7;
 }
 
 message RadarBlip {

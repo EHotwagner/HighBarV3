@@ -284,6 +284,8 @@ enum AdminIssueCode {
   ADMIN_INVALID_TEAM = 12;
   ADMIN_ENGINE_NOT_READY = 13;
   ADMIN_ISSUE_ACTION_NOT_DISPATCHED = 14;
+  ADMIN_UNKNOWN_UNIT = 15;
+  ADMIN_UNIT_OWNER_MISMATCH = 16;
 }
 
 message AdminIssue {
@@ -318,6 +320,13 @@ message UnitSpawnAction {
   int32 facing = 4;
 }
 
+message UnitTransferAction {
+  int32 unit_id = 1;
+  int32 from_team_id = 2;
+  int32 to_team_id = 3;
+  bool preserve_orders = 4;
+}
+
 message LifecycleAction {
   string command = 1;
 }
@@ -337,6 +346,7 @@ message AdminAction {
     ResourceGrantAction resource_grant = 13;
     UnitSpawnAction unit_spawn = 14;
     LifecycleAction lifecycle = 15;
+    UnitTransferAction unit_transfer = 16;
   }
 }
 
@@ -370,6 +380,15 @@ message AdminCapabilitiesResponse {
   repeated AdminRole roles = 2;
   repeated string supported_actions = 3;
   repeated string feature_flags = 4;
+  repeated int32 valid_team_ids = 5;
+  repeated int32 valid_resource_ids = 6;
+  repeated int32 valid_unit_def_ids = 7;
+  float min_speed = 8;
+  float max_speed = 9;
+  MapLimits map_limits = 10;
+  bool cheats_allowed = 11;
+  bool unit_transfer_enabled = 12;
+  bool headless_fixture = 13;
 }
 
 // ---------------------------------------------------------------------------

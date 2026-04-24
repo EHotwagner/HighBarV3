@@ -30,17 +30,31 @@
 #include "unit/enemy/EnemyInfo.h"
 #include "util/FileSystem.h"
 
+#include "AIFloat3.h"
+#include <Cheats.h>
+#include <Economy.h>
+#include <Game.h>
+#include <Lua.h>
+#include <Resource.h>
+#include <Unit.h>
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <cerrno>
 #include <exception>
 #include <memory>
 #include <mutex>
 #include <future>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace circuit {
@@ -67,6 +81,57 @@ void AppendCoordinatorTrace(const std::string& message) {
 	             static_cast<long long>(micros),
 	             message.c_str());
 	std::fclose(f);
+}
+
+std::string GlobalSpeedLuaMessage(float speed) {
+	std::ostringstream out;
+	out << "highbar_admin_speed:" << speed;
+	return out.str();
+}
+
+std::vector<std::string> GlobalSpeedAutohostCommands(float speed) {
+	std::ostringstream value;
+	value << speed;
+	const std::string s = value.str();
+	return {
+		"/setmaxspeed " + s,
+		"/setminspeed " + s,
+		"/setmaxspeed " + s,
+	};
+}
+
+bool SendAutohostCommandDatagrams(const std::vector<std::string>& commands) {
+	const char* port_env = std::getenv("HIGHBAR_AUTOHOST_PORT");
+	if (port_env == nullptr || port_env[0] == '\0') return false;
+
+	char* end = nullptr;
+	errno = 0;
+	const long parsed_port = std::strtol(port_env, &end, 10);
+	if (errno != 0 || end == port_env || *end != '\0'
+	    || parsed_port <= 0 || parsed_port > 65535) {
+		return false;
+	}
+
+	const int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (fd < 0) return false;
+
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(static_cast<uint16_t>(parsed_port));
+	if (::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) != 1) {
+		::close(fd);
+		return false;
+	}
+
+	bool ok = true;
+	for (const auto& command : commands) {
+		const auto sent = ::sendto(fd, command.data(), command.size(), 0,
+		                           reinterpret_cast<const sockaddr*>(&addr),
+		                           sizeof(addr));
+		ok = ok && (sent == static_cast<ssize_t>(command.size()));
+	}
+	::close(fd);
+	return ok;
 }
 
 std::string ResolveTokenPath(CCircuitAI* ai, const std::string& template_path) {
@@ -106,6 +171,10 @@ int CoordinatorOwnerSkirmishAiId() {
 		return std::atoi(configured);
 	}
 	return 0;
+}
+
+springai::AIFloat3 AdminToFloat3(const ::highbar::v1::Vector3& v) {
+	return springai::AIFloat3(v.x(), v.y(), v.z());
 }
 
 const char* CommandKind(const ::highbar::v1::AICommand& cmd) {
@@ -232,6 +301,12 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 		admin_service_->SetClock(
 			[this]() { return this->CurrentFrame(); },
 			[this]() { return this->HeadSeq(); });
+		admin_service_->SetExecutionFn(
+			[this](const grpc::AdminCaller& caller,
+			       const ::highbar::v1::AdminAction& action,
+			       std::chrono::milliseconds timeout) {
+				return this->QueueAdminAction(caller, action, timeout);
+			});
 
 		service_ = std::make_unique<grpc::HighBarService>(
 			ai, counters_.get(), token_.get());
@@ -718,6 +793,7 @@ void CGrpcGatewayModule::OnFrameTick() {
 		if (admin_service_ != nullptr) {
 			admin_service_->ExpireLeases();
 		}
+		DrainAdminActionQueue();
 
 		// T057: drain external-AI commands at the top of the frame so
 		// they land in the engine this tick. Engine-thread only.
@@ -909,6 +985,54 @@ std::uint64_t CGrpcGatewayModule::HeadSeq() const {
 	return ring_ ? ring_->HeadSeq() : 0;
 }
 
+::highbar::v1::AdminActionResult CGrpcGatewayModule::QueueAdminAction(
+		const ::circuit::grpc::AdminCaller& caller,
+		const ::highbar::v1::AdminAction& action,
+		std::chrono::milliseconds timeout) {
+	if (state_.load(std::memory_order_acquire) != GatewayState::Healthy
+	    || admin_controller_ == nullptr) {
+		::highbar::v1::AdminActionResult result;
+		result.set_action_seq(action.action_seq());
+		result.set_client_action_id(action.client_action_id());
+		result.set_status(::highbar::v1::ADMIN_ACTION_NOT_DISPATCHED);
+		result.set_frame(CurrentFrame());
+		result.set_state_seq(HeadSeq());
+		result.set_dry_run(false);
+		auto* issue = result.add_issues();
+		issue->set_code(::highbar::v1::ADMIN_ENGINE_NOT_READY);
+		issue->set_field_path("action");
+		issue->set_detail("gateway engine thread is unavailable");
+		issue->set_retry_hint(::highbar::v1::RETRY_AFTER_NEXT_SNAPSHOT);
+		return result;
+	}
+
+	auto pending = std::make_shared<PendingAdminAction>();
+	pending->caller = caller;
+	pending->action = action;
+	auto future = pending->completion.get_future();
+	{
+		std::lock_guard<std::mutex> lock(pending_admin_actions_mutex_);
+		pending_admin_actions_.push_back(pending);
+	}
+
+	if (future.wait_for(timeout) != std::future_status::ready) {
+		::highbar::v1::AdminActionResult result;
+		result.set_action_seq(action.action_seq());
+		result.set_client_action_id(action.client_action_id());
+		result.set_status(::highbar::v1::ADMIN_ACTION_NOT_DISPATCHED);
+		result.set_frame(CurrentFrame());
+		result.set_state_seq(HeadSeq());
+		result.set_dry_run(false);
+		auto* issue = result.add_issues();
+		issue->set_code(::highbar::v1::ADMIN_ISSUE_ACTION_NOT_DISPATCHED);
+		issue->set_field_path("action");
+		issue->set_detail("timed out waiting for engine-thread admin execution");
+		issue->set_retry_hint(::highbar::v1::RETRY_AFTER_NEXT_SNAPSHOT);
+		return result;
+	}
+	return future.get();
+}
+
 CGrpcGatewayModule::CallbackRpcStatus CGrpcGatewayModule::InvokeCallback(
 	const ::highbar::v1::CallbackRequest& request,
 	::highbar::v1::CallbackResponse* response,
@@ -1024,6 +1148,161 @@ void CGrpcGatewayModule::DrainCallbackQueue() {
 			                              "unknown exception in DrainCallbackQueue");
 		}
 		entry->completion.set_value(std::move(result));
+	}
+}
+
+void CGrpcGatewayModule::DrainAdminActionQueue() {
+	if (admin_controller_ == nullptr) return;
+
+	std::deque<std::shared_ptr<PendingAdminAction>> pending;
+	{
+		std::lock_guard<std::mutex> lock(pending_admin_actions_mutex_);
+		if (pending_admin_actions_.empty()) return;
+		pending.swap(pending_admin_actions_);
+	}
+
+	for (auto& entry : pending) {
+		auto result = admin_controller_->Validate(
+			entry->caller, entry->action, CurrentFrame(), HeadSeq());
+		result.set_dry_run(false);
+		if (result.status() == ::highbar::v1::ADMIN_ACTION_ACCEPTED) {
+			if (ApplyAdminAction(entry->action)) {
+				result = admin_controller_->Execute(
+					entry->caller, entry->action, CurrentFrame(), HeadSeq());
+			} else {
+				result.set_status(::highbar::v1::ADMIN_ACTION_NOT_DISPATCHED);
+				auto* issue = result.add_issues();
+				issue->set_code(::highbar::v1::ADMIN_ISSUE_ACTION_NOT_DISPATCHED);
+				issue->set_field_path("action");
+				issue->set_detail("engine rejected admin action dispatch");
+				issue->set_retry_hint(::highbar::v1::RETRY_AFTER_NEXT_SNAPSHOT);
+			}
+		}
+		entry->completion.set_value(std::move(result));
+	}
+}
+
+bool CGrpcGatewayModule::ApplyAdminAction(
+		const ::highbar::v1::AdminAction& action) {
+	if (circuit == nullptr) return false;
+
+	using A = ::highbar::v1::AdminAction;
+	switch (action.action_case()) {
+	case A::kPause: {
+		auto* game = circuit->GetGame();
+		if (game == nullptr) return false;
+		game->SetPause(action.pause().paused(), "via highbar admin");
+		return true;
+	}
+	case A::kGlobalSpeed:
+		if (SendAutohostCommandDatagrams(
+			    GlobalSpeedAutohostCommands(action.global_speed().speed()))) {
+			return true;
+		}
+		if (auto* lua = circuit->GetLua(); lua != nullptr) {
+			const std::string message =
+				GlobalSpeedLuaMessage(action.global_speed().speed());
+			const int message_size = static_cast<int>(message.size());
+			if (lua->CallUI(message.c_str(), message_size) == "ok") {
+				return true;
+			}
+			return lua->CallRules(message.c_str(), message_size) == "ok";
+		}
+		return false;
+	case A::kCheatPolicy: {
+		auto* cheats = circuit->GetCheats();
+		return cheats != nullptr && cheats->SetEnabled(action.cheat_policy().enabled());
+	}
+	case A::kResourceGrant: {
+		auto* callback = circuit->GetCallback();
+		if (callback == nullptr) return false;
+		const char* name = action.resource_grant().resource_id() == 0
+			? "Metal" : "Energy";
+		auto* resource = callback->GetResourceByName(name);
+		if (resource == nullptr) return false;
+		if (action.resource_grant().team_id() == circuit->GetTeamId()) {
+			auto* cheats = circuit->GetCheats();
+			if (cheats == nullptr) {
+				delete resource;
+				return false;
+			}
+			bool restore_disabled = false;
+			try {
+				const bool was_enabled = cheats->IsEnabled();
+				if (!was_enabled) {
+					if (!cheats->SetEnabled(true)) {
+						delete resource;
+						return false;
+					}
+					restore_disabled = true;
+				}
+				cheats->GiveMeResource(resource, action.resource_grant().amount());
+				if (restore_disabled) (void)cheats->SetEnabled(false);
+			} catch (...) {
+				if (restore_disabled) {
+					try { (void)cheats->SetEnabled(false); } catch (...) {}
+				}
+				delete resource;
+				return false;
+			}
+		} else {
+			auto* economy = callback->GetEconomy();
+			if (economy == nullptr) {
+				delete resource;
+				return false;
+			}
+			economy->SendResource(
+				resource,
+				action.resource_grant().amount(),
+				action.resource_grant().team_id());
+		}
+		delete resource;
+		return true;
+	}
+	case A::kUnitSpawn: {
+		auto* cheats = circuit->GetCheats();
+		if (cheats == nullptr) return false;
+		auto* def = circuit->GetCircuitDefSafe(
+			static_cast<CCircuitDef::Id>(action.unit_spawn().unit_def_id()));
+		if (def == nullptr || def->GetDef() == nullptr) return false;
+		bool restore_disabled = false;
+		try {
+			const bool was_enabled = cheats->IsEnabled();
+			if (!was_enabled) {
+				if (!cheats->SetEnabled(true)) return false;
+				restore_disabled = true;
+			}
+			const int unit_id = cheats->GiveMeUnit(
+				def->GetDef(), AdminToFloat3(action.unit_spawn().position()));
+			if (restore_disabled) (void)cheats->SetEnabled(false);
+			if (unit_id <= 0) return false;
+			if (action.unit_spawn().team_id() != circuit->GetTeamId()) {
+				auto* spawned = circuit->GetOrRegTeamUnit(
+					static_cast<ICoreUnit::Id>(unit_id));
+				if (spawned == nullptr) return false;
+				std::vector<CCircuitUnit*> units{spawned};
+				circuit->GiveUnits(std::move(units), action.unit_spawn().team_id());
+			}
+			return true;
+		} catch (...) {
+			if (restore_disabled) {
+				try { (void)cheats->SetEnabled(false); } catch (...) {}
+			}
+			return false;
+		}
+	}
+	case A::kUnitTransfer: {
+		auto* unit = circuit->GetTeamUnit(
+			static_cast<ICoreUnit::Id>(action.unit_transfer().unit_id()));
+		if (unit == nullptr || unit->IsDead()) return false;
+		std::vector<CCircuitUnit*> units{unit};
+		circuit->GiveUnits(std::move(units), action.unit_transfer().to_team_id());
+		return true;
+	}
+	case A::kLifecycle:
+		return true;
+	default:
+		return false;
 	}
 }
 

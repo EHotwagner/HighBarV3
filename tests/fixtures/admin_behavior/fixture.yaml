@@ -1,0 +1,27 @@
+fixture_id: admin-behavior-local-v1
+teams:
+  operator_team_id: 0
+  enemy_team_id: 1
+resources:
+  metal: 0
+  energy: 1
+unit_defs:
+  commander_hint: 1
+  spawn_unit_hint: 1
+positions:
+  spawn:
+    x: 1024.0
+    y: 0.0
+    z: 1024.0
+  transfer_probe:
+    unit_id: 1
+    from_team_id: 0
+    to_team_id: 1
+tolerances:
+  observation_timeout_seconds: 10
+  position_radius: 128.0
+  speed_multiplier: 0.35
+repeat_reset:
+  resume_play: true
+  restore_speed: 1.0
+  release_admin_leases: true

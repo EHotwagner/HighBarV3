@@ -36,15 +36,16 @@
 #include <string>
 
 #include "highbar/callbacks.pb.h"
+#include "highbar/service.pb.h"
 #include "highbar/state.pb.h"
 #include "grpc/Config.h"
+#include "grpc/AdminController.h"
 #include "grpc/SnapshotTick.h"
 
 namespace circuit::grpc {
 class HighBarService;
 class Counters;
 class AuthToken;
-class AdminController;
 class AdminService;
 class SnapshotBuilder;
 class DeltaBus;
@@ -152,6 +153,11 @@ public:
 		::highbar::v1::CallbackResponse* response,
 		std::chrono::milliseconds timeout,
 		std::string* error_detail);
+
+	::highbar::v1::AdminActionResult QueueAdminAction(
+		const ::circuit::grpc::AdminCaller& caller,
+		const ::highbar::v1::AdminAction& action,
+		std::chrono::milliseconds timeout);
 
 	// T011 — queue a fault transition from any thread. Worker-thread
 	// callers (gRPC handlers, snapshot serializer) use this; the actual
@@ -262,6 +268,8 @@ private:
 	// T057 helper: drain CommandQueue, dispatch each via
 	// CCircuitUnit::Cmd*. Engine-thread only.
 	void DrainCommandQueue();
+	void DrainAdminActionQueue();
+	bool ApplyAdminAction(const ::highbar::v1::AdminAction& action);
 	// Minimal InvokeCallback bridge. Worker threads enqueue callback
 	// requests here; the engine thread resolves them at the top of the
 	// frame before command dispatch.
@@ -300,6 +308,15 @@ private:
 
 	std::mutex pending_callbacks_mutex_;
 	std::deque<std::shared_ptr<PendingCallbackInvocation>> pending_callbacks_;
+
+	struct PendingAdminAction {
+		::circuit::grpc::AdminCaller caller;
+		::highbar::v1::AdminAction action;
+		std::promise<::highbar::v1::AdminActionResult> completion;
+	};
+
+	std::mutex pending_admin_actions_mutex_;
+	std::deque<std::shared_ptr<PendingAdminAction>> pending_admin_actions_;
 };
 
 }  // namespace circuit

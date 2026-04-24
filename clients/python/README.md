@@ -113,6 +113,20 @@ admin metadata (`x-highbar-admin-role` and `x-highbar-client-id`) for
 `GetAdminCapabilities`, `ValidateAdminAction`, and
 `ExecuteAdminAction`.
 
+`highbar_client.admin.unit_transfer_action(...)` builds the additive
+`unit_transfer` admin action for transferring ownership of an existing
+unit. Capability responses advertise `unit_transfer`, speed bounds,
+valid fixture ids, map extents, and run-mode flags when the gateway can
+execute those controls. The admin behavioral suite writes reviewable
+evidence with:
+
+```bash
+tests/headless/admin-behavioral-control.sh \
+  --startscript tests/headless/scripts/admin-behavior.startscript \
+  --output-dir build/reports/admin-behavior \
+  --timeout-seconds 10
+```
+
 See `specs/002-live-headless-e2e/examples/{observer,ai_client}.py`
 for runnable end-to-end demos.
 
@@ -165,8 +179,10 @@ emit enemy-directed move, fight, patrol, or attack commands.
 ## Live topology helper
 
 For local integration runs that need the host, optional BNV viewer, and
-Python AI policy wired together, use `highbar_client.live_topology`
-instead of reconstructing the launch shell each time:
+Python AI policy wired together, the constitution requires
+`highbar_client.live_topology`. Python-driven live/topology runs MUST use
+`run_topology(...)` with a `TopologyOptions` object instead of
+reconstructing the launch shell:
 
 ```python
 from dataclasses import replace
@@ -183,6 +199,19 @@ logs, and `report.md` under the preset's `run_dir`, then cleans up the
 host/viewer processes by default. Override fields with
 `dataclasses.replace(...)` for different ports, run durations, plugin
 artifacts, engine paths, or viewer settings.
+
+For admin-control demos and live behavioral verification, use the saved
+`adminbehaviornullbnv` preset. It launches `highBar` versus `NullAI`,
+attaches BNV during the pregame window, starts the autohost relay needed
+for global speed control, and runs the admin behavioral suite against
+the same host:
+
+```python
+from highbar_client.live_topology import adminbehaviornullbnv, run_topology
+
+result = run_topology(adminbehaviornullbnv)
+print(result.viewer_status, result.admin_behavior_report_path)
+```
 
 Load a custom policy with `module:factory`:
 

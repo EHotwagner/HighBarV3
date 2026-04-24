@@ -244,10 +244,9 @@ total = math.sqrt(dx * dx + dz * dz)
 print(f"[bmove] after=({qx:.1f}, {qy:.1f}, {qz:.1f}) "
       f"dx={dx:.1f} dz={dz:.1f} |d|={total:.1f} (threshold 100)",
       flush=True)
-# Accept total displacement >= 100 — in Phase-1 mode the built-in AI
-# can override our specific +500x target with queued orders, but any
-# net motion proves the engine acted on a MoveUnit rather than
-# ignoring it.
+# Accept total displacement >= 100. Fixture physics and terrain may alter the
+# exact +500x target, but any net motion proves the engine acted on a MoveUnit
+# rather than ignoring it.
 if total < 100.0:
     print(f"[bmove] move not executed: before=({px:.1f},{py:.1f},{pz:.1f}) "
           f"after=({qx:.1f},{qy:.1f},{qz:.1f})", flush=True)

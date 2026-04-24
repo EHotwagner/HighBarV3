@@ -6,13 +6,15 @@ This module wraps the same moving parts the headless shell scripts use:
 * a Spring/Recoil host launched through ``tests/headless/_launch.sh``;
 * an optional graphical BAR/Beyond All Reason viewer, also launched
   through ``_launch.sh`` in viewer-only mode;
-* an external Python AI policy connected to the host's HighBar UDS
-  endpoint as ``ROLE_AI``.
+* an optional external Python AI policy connected to the host's HighBar
+  UDS endpoint as ``ROLE_AI``;
+* optional live admin behavior verification against the same host.
 
 The main entry point is :func:`run_topology`. Pass a
 :class:`TopologyOptions` object to describe the topology. The module
-ships a saved preset named :data:`turtlevsnull` for the common
-``turtle1`` versus ``NullAI`` BNV run:
+ships saved presets for common local runs, including
+:data:`turtlevsnull` for ``turtle1`` versus ``NullAI`` and
+:data:`adminbehaviornullbnv` for the admin-control BNV demo:
 
 .. code-block:: python
 
@@ -35,6 +37,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import time
 from collections.abc import Mapping
@@ -73,6 +76,8 @@ class TopologyOptions:
             loop. ``0`` means no update cap.
         ai_plugin: Built-in policy name or ``module:factory`` plugin
             spec accepted by :func:`highbar_client.ai_plugins.load_ai_plugin`.
+            Set ``None`` for runs driven by a live verification suite
+            instead of a Python AI policy.
         ai_plugin_config: JSON-compatible mapping passed to the plugin
             factory.
         name_addon: Optional suffix for the AI client's ``client_id``.
@@ -80,6 +85,8 @@ class TopologyOptions:
         start_script_template: Host startscript fixture. ``None`` uses
             ``tests/headless/scripts/minimal.startscript`` from the repo.
         host_port: UDP port for the Spring/Recoil host.
+        gateway_skirmish_ai_id: Skirmish AI slot whose HighBar gateway
+            endpoint should be used.
         host_team_ai_name: Human-facing name assigned to the highBar
             proxy team in the generated startscript.
         opponent_ai_name: Human-facing name assigned to the NullAI team
@@ -88,6 +95,12 @@ class TopologyOptions:
             controls patched into the generated startscript.
         attach_bnv: Launch a graphical ``spring`` viewer alongside the
             headless host.
+        viewer_player_name: Player name used in the generated BNV
+            viewer startscript.
+        autohost_relay: Start a loopback autohost relay and add
+            ``AutohostIP``/``AutohostPort`` to the host startscript.
+        admin_behavior: Run the live admin behavioral suite against the
+            topology after the gateway is ready.
         window_width, window_height, window_mode, mouse_capture: Viewer
             window settings passed to ``_launch.sh``.
         spring_headless: Explicit ``spring-headless`` path. ``None`` uses
@@ -104,8 +117,9 @@ class TopologyOptions:
             uses the standard BAR state directory.
         repo_root: Checkout root. ``None`` is discovered from this
             module's path.
-        enable_builtin: Value for ``HIGHBAR_ENABLE_BUILTIN`` and
-            ``_launch.sh --enable-builtin``.
+        enable_builtin: Deprecated compatibility field. Built-in
+            BARb/Circuit behavior is permanently disabled by the proxy, so
+            this field is ignored and launchers always pass ``false``.
         token_wait_ms: Maximum wait for the host token file.
         stream_timeout_seconds: gRPC stream deadline. ``None`` derives a
             deadline from ``duration_seconds``.
@@ -120,17 +134,21 @@ class TopologyOptions:
     run_dir: Path | str
     duration_seconds: float | None = 20.0
     max_updates: int = 0
-    ai_plugin: str = "turtle1"
+    ai_plugin: str | None = "turtle1"
     ai_plugin_config: Mapping[str, Any] | None = None
     name_addon: str | None = None
     start_script_template: Path | str | None = None
     host_port: int = 18470
+    gateway_skirmish_ai_id: int = 1
     host_team_ai_name: str = "turtle1-proxy"
     opponent_ai_name: str = "NullAI"
     min_speed: str = "3"
     max_speed: str = "10"
     game_start_delay: str = "3"
     attach_bnv: bool = True
+    viewer_player_name: str = "HighBarV3BNV"
+    autohost_relay: bool = False
+    admin_behavior: bool = False
     window_width: int = 1280
     window_height: int = 720
     window_mode: str = "windowed"
@@ -158,12 +176,15 @@ class TopologyRunResult:
     host_port: int
     viewer_status: str
     ai_runner_rc: int
+    admin_behavior_rc: int | None
+    admin_behavior_report_path: Path | None
     updates: int
     batches_submitted: int
     uds_path: Path
     token_path: Path
     host_pid: int | None
     viewer_pid: int | None
+    autohost_pid: int | None
 
 
 class TopologyRunError(RuntimeError):
@@ -186,6 +207,29 @@ turtlevsnull = TopologyOptions(
     attach_bnv=True,
 )
 """Saved preset for a ``turtle1`` Python policy against ``NullAI`` with BNV."""
+
+
+adminbehaviornullbnv = TopologyOptions(
+    name="adminbehaviornullbnv",
+    run_dir=Path("/tmp/hb-run-adminbehaviornullbnv"),
+    duration_seconds=None,
+    ai_plugin=None,
+    name_addon=None,
+    start_script_template="tests/headless/scripts/admin-behavior.startscript",
+    host_port=18471,
+    gateway_skirmish_ai_id=0,
+    host_team_ai_name="HighBarV3-admin-team0",
+    opponent_ai_name="HighBarV3-admin-team1",
+    min_speed="1",
+    max_speed="1",
+    game_start_delay="0",
+    attach_bnv=True,
+    viewer_player_name="HighBarV3AdminDemoBNV",
+    autohost_relay=True,
+    admin_behavior=True,
+    require_batches=False,
+)
+"""Saved preset for live admin behavior verification against ``NullAI`` with BNV."""
 
 
 def run_topology(options: TopologyOptions = turtlevsnull) -> TopologyRunResult:
@@ -222,35 +266,50 @@ def run_topology(options: TopologyOptions = turtlevsnull) -> TopologyRunResult:
     host_log = run_dir / "host" / "engine.log"
     viewer_log = run_dir / "viewer" / "viewer.log"
     ai_log = run_dir / "ai.log"
+    admin_log = run_dir / "admin-behavior.log"
+    admin_behavior_dir = run_dir / "admin-behavior"
     report_path = run_dir / "report.md"
-    uds_path = run_dir / "host" / "highbar-1.sock"
+    uds_path = run_dir / "host" / f"highbar-{options.gateway_skirmish_ai_id}.sock"
     host_pid_file = run_dir / "host" / "engine.pid"
     viewer_pid_file = run_dir / "viewer" / "viewer.pid"
+    autohost_log = run_dir / "autohost-relay.log"
 
     host_start.write_text(
         render_host_startscript(
             resolved.start_script_template.read_text(encoding="utf-8"),
             options,
+            autohost_port=resolved.autohost_port,
         ),
         encoding="utf-8",
     )
     viewer_start.write_text(
-        render_viewer_startscript("127.0.0.1", options.host_port),
+        render_viewer_startscript("127.0.0.1", options.host_port, options.viewer_player_name),
         encoding="utf-8",
     )
 
     env = os.environ.copy()
     env["HIGHBAR_TOKEN_PATH"] = str(token_path)
-    env["HIGHBAR_ENABLE_BUILTIN"] = "true" if options.enable_builtin else "false"
+    env["HIGHBAR_ENABLE_BUILTIN"] = "false"
+    if resolved.autohost_port is not None:
+        env["HIGHBAR_AUTOHOST_PORT"] = str(resolved.autohost_port)
 
     host_pid: int | None = None
     viewer_pid: int | None = None
+    autohost_pid: int | None = None
     ai_rc = 1
+    admin_behavior_rc: int | None = None
     updates = 0
     batches = 0
     viewer_status = "disabled" if not options.attach_bnv else "pending"
 
     try:
+        if resolved.autohost_port is not None:
+            autohost_pid = _start_autohost_relay(
+                resolved,
+                port=resolved.autohost_port,
+                log_path=autohost_log,
+            )
+
         _run_launch(
             [
                 str(resolved.launcher),
@@ -265,7 +324,7 @@ def run_topology(options: TopologyOptions = turtlevsnull) -> TopologyRunResult:
                 "--pid-file",
                 str(host_pid_file),
                 "--enable-builtin",
-                "true" if options.enable_builtin else "false",
+                "false",
                 *(
                     ["--plugin-so", str(resolved.plugin_so)]
                     if resolved.plugin_so is not None
@@ -319,11 +378,25 @@ def run_topology(options: TopologyOptions = turtlevsnull) -> TopologyRunResult:
         _wait_for_path(token_path, host_pid, "token file not found")
 
         ai_lines: list[str] = []
-        try:
-            updates, batches = _run_ai_policy(resolved, token_path, uds_path, ai_lines)
+        if options.ai_plugin is not None:
+            try:
+                updates, batches = _run_ai_policy(resolved, token_path, uds_path, ai_lines)
+                ai_rc = 0
+            finally:
+                ai_log.write_text("".join(ai_lines), encoding="utf-8")
+        else:
             ai_rc = 0
-        finally:
-            ai_log.write_text("".join(ai_lines), encoding="utf-8")
+            ai_log.write_text("ai-topology: no Python AI policy configured\n", encoding="utf-8")
+
+        if options.admin_behavior:
+            admin_behavior_rc = _run_admin_behavior_suite(
+                resolved,
+                endpoint=f"unix:{uds_path}",
+                token_path=token_path,
+                host_log=host_log,
+                output_dir=admin_behavior_dir,
+                log_path=admin_log,
+            )
 
         viewer_status = _viewer_status(viewer_log) if options.attach_bnv else "disabled"
         result = TopologyRunResult(
@@ -333,19 +406,26 @@ def run_topology(options: TopologyOptions = turtlevsnull) -> TopologyRunResult:
             host_port=options.host_port,
             viewer_status=viewer_status,
             ai_runner_rc=ai_rc,
+            admin_behavior_rc=admin_behavior_rc,
+            admin_behavior_report_path=(
+                admin_behavior_dir / "run-report.md" if options.admin_behavior else None
+            ),
             updates=updates,
             batches_submitted=batches,
             uds_path=uds_path,
             token_path=token_path,
             host_pid=host_pid,
             viewer_pid=viewer_pid,
+            autohost_pid=autohost_pid,
         )
-        _write_report(result, host_log, viewer_log, ai_log)
+        _write_report(result, host_log, viewer_log, ai_log, admin_log, autohost_log)
 
         if options.attach_bnv and viewer_status == "pending":
             raise TopologyRunError(f"viewer did not join; see {report_path}")
-        if options.require_batches and batches == 0:
+        if options.ai_plugin is not None and options.require_batches and batches == 0:
             raise TopologyRunError(f"AI submitted zero accepted batches; see {report_path}")
+        if admin_behavior_rc not in (None, 0):
+            raise TopologyRunError(f"admin behavior suite failed; see {report_path}")
         return result
     except subprocess.CalledProcessError as exc:
         if exc.returncode == 77:
@@ -355,9 +435,15 @@ def run_topology(options: TopologyOptions = turtlevsnull) -> TopologyRunResult:
         if options.cleanup:
             _kill_pid(viewer_pid)
             _kill_pid(host_pid)
+            _kill_pid(autohost_pid)
 
 
-def render_host_startscript(template: str, options: TopologyOptions) -> str:
+def render_host_startscript(
+    template: str,
+    options: TopologyOptions,
+    *,
+    autohost_port: int | None = None,
+) -> str:
     """Return a host startscript patched for ``options``.
 
     The fixture keeps the highBar proxy on team 0 and NullAI on team 1.
@@ -383,10 +469,35 @@ def render_host_startscript(template: str, options: TopologyOptions) -> str:
 
     text = text.replace("Name=HighBarV3-team0;", f"Name={options.host_team_ai_name};")
     text = text.replace("Name=HighBarV3-team1;", f"Name={options.opponent_ai_name};")
+    if autohost_port is not None:
+        text = inject_autohost_startscript(text, autohost_port)
     return text
 
 
-def render_viewer_startscript(host: str, port: int) -> str:
+def inject_autohost_startscript(text: str, autohost_port: int) -> str:
+    if "AutohostPort=" in text:
+        text = re.sub(
+            r"(^\s*AutohostIP\s*=)\s*[^;]+;",
+            r"\g<1>127.0.0.1;",
+            text,
+            flags=re.MULTILINE,
+        )
+        return re.sub(
+            r"(^\s*AutohostPort\s*=)\s*[^;]+;",
+            rf"\g<1>{autohost_port};",
+            text,
+            flags=re.MULTILINE,
+        )
+    return re.sub(
+        r"(^\s*HostPort\s*=\s*[^;]+;\n)",
+        rf"\1\tAutohostIP=127.0.0.1;\n\tAutohostPort={autohost_port};\n",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+
+def render_viewer_startscript(host: str, port: int, player_name: str = "HighBarV3BNV") -> str:
     """Return a minimal viewer-only startscript for joining a live host."""
 
     return (
@@ -395,7 +506,7 @@ def render_viewer_startscript(host: str, port: int) -> str:
         f"\tHostIP={host};\n"
         f"\tHostPort={port};\n"
         "\tSourcePort=0;\n"
-        "\tMyPlayerName=HighBarV3BNV;\n"
+        f"\tMyPlayerName={player_name};\n"
         "\tIsHost=0;\n"
         "}\n"
     )
@@ -412,6 +523,7 @@ class _ResolvedOptions:
     spring_graphical: Path
     plugin_so: Path | None
     write_dir: Path
+    autohost_port: int | None
 
     @classmethod
     def from_options(cls, options: TopologyOptions) -> "_ResolvedOptions":
@@ -420,11 +532,12 @@ class _ResolvedOptions:
         if not launcher.is_file():
             raise TopologyPrerequisiteError(f"_launch.sh not found at {launcher}")
 
-        start_script = (
-            Path(options.start_script_template)
-            if options.start_script_template is not None
-            else repo_root / "tests/headless/scripts/minimal.startscript"
-        )
+        if options.start_script_template is not None:
+            start_script = Path(options.start_script_template)
+            if not start_script.is_absolute():
+                start_script = repo_root / start_script
+        else:
+            start_script = repo_root / "tests/headless/scripts/minimal.startscript"
         if not start_script.is_file():
             raise TopologyPrerequisiteError(f"startscript not found at {start_script}")
 
@@ -450,6 +563,7 @@ class _ResolvedOptions:
             spring_graphical=spring_graphical,
             plugin_so=plugin_so,
             write_dir=write_dir,
+            autohost_port=_reserve_udp_port() if options.autohost_relay else None,
         )
 
 
@@ -485,6 +599,79 @@ def _resolve_plugin_so(options: TopologyOptions, repo_root: Path) -> Path | None
     return default if default.is_file() else None
 
 
+def _reserve_udp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _start_autohost_relay(
+    resolved: _ResolvedOptions,
+    *,
+    port: int,
+    log_path: Path,
+) -> int | None:
+    relay = resolved.repo_root / "tests/headless/autohost_relay.py"
+    if not relay.is_file():
+        raise TopologyPrerequisiteError(f"autohost relay not found at {relay}")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(  # noqa: S603 - local test utility path and args are controlled
+        [
+            "python3",
+            str(relay),
+            "--port",
+            str(port),
+            "--log",
+            str(log_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc.pid
+
+
+def _run_admin_behavior_suite(
+    resolved: _ResolvedOptions,
+    *,
+    endpoint: str,
+    token_path: Path,
+    host_log: Path,
+    output_dir: Path,
+    log_path: Path,
+) -> int:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "uv",
+        "run",
+        "--project",
+        str(resolved.repo_root / "clients/python"),
+        "python",
+        "-m",
+        "highbar_client.behavioral_coverage",
+        "admin",
+        "--startscript",
+        str(resolved.start_script_template),
+        "--output-dir",
+        str(output_dir),
+        "--endpoint",
+        endpoint,
+        "--token-file",
+        str(token_path),
+        "--log-location",
+        str(host_log),
+        "--timeout-seconds",
+        str(resolved.options.stream_timeout_seconds or 30.0),
+    ]
+    proc = subprocess.run(
+        command,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    log_path.write_text((proc.stdout or "") + (proc.stderr or ""), encoding="utf-8")
+    return int(proc.returncode)
+
+
 def _run_launch(command: list[str], *, env: Mapping[str, str]) -> None:
     subprocess.run(
         command,
@@ -502,6 +689,8 @@ def _run_ai_policy(
     log_lines: list[str],
 ) -> tuple[int, int]:
     options = resolved.options
+    if options.ai_plugin is None:
+        return (0, 0)
     plugin = load_ai_plugin(
         options.ai_plugin,
         config=dict(options.ai_plugin_config or {}),
@@ -619,6 +808,8 @@ def _write_report(
     host_log: Path,
     viewer_log: Path,
     ai_log: Path,
+    admin_log: Path,
+    autohost_log: Path,
 ) -> None:
     result.report_path.write_text(
         "\n".join(
@@ -631,14 +822,27 @@ def _write_report(
                 f"- viewer_pid: {result.viewer_pid if result.viewer_pid is not None else 'unknown'}",
                 f"- viewer_status: {result.viewer_status}",
                 f"- ai_runner_rc: {result.ai_runner_rc}",
+                f"- admin_behavior_rc: {result.admin_behavior_rc if result.admin_behavior_rc is not None else 'not-run'}",
+                f"- admin_behavior_report: {result.admin_behavior_report_path or 'not-run'}",
                 f"- updates: {result.updates}",
                 f"- batches_submitted: {result.batches_submitted}",
                 f"- uds: {result.uds_path}",
                 f"- token: {result.token_path}",
+                f"- autohost_pid: {result.autohost_pid if result.autohost_pid is not None else 'not-run'}",
                 "",
                 "## AI log tail",
                 "```",
                 _tail(ai_log),
+                "```",
+                "",
+                "## Admin behavior log tail",
+                "```",
+                _tail(admin_log),
+                "```",
+                "",
+                "## Autohost relay signals",
+                "```",
+                _grep_tail(autohost_log, r"relay listening|relay command|drop command"),
                 "```",
                 "",
                 "## Viewer log signals",

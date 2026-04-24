@@ -71,10 +71,10 @@ local options = {
 	},
 	{ -- bool (HighBarV3: gate for built-in decision logic; FR-016, FR-017)
 		key     = 'enable_builtin',
-		name    = 'Enable built-in AI',
-		desc    = 'When true (Phase 1), BARb\'s built-in decision modules run alongside any external gRPC client. When false (Phase 2), the AI slot stays alive but only accepts commands from an external client.',
+		name    = 'Enable built-in AI (disabled)',
+		desc    = 'Compatibility option retained for old startscripts. HighBarV3 always disables BARb/Circuit built-in decision modules; external clients are the sole decision authority.',
 		type    = 'bool',
-		def     = true,
+		def     = false,
 	},
 	{ -- list
 		key     = 'profile',

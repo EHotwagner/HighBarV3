@@ -653,12 +653,11 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	militaryManager = std::make_shared<CMilitaryManager>(this);
 	militaryManager->InitHandlers();
 
-	// HighBarV3 T080 (US3 / FR-016, FR-017): with enable_builtin=false
-	// the external client is the sole decision authority. The managers
-	// themselves are still constructed above because SnapshotBuilder
-	// and the gateway event handlers read from them; we just omit the
-	// built-in decision modules from the update chain so their
-	// Update() hooks never fire.
+	// HighBarV3 external proxy mode: the external client is the sole decision
+	// authority. The managers themselves are still constructed above because
+	// SnapshotBuilder and the gateway event handlers read from them; we omit
+	// the built-in decision modules from the update chain so their Update()
+	// hooks never fire.
 	if (enableBuiltin) {
 		// TODO: Remove EconomyManager from module (move abilities to BuilderManager).
 		modules.push_back(militaryManager);
@@ -1715,13 +1714,12 @@ std::string CCircuitAI::InitOptions()
 		isAllyBaseAvoid = StringToBool(value);
 	}
 
-	// HighBarV3 T079: gate for Phase-2 externalization (FR-016/FR-017).
-	// Default true = Phase-1 co-existence. Setting false in AIOptions.lua
-	// (or via the engine UI) leaves only the gRPC gateway in the modules
-	// vector so an external client is the sole decision authority.
+	// HighBarV3 external proxy mode is permanent. Older startscripts and AI
+	// option files may still carry enable_builtin=true; ignore it so BARb's
+	// built-in Circuit decision modules cannot be re-enabled by configuration.
 	value = options->GetValueByKey("enable_builtin");
-	if (value != nullptr) {
-		enableBuiltin = StringToBool(value);
+	if ((value != nullptr) && StringToBool(value)) {
+		LOG("enable_builtin=true ignored; built-in BARb/Circuit behavior is permanently disabled");
 	}
 
 	if (!gameAttribute->IsInitialized()) {

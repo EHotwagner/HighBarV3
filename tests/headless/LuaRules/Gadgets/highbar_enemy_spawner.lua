@@ -11,13 +11,76 @@ function gadget:GetInfo()
   }
 end
 
-if not gadgetHandler:IsSyncedCode() then
-  return false
-end
-
 local MESSAGE_PREFIX = "highbar_spawn_enemy:"
 local DAMAGE_PREFIX = "highbar_damage_unit:"
+local SPEED_PREFIX = "highbar_admin_speed:"
+local SPEED_SYNC_ACTION = "HighBarAdminSetSpeed"
+
+if not gadgetHandler:IsSyncedCode() then
+  local function handleSetSpeed(_, speed)
+    local value = tonumber(speed)
+    if not value or value <= 0 then
+      return
+    end
+    local text = string.format("%g", value)
+    Spring.SendCommands({
+      "setmaxspeed " .. text,
+      "setminspeed " .. text,
+      "setmaxspeed " .. text,
+    })
+  end
+
+  function gadget:Initialize()
+    gadgetHandler:AddSyncAction(SPEED_SYNC_ACTION, handleSetSpeed)
+  end
+
+  function gadget:Shutdown()
+    gadgetHandler:RemoveSyncAction(SPEED_SYNC_ACTION)
+  end
+
+  return
+end
+
 local spawnedByAiTeam = {}
+local adminFixtureSeeded = false
+
+local function adminFixtureEnabled()
+  local options = Spring.GetModOptions() or {}
+  local value = options.highbar_admin_behavior_fixture
+  return value == true or value == "1" or value == 1
+end
+
+local function teamStartPosition(teamID, fallbackIndex)
+  local x, y, z = Spring.GetTeamStartPosition(teamID)
+  if x and z and x >= 0 and z >= 0 then
+    return x, y or Spring.GetGroundHeight(x, z), z
+  end
+  x = fallbackIndex == 0 and 1536 or 4608
+  z = 4096
+  return x, Spring.GetGroundHeight(x, z), z
+end
+
+local function seedAdminBehaviorFixture()
+  if adminFixtureSeeded or not adminFixtureEnabled() then
+    return
+  end
+  adminFixtureSeeded = true
+
+  local gaiaTeam = Spring.GetGaiaTeamID()
+  for index, teamID in ipairs(Spring.GetTeamList()) do
+    if teamID ~= gaiaTeam then
+      local _, _, _, isDead = Spring.GetTeamInfo(teamID, false)
+      if not isDead and #Spring.GetTeamUnits(teamID) == 0 then
+        local unitName = teamID == 0 and "armcom" or "corcom"
+        local x, y, z = teamStartPosition(teamID, index - 1)
+        local unitID = Spring.CreateUnit(unitName, x, y, z, "south", teamID)
+        if unitID then
+          Spring.GiveOrderToUnit(unitID, CMD.STOP, {}, {})
+        end
+      end
+    end
+  end
+end
 
 local function splitFields(payload)
   local fields = {}
@@ -53,6 +116,15 @@ local function destroyTrackedUnit(aiTeam)
 end
 
 function gadget:RecvSkirmishAIMessage(aiTeam, dataStr)
+  if dataStr:sub(1, #SPEED_PREFIX) == SPEED_PREFIX then
+    local speed = tonumber(dataStr:sub(#SPEED_PREFIX + 1))
+    if not speed or speed <= 0 then
+      return "error:invalid_speed"
+    end
+    SendToUnsynced(SPEED_SYNC_ACTION, speed)
+    return "ok"
+  end
+
   if dataStr:sub(1, #DAMAGE_PREFIX) == DAMAGE_PREFIX then
     local fields = splitFields(dataStr:sub(#DAMAGE_PREFIX + 1))
     local unitID = tonumber(fields[1] or "")
@@ -105,6 +177,16 @@ function gadget:RecvSkirmishAIMessage(aiTeam, dataStr)
   Spring.GiveOrderToUnit(unitID, CMD.STOP, {}, {})
   spawnedByAiTeam[aiTeam] = unitID
   return tostring(unitID)
+end
+
+function gadget:GameStart()
+  seedAdminBehaviorFixture()
+end
+
+function gadget:GameFrame(frame)
+  if frame == 0 then
+    seedAdminBehaviorFixture()
+  end
 end
 
 function gadget:UnitDestroyed(unitID)

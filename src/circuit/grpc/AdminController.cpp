@@ -20,6 +20,49 @@ bool AdminController::RoleCanExecute(::highbar::v1::AdminRole role) const {
 	    || role == ::highbar::v1::ADMIN_ROLE_TEST_HARNESS;
 }
 
+bool AdminController::HasFixtureTeams() const {
+	return !settings_.valid_team_ids.empty();
+}
+
+bool AdminController::HasMapExtents() const {
+	return settings_.map_max_x > settings_.map_min_x
+	    && settings_.map_max_z > settings_.map_min_z;
+}
+
+bool AdminController::IsValidTeam(int team_id) const {
+	if (!HasFixtureTeams()) return team_id >= 0;
+	for (const int valid : settings_.valid_team_ids) {
+		if (valid == team_id) return true;
+	}
+	return false;
+}
+
+bool AdminController::IsValidResource(int resource_id) const {
+	if (settings_.valid_resource_ids.empty()) {
+		return resource_id == 0 || resource_id == 1;
+	}
+	for (const int valid : settings_.valid_resource_ids) {
+		if (valid == resource_id) return true;
+	}
+	return false;
+}
+
+bool AdminController::IsValidUnitDef(int unit_def_id) const {
+	if (settings_.valid_unit_def_ids.empty()) return unit_def_id > 0;
+	for (const int valid : settings_.valid_unit_def_ids) {
+		if (valid == unit_def_id) return true;
+	}
+	return false;
+}
+
+bool AdminController::IsWithinMap(const ::highbar::v1::Vector3& position) const {
+	if (!HasMapExtents()) return true;
+	return position.x() >= settings_.map_min_x
+	    && position.x() <= settings_.map_max_x
+	    && position.z() >= settings_.map_min_z
+	    && position.z() <= settings_.map_max_z;
+}
+
 std::string AdminController::ControlName(
 		const ::highbar::v1::AdminAction& action) const {
 	using A = ::highbar::v1::AdminAction;
@@ -30,6 +73,7 @@ std::string AdminController::ControlName(
 	case A::kResourceGrant: return "resource_grant";
 	case A::kUnitSpawn: return "unit_spawn";
 	case A::kLifecycle: return "lifecycle";
+	case A::kUnitTransfer: return "unit_transfer";
 	default: return "unknown";
 	}
 }
@@ -45,10 +89,34 @@ std::string AdminController::ControlName(
 	response.add_supported_actions("cheat_policy");
 	response.add_supported_actions("resource_grant");
 	response.add_supported_actions("unit_spawn");
+	if (settings_.unit_transfer_enabled) {
+		response.add_supported_actions("unit_transfer");
+	}
 	response.add_supported_actions("lifecycle");
 	response.add_feature_flags("admin_control_service");
 	response.add_feature_flags("admin_leases");
 	response.add_feature_flags("admin_audit_events");
+	response.set_min_speed(settings_.min_speed);
+	response.set_max_speed(settings_.max_speed);
+	response.set_cheats_allowed(settings_.cheats_allowed);
+	response.set_unit_transfer_enabled(settings_.unit_transfer_enabled);
+	response.set_headless_fixture(settings_.headless_fixture);
+	for (const int team_id : settings_.valid_team_ids) {
+		response.add_valid_team_ids(team_id);
+	}
+	for (const int resource_id : settings_.valid_resource_ids) {
+		response.add_valid_resource_ids(resource_id);
+	}
+	for (const int unit_def_id : settings_.valid_unit_def_ids) {
+		response.add_valid_unit_def_ids(unit_def_id);
+	}
+	if (HasMapExtents()) {
+		auto* limits = response.mutable_map_limits();
+		limits->set_min_x(settings_.map_min_x);
+		limits->set_min_z(settings_.map_min_z);
+		limits->set_max_x(settings_.map_max_x);
+		limits->set_max_z(settings_.map_max_z);
+	}
 	return response;
 }
 
@@ -103,15 +171,110 @@ std::string AdminController::ControlName(
 		              "cheat_policy", "run mode forbids cheat controls",
 		              frame, state_seq, true);
 	}
+	if (action.action_case() == ::highbar::v1::AdminAction::kUnitTransfer
+	    && !settings_.unit_transfer_enabled) {
+		return Reject(action,
+		              ::highbar::v1::ADMIN_ACTION_REJECTED_RUN_MODE,
+		              ::highbar::v1::ADMIN_ACTION_DISABLED,
+		              "unit_transfer", "run mode forbids unit transfer",
+		              frame, state_seq, true);
+	}
 	if (action.action_case() == ::highbar::v1::AdminAction::kGlobalSpeed
 	    && (!std::isfinite(action.global_speed().speed())
-	        || action.global_speed().speed() <= 0.0f
-	        || action.global_speed().speed() > 10.0f)) {
+	        || action.global_speed().speed() < settings_.min_speed
+	        || action.global_speed().speed() > settings_.max_speed)) {
 		return Reject(action,
 		              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_VALUE,
 		              ::highbar::v1::ADMIN_INVALID_SPEED_RANGE,
-		              "global_speed.speed", "speed must be finite and in (0, 10]",
+		              "global_speed.speed", "speed must be finite and within advertised bounds",
 		              frame, state_seq, true);
+	}
+	if (action.action_case() == ::highbar::v1::AdminAction::kResourceGrant) {
+		const auto& grant = action.resource_grant();
+		if (!IsValidTeam(grant.team_id())) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_TARGET,
+			              ::highbar::v1::ADMIN_INVALID_TEAM,
+			              "resource_grant.team_id", "unknown admin fixture team",
+			              frame, state_seq, true);
+		}
+		if (!IsValidResource(grant.resource_id())) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_TARGET,
+			              ::highbar::v1::ADMIN_INVALID_RESOURCE,
+			              "resource_grant.resource_id", "unknown admin fixture resource",
+			              frame, state_seq, true);
+		}
+		if (!std::isfinite(grant.amount()) || grant.amount() <= 0.0f) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_VALUE,
+			              ::highbar::v1::ADMIN_INVALID_AMOUNT,
+			              "resource_grant.amount", "resource grant amount must be finite and positive",
+			              frame, state_seq, true);
+		}
+	}
+	if (action.action_case() == ::highbar::v1::AdminAction::kUnitSpawn) {
+		const auto& spawn = action.unit_spawn();
+		if (!IsValidTeam(spawn.team_id())) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_TARGET,
+			              ::highbar::v1::ADMIN_INVALID_TEAM,
+			              "unit_spawn.team_id", "unknown admin fixture team",
+			              frame, state_seq, true);
+		}
+		if (!IsValidUnitDef(spawn.unit_def_id())) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_TARGET,
+			              ::highbar::v1::ADMIN_UNKNOWN_UNIT_DEF,
+			              "unit_spawn.unit_def_id", "unknown admin fixture unit definition",
+			              frame, state_seq, true);
+		}
+		if (!std::isfinite(spawn.position().x())
+		    || !std::isfinite(spawn.position().y())
+		    || !std::isfinite(spawn.position().z())
+		    || !IsWithinMap(spawn.position())) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_VALUE,
+			              ::highbar::v1::ADMIN_POSITION_OUT_OF_MAP,
+			              "unit_spawn.position", "spawn position is outside advertised map extents",
+			              frame, state_seq, true);
+		}
+	}
+	if (action.action_case() == ::highbar::v1::AdminAction::kUnitTransfer) {
+		const auto& transfer = action.unit_transfer();
+		const auto owner_it = settings_.live_unit_owners.find(transfer.unit_id());
+		if (transfer.unit_id() <= 0
+		    || (!settings_.live_unit_owners.empty()
+		        && owner_it == settings_.live_unit_owners.end())) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_TARGET,
+			              ::highbar::v1::ADMIN_UNKNOWN_UNIT,
+			              "unit_transfer.unit_id", "unknown live unit",
+			              frame, state_seq, true);
+		}
+		if (!IsValidTeam(transfer.to_team_id())) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_TARGET,
+			              ::highbar::v1::ADMIN_INVALID_TEAM,
+			              "unit_transfer.to_team_id", "unknown destination team",
+			              frame, state_seq, true);
+		}
+		if (owner_it != settings_.live_unit_owners.end()
+		    && transfer.from_team_id() != owner_it->second) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_TARGET,
+			              ::highbar::v1::ADMIN_UNIT_OWNER_MISMATCH,
+			              "unit_transfer.from_team_id", "source team does not own unit",
+			              frame, state_seq, true);
+		}
+		if (owner_it != settings_.live_unit_owners.end()
+		    && transfer.to_team_id() == owner_it->second) {
+			return Reject(action,
+			              ::highbar::v1::ADMIN_ACTION_REJECTED_INVALID_VALUE,
+			              ::highbar::v1::ADMIN_UNIT_OWNER_MISMATCH,
+			              "unit_transfer.to_team_id", "destination team already owns unit",
+			              frame, state_seq, true);
+		}
 	}
 	if (action.based_on_frame() != 0 && action.based_on_frame() + 300 < frame) {
 		return Reject(action,

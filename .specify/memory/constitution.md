@@ -1,36 +1,31 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: (template placeholders) → 1.0.0
-Rationale: Initial ratification. All principles and sections populated from
-placeholders; MINOR/PATCH semantics do not apply to first adoption.
+Version change: 1.0.0 → 1.1.0
+Rationale: MINOR. Adds a new mandatory Python launch principle and expands
+workflow guidance so future Python live runs use the standard option-object
+launcher instead of reconstructed shell process graphs.
 
-Modified principles: n/a (initial adoption)
-Added principles (all new):
-  I. Upstream Fork Discipline
-  II. Engine-Thread Supremacy (NON-NEGOTIABLE)
-  III. Proto-First Contracts
-  IV. Phased Externalization
-  V. Latency Budget as Shipping Gate
+Modified principles:
+  VI. Standard Python Launch Path (new)
 
-Added sections:
-  - License & Compliance
-  - Development Workflow & Quality Gates
-  - Governance
+Added sections: none.
 
 Removed sections: none.
 
 Templates status:
-  ✅ .specify/templates/plan-template.md — "Constitution Check" gate already
-     defers to this file; no edits needed.
-  ✅ .specify/templates/spec-template.md — no constitution-driven mandatory
-     sections to add; no edits needed.
-  ✅ .specify/templates/tasks-template.md — task categorization unaffected;
-     no edits needed.
+  ✅ .specify/templates/plan-template.md — Constitution Check now calls out
+     Python live/topology launch compliance.
+  ✅ .specify/templates/spec-template.md — no specification section changes
+     required.
+  ✅ .specify/templates/tasks-template.md — Polish phase now includes the
+     canonical Python launcher check.
   ✅ .specify/templates/checklist-template.md — scope unchanged; no edits
      needed.
-  ✅ CLAUDE.md — already points implementers at docs/architecture.md, which
-     is the runtime guidance document referenced from Governance.
+  ✅ clients/python/README.md — live topology helper wording updated from
+     recommendation to constitutional requirement.
+  ✅ docs/architecture.md — Python client guidance now identifies the
+     canonical launcher and exception boundary.
 
 Deferred TODOs: none.
 -->
@@ -136,6 +131,28 @@ characteristic. Latency is measured, not assumed.
   transports. Regressions compound and are hard to recover from
   once shipped.
 
+### VI. Standard Python Launch Path
+
+Python-driven live, headless, topology, and BNV runs MUST be launched
+through `highbar_client.live_topology.run_topology(...)` with a
+`TopologyOptions` object or a saved `TopologyOptions` preset derived
+with `dataclasses.replace(...)`.
+
+- Python features MUST NOT reconstruct the host, viewer, coordinator,
+  AI policy, token, socket, or cleanup process graph with ad-hoc
+  `subprocess`, shell, or inline launcher code.
+- Shell entry points may wrap Python runs only when they delegate to
+  this standard launcher for the Python-owned topology. Direct
+  `_launch.sh` usage is reserved for non-Python engine probes, tests of
+  the launcher itself, and narrowly scoped bootstrap diagnostics that
+  document why `TopologyOptions` is not the right abstraction.
+- New launcher options belong on `TopologyOptions`; callers select
+  variants by constructing or replacing an option object rather than
+  adding parallel environment-variable protocols.
+- Rationale: one canonical option-object launcher keeps BNV, headless
+  host, Python AI policy, sockets, tokens, logs, and cleanup behavior
+  consistent across demos, tests, and local reproduction.
+
 ## License & Compliance
 
 HighBarV3 inherits **GPL-2.0** from its upstream (CircuitAI). All
@@ -163,6 +180,11 @@ clarify (optional) → plan → tasks → implement`.
   Python). A PR touching `proto/highbar/*.proto` MUST update all three
   client-side stubs (or explicitly note a client is deferred, with a
   tracking issue).
+- Python-driven live runs MUST use
+  `highbar_client.live_topology.run_topology(TopologyOptions)`. Reviews
+  reject new ad-hoc Python launch wiring unless it is an allowed
+  exception under Principle VI and the exception is documented in the
+  feature plan.
 - Tests are structured by scope: unit (no engine), integration
   (`dlopen`-driven mock engine), headless (real BAR engine). A PR
   affecting the gateway, state model, or transport MUST include or
@@ -202,4 +224,4 @@ document is updated.
   plan's Complexity Tracking table, with a concrete reason a simpler
   alternative was rejected.
 
-**Version**: 1.0.0 | **Ratified**: 2026-04-20 | **Last Amended**: 2026-04-20
+**Version**: 1.1.0 | **Ratified**: 2026-04-20 | **Last Amended**: 2026-04-24

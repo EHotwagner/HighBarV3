@@ -121,9 +121,24 @@ public:
 				this);
 			return;
 		}
-		response_ = svc_->controller_->Execute(
-			svc_->CallerFrom(ctx_), request_,
-			svc_->CurrentFrame(), svc_->CurrentStateSeq());
+		const auto caller = svc_->CallerFrom(ctx_);
+		response_ = svc_->controller_->Validate(
+			caller, request_, svc_->CurrentFrame(), svc_->CurrentStateSeq());
+		response_.set_dry_run(false);
+		if (response_.status() == ::highbar::v1::ADMIN_ACTION_ACCEPTED) {
+			if (svc_->execute_fn_) {
+				response_ = svc_->execute_fn_(
+					caller, request_, std::chrono::milliseconds(1500));
+			} else {
+				response_ = svc_->controller_->Execute(
+					caller, request_,
+					svc_->CurrentFrame(), svc_->CurrentStateSeq());
+			}
+		} else {
+			response_ = svc_->controller_->Execute(
+				caller, request_,
+				svc_->CurrentFrame(), svc_->CurrentStateSeq());
+		}
 		stage_ = Stage::kFinishing;
 		responder_.Finish(response_, ::grpc::Status::OK, this);
 	}
@@ -145,6 +160,10 @@ AdminService::AdminService(AdminController* controller)
 void AdminService::SetClock(FrameFn frame_fn, StateSeqFn state_seq_fn) {
 	frame_fn_ = std::move(frame_fn);
 	state_seq_fn_ = std::move(state_seq_fn);
+}
+
+void AdminService::SetExecutionFn(ExecuteFn execute_fn) {
+	execute_fn_ = std::move(execute_fn);
 }
 
 void AdminService::Start(::grpc::ServerCompletionQueue* cq) {

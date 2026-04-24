@@ -9,6 +9,18 @@ open Highbar.V1
 
 module Admin =
 
+    let unitTransferAction actionSeq clientActionId unitId fromTeamId toTeamId preserveOrders =
+        let action = AdminAction()
+        action.ActionSeq <- actionSeq
+        action.ClientActionId <- clientActionId
+        action.ConflictPolicy <- AdminConflictPolicy.AdminConflictRejectIfControlled
+        action.UnitTransfer <- UnitTransferAction(
+                                   UnitId = unitId,
+                                   FromTeamId = fromTeamId,
+                                   ToTeamId = toTeamId,
+                                   PreserveOrders = preserveOrders)
+        action
+
     let getCapabilities (channel: GrpcChannel)
                         (metadata: Metadata)
                         (ct: CancellationToken)

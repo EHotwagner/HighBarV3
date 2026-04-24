@@ -197,7 +197,12 @@ V3 additions only:
   generated C# stubs to hide `Highbar.AICommand.Types.CommandCase` ugly.
 - **Python**: new `clients/python/` with `pyproject.toml`, uses `grpcio`.
   UDS connection via `grpc.insecure_channel('unix:/…')`. Observer role
-  only on first release; AI role added once F# is proven.
+  only on first release; AI role added once F# is proven. Python-driven
+  live/topology/BNV runs use
+  `highbar_client.live_topology.run_topology(TopologyOptions)` as the
+  canonical launcher. Direct `_launch.sh` or `subprocess` process-graph
+  wiring is limited to non-Python engine probes, launcher tests, and
+  documented bootstrap diagnostics.
 
 ## Critical files (V3 fork)
 

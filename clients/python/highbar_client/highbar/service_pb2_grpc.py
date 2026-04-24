@@ -8,7 +8,7 @@ from highbar import commands_pb2 as highbar_dot_commands__pb2
 from highbar import service_pb2 as highbar_dot_service__pb2
 from highbar import state_pb2 as highbar_dot_state__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.73.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -21,7 +21,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in highbar/service_pb2_grpc.py depends on'
+        + f' but the generated code in highbar/service_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'

@@ -16,6 +16,7 @@ without a gRPC channel.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -3452,6 +3453,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return itertesting_main(argv[1:])
     if argv and argv[:1] == ["audit"]:
         return _audit_main(argv[1:])
+    if argv and argv[:1] == ["admin"]:
+        return _admin_main(argv[1:])
     args = _parse_args(argv)
     output_dir = Path(args.output_dir)
     if args.run_index > 0:
@@ -3471,6 +3474,93 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 __all__ = ["main", "run_dry", "run_live", "REGISTRY", "validate_registry"]
+
+
+def _admin_main(argv: list[str]) -> int:
+    from .admin_actions import (
+        AdminBehaviorRun,
+        all_scenarios,
+    )
+    from .admin_report import exit_code_for_records, write_artifacts
+    from .admin_suite import missing_evidence_record, records_from_replay
+    from .admin_live import LiveAdminEvidenceError, execute_live_suite, missing_records_for_error
+
+    parser = argparse.ArgumentParser(prog="highbar_client.behavioral_coverage admin")
+    parser.add_argument("--startscript", default="tests/headless/scripts/admin-behavior.startscript")
+    parser.add_argument("--output-dir", default="build/reports/admin-behavior")
+    parser.add_argument("--endpoint", default=os.environ.get("HIGHBAR_ADMIN_ENDPOINT", "unix:/tmp/hb-run/highbar-0.sock"))
+    parser.add_argument("--token-file", default=os.environ.get("HIGHBAR_TOKEN_PATH", ""))
+    parser.add_argument("--timeout-seconds", type=float, default=10.0)
+    parser.add_argument("--repeat-index", type=int, default=0)
+    parser.add_argument("--log-location",
+                        help="engine log used as live behavioral evidence for non-snapshot engine effects")
+    parser.add_argument("--skip-live", action="store_true",
+                        help="diagnostic mode that writes failing records because no behavioral evidence is collected")
+    parser.add_argument("--evidence-replay",
+                        help="JSON file containing explicit before/after behavioral evidence records")
+    args = parser.parse_args(argv)
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log_location = args.log_location or str(output_dir / "logs" / "engine.log")
+    scenarios = all_scenarios()
+    if args.evidence_replay:
+        replay = json.loads(Path(args.evidence_replay).read_text(encoding="utf-8"))
+        records = records_from_replay(scenarios, replay, log_location=log_location)
+        live_capabilities = {}
+    elif not args.skip_live:
+        token_file = args.token_file
+        if not token_file:
+            token_file = str(Path.home() / ".local/state/Beyond All Reason/highbar.token")
+        try:
+            records, live_capabilities = execute_live_suite(
+                endpoint=args.endpoint,
+                token_file=token_file,
+                timeout_seconds=args.timeout_seconds,
+                log_location=log_location,
+            )
+        except LiveAdminEvidenceError as exc:
+            records = missing_records_for_error(str(exc), log_location=log_location)
+            live_capabilities = {"live_error": str(exc)}
+    else:
+        records = [
+            missing_evidence_record(scenario, log_location=log_location)
+            for scenario in scenarios
+        ]
+        live_capabilities = {}
+
+    exit_code = exit_code_for_records(records)
+    run = AdminBehaviorRun(
+        run_id=f"admin-behavior-{int(time.time())}",
+        fixture_id=Path(args.startscript).stem,
+        repeat_index=args.repeat_index,
+        started_at=_utc_now_iso(),
+        completed_at=_utc_now_iso(),
+        prerequisite_status="ok",
+        capabilities={
+            "supported_actions": [
+                "pause",
+                "global_speed",
+                "resource_grant",
+                "unit_spawn",
+                "unit_transfer",
+            ],
+            "timeout_seconds": args.timeout_seconds,
+            "skip_live": args.skip_live,
+            "evidence_replay": args.evidence_replay or "",
+            "success_criterion": "behavioral evidence only",
+            **live_capabilities,
+        },
+        records=records,
+        cleanup_status="ok",
+        exit_code=exit_code,
+        report_path=str(output_dir / "run-report.md"),
+    )
+    write_artifacts(output_dir, run)
+    print(f"admin-behavior: records={len(records)} report={output_dir / 'run-report.md'}")
+    return exit_code
+
+
 def _audit_main(argv: list[str]) -> int:
     from .audit_report import generate
     from .audit_runner import (

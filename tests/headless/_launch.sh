@@ -72,6 +72,7 @@ done
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
 PIN_FILE="$REPO_ROOT/data/config/spring-headless.pin"
 LUA_GADGET_SRC_DIR="$REPO_ROOT/tests/headless/LuaRules/Gadgets"
+LUA_WIDGET_SRC_DIR="$REPO_ROOT/tests/headless/LuaUI/Widgets"
 DEFAULT_PLUGIN_SO="$REPO_ROOT/build/libSkirmishAI.so"
 
 # --- prerequisite checks (exit 77 on missing) --------------------------------
@@ -176,13 +177,10 @@ export XDG_RUNTIME_DIR="$RUNTIME_DIR"
 if [[ "$VIEWER_ONLY" != "true" ]]; then
     [[ -n "$COORDINATOR" ]] && export HIGHBAR_COORDINATOR="$COORDINATOR"
     export HIGHBAR_AUDIT_PHASE="$PHASE_MODE"
-    if [[ -n "$ENABLE_BUILTIN" ]]; then
-        export HIGHBAR_ENABLE_BUILTIN="$ENABLE_BUILTIN"
-    elif [[ "$PHASE_MODE" == "2" ]]; then
-        export HIGHBAR_ENABLE_BUILTIN="false"
-    else
-        export HIGHBAR_ENABLE_BUILTIN="true"
-    fi
+    # Built-in BARb/Circuit behavior is permanently disabled in the proxy.
+    # Keep the environment key for older helper compatibility, but never
+    # allow launch arguments or phase defaults to re-enable it.
+    export HIGHBAR_ENABLE_BUILTIN="false"
 
     # Clear stale state files from prior runs.
     rm -f "$RUNTIME_DIR/highbar-0.sock" \
@@ -197,6 +195,18 @@ if [[ "$VIEWER_ONLY" != "true" ]]; then
     if [[ -d "$LUA_GADGET_SRC_DIR" ]]; then
         mkdir -p "$WRITEDIR/LuaRules/Gadgets"
         cp "$LUA_GADGET_SRC_DIR"/*.lua "$WRITEDIR/LuaRules/Gadgets/"
+        mkdir -p "$WRITEDIR/engine/$PIN_RELEASE/LuaRules/Gadgets"
+        cp "$LUA_GADGET_SRC_DIR"/*.lua "$WRITEDIR/engine/$PIN_RELEASE/LuaRules/Gadgets/"
+    fi
+    if [[ -d "$LUA_WIDGET_SRC_DIR" ]]; then
+        mkdir -p "$WRITEDIR/LuaUI/Widgets"
+        cp "$LUA_WIDGET_SRC_DIR"/*.lua "$WRITEDIR/LuaUI/Widgets/"
+        mkdir -p "$WRITEDIR/engine/$PIN_RELEASE/LuaUI/Widgets"
+        cp "$LUA_WIDGET_SRC_DIR"/*.lua "$WRITEDIR/engine/$PIN_RELEASE/LuaUI/Widgets/"
+        widget_cfg="$WRITEDIR/engine/$PIN_RELEASE/LuaUI/Config/BYAR.lua"
+        if [[ -f "$widget_cfg" ]]; then
+            sed -i 's/\["HighBar Admin Speed"\][[:space:]]*=[[:space:]]*0/\["HighBar Admin Speed"\] = 12345/' "$widget_cfg"
+        fi
     fi
 fi
 
