@@ -19,6 +19,7 @@ package highbar.v1;
 import "highbar/state.proto";
 import "highbar/commands.proto";
 import "highbar/callbacks.proto";
+import "highbar/common.proto";
 
 // ---------------------------------------------------------------------------
 // Service
@@ -48,6 +49,17 @@ service HighBarProxy {
   // Client-streaming command submission. AI role only. Bounded queue
   // — overflow returns RESOURCE_EXHAUSTED synchronously (FR-012a).
   rpc SubmitCommands(stream highbar.v1.CommandBatch) returns (CommandAck);
+
+  // Dry-run validation for generated clients. Runs the same validator
+  // as SubmitCommands without enqueueing, dispatching, or mutating
+  // simulation state.
+  rpc ValidateCommandBatch(highbar.v1.CommandBatch) returns (highbar.v1.CommandBatchResult);
+
+  // Schema-level command capability discovery for generated clients.
+  rpc GetCommandSchema(CommandSchemaRequest) returns (CommandSchemaResponse);
+
+  // Unit-specific command capability discovery.
+  rpc GetUnitCapabilities(UnitCapabilitiesRequest) returns (UnitCapabilitiesResponse);
 
   // Unary synchronous engine-callback invocation. AI role only.
   // Used by the plugin to forward engine callbacks (e.g., unit-def
@@ -156,6 +168,208 @@ message CommandAck {
   uint64 batches_accepted        = 2;
   uint64 batches_rejected_invalid = 3;
   uint64 batches_rejected_full    = 4;
+
+  // Per-batch structured results. Existing clients can continue to
+  // consume the aggregate counters above.
+  repeated highbar.v1.CommandBatchResult results = 10;
+}
+
+message CommandSchemaRequest {
+}
+
+message CommandOptionMask {
+  string command_arm = 1;
+  uint32 valid_option_mask = 2;
+}
+
+message MapLimits {
+  float min_x = 1;
+  float min_z = 2;
+  float max_x = 3;
+  float max_z = 4;
+}
+
+message CommandSchemaResponse {
+  string schema_version = 1;
+  repeated string feature_flags = 2;
+  repeated string supported_command_arms = 3;
+  repeated CommandOptionMask option_masks = 4;
+  ValidationMode validation_mode = 5;
+  uint32 max_batch_commands = 6;
+  uint32 queue_depth = 7;
+  uint32 queue_capacity = 8;
+  MapLimits map_limits = 9;
+  repeated string resource_ids = 10;
+}
+
+message UnitCapabilitiesRequest {
+  uint32 unit_id = 1;
+  UnitGeneration generation = 2;
+}
+
+message BuildOption {
+  int32 unit_def_id = 1;
+  string name = 2;
+}
+
+message CustomCommandInfo {
+  int32 command_id = 1;
+  string name = 2;
+  uint32 min_params = 3;
+  uint32 max_params = 4;
+}
+
+message UnitCapabilitiesResponse {
+  uint32 unit_id = 1;
+  UnitGeneration generation = 2;
+  uint32 unit_def_id = 3;
+  string unit_def_name = 4;
+  repeated string legal_command_arms = 5;
+  repeated BuildOption build_options = 6;
+  repeated CustomCommandInfo custom_commands = 7;
+  uint32 queue_depth = 8;
+  bool busy = 9;
+  repeated string feature_flags = 10;
+}
+
+service HighBarAdmin {
+  rpc GetAdminCapabilities(AdminCapabilitiesRequest) returns (AdminCapabilitiesResponse);
+  rpc ValidateAdminAction(AdminAction) returns (AdminActionResult);
+  rpc ExecuteAdminAction(AdminAction) returns (AdminActionResult);
+}
+
+enum AdminRole {
+  ADMIN_ROLE_UNSPECIFIED = 0;
+  ADMIN_ROLE_AI = 1;
+  ADMIN_ROLE_OBSERVER = 2;
+  ADMIN_ROLE_OPERATOR = 3;
+  ADMIN_ROLE_ADMIN = 4;
+  ADMIN_ROLE_TEST_HARNESS = 5;
+}
+
+enum AdminConflictPolicy {
+  ADMIN_CONFLICT_POLICY_UNSPECIFIED = 0;
+  ADMIN_CONFLICT_REJECT_IF_CONTROLLED = 1;
+  ADMIN_CONFLICT_HEARTBEAT_EXISTING_LEASE = 2;
+  ADMIN_CONFLICT_RELEASE_EXISTING_LEASE = 3;
+}
+
+enum AdminActionStatus {
+  ADMIN_ACTION_STATUS_UNSPECIFIED = 0;
+  ADMIN_ACTION_ACCEPTED = 1;
+  ADMIN_ACTION_EXECUTED = 2;
+  ADMIN_ACTION_REJECTED_PERMISSION_DENIED = 3;
+  ADMIN_ACTION_REJECTED_DISABLED = 4;
+  ADMIN_ACTION_REJECTED_RUN_MODE = 5;
+  ADMIN_ACTION_REJECTED_STALE = 6;
+  ADMIN_ACTION_REJECTED_CONFLICT = 7;
+  ADMIN_ACTION_REJECTED_INVALID_TARGET = 8;
+  ADMIN_ACTION_REJECTED_INVALID_VALUE = 9;
+  ADMIN_ACTION_NOT_DISPATCHED = 10;
+}
+
+enum AdminIssueCode {
+  ADMIN_ISSUE_CODE_UNSPECIFIED = 0;
+  ADMIN_PERMISSION_DENIED = 1;
+  ADMIN_ACTION_DISABLED = 2;
+  ADMIN_RUN_MODE_FORBIDS_CHEATS = 3;
+  ADMIN_STALE_SNAPSHOT_EPOCH = 4;
+  ADMIN_CONTROL_CONFLICT = 5;
+  ADMIN_INVALID_SPEED = 6;
+  ADMIN_INVALID_SPEED_RANGE = 7;
+  ADMIN_INVALID_RESOURCE = 8;
+  ADMIN_INVALID_AMOUNT = 9;
+  ADMIN_UNKNOWN_UNIT_DEF = 10;
+  ADMIN_POSITION_OUT_OF_MAP = 11;
+  ADMIN_INVALID_TEAM = 12;
+  ADMIN_ENGINE_NOT_READY = 13;
+  ADMIN_ISSUE_ACTION_NOT_DISPATCHED = 14;
+}
+
+message AdminIssue {
+  AdminIssueCode code = 1;
+  string field_path = 2;
+  string detail = 3;
+  RetryHint retry_hint = 4;
+}
+
+message PauseAction {
+  bool paused = 1;
+}
+
+message SpeedAction {
+  float speed = 1;
+}
+
+message CheatPolicyAction {
+  bool enabled = 1;
+}
+
+message ResourceGrantAction {
+  int32 team_id = 1;
+  int32 resource_id = 2;
+  float amount = 3;
+}
+
+message UnitSpawnAction {
+  int32 team_id = 1;
+  int32 unit_def_id = 2;
+  Vector3 position = 3;
+  int32 facing = 4;
+}
+
+message LifecycleAction {
+  string command = 1;
+}
+
+message AdminAction {
+  uint64 action_seq = 1;
+  uint64 client_action_id = 2;
+  uint32 based_on_frame = 3;
+  uint64 based_on_state_seq = 4;
+  AdminConflictPolicy conflict_policy = 5;
+  string reason = 6;
+
+  oneof action {
+    PauseAction pause = 10;
+    SpeedAction global_speed = 11;
+    CheatPolicyAction cheat_policy = 12;
+    ResourceGrantAction resource_grant = 13;
+    UnitSpawnAction unit_spawn = 14;
+    LifecycleAction lifecycle = 15;
+  }
+}
+
+message AdminLease {
+  string control = 1;
+  string owner_client_id = 2;
+  AdminRole owner_role = 3;
+  uint32 acquired_frame = 4;
+  uint32 last_heartbeat_frame = 5;
+  uint32 expires_frame = 6;
+  uint32 released_frame = 7;
+  string release_reason = 8;
+}
+
+message AdminActionResult {
+  uint64 action_seq = 1;
+  uint64 client_action_id = 2;
+  AdminActionStatus status = 3;
+  repeated AdminIssue issues = 4;
+  AdminLease lease = 5;
+  uint32 frame = 6;
+  uint64 state_seq = 7;
+  bool dry_run = 8;
+}
+
+message AdminCapabilitiesRequest {
+}
+
+message AdminCapabilitiesResponse {
+  bool enabled = 1;
+  repeated AdminRole roles = 2;
+  repeated string supported_actions = 3;
+  repeated string feature_flags = 4;
 }
 
 // ---------------------------------------------------------------------------

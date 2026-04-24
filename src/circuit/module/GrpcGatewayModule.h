@@ -44,10 +44,13 @@ namespace circuit::grpc {
 class HighBarService;
 class Counters;
 class AuthToken;
+class AdminController;
+class AdminService;
 class SnapshotBuilder;
 class DeltaBus;
 class RingBuffer;
 class CommandQueue;
+class OrderStateTracker;
 class CoordinatorClient;
 }  // namespace circuit::grpc
 
@@ -203,11 +206,14 @@ private:
 
 	// Owning pointers. unique_ptr keeps gRPC headers out of this one.
 	std::unique_ptr<grpc::AuthToken> token_;
+	std::unique_ptr<grpc::AdminController> admin_controller_;
+	std::unique_ptr<grpc::AdminService> admin_service_;
 	std::unique_ptr<grpc::Counters> counters_;
 	std::unique_ptr<grpc::SnapshotBuilder> snapshot_;
 	std::unique_ptr<grpc::DeltaBus> delta_bus_;
 	std::unique_ptr<grpc::RingBuffer> ring_;
 	std::unique_ptr<grpc::CommandQueue> command_queue_;
+	std::unique_ptr<grpc::OrderStateTracker> order_state_tracker_;
 	std::unique_ptr<grpc::HighBarService> service_;
 	std::optional<grpc::TransportEndpoint> deferred_service_bind_endpoint_;
 	bool service_bound_ = false;

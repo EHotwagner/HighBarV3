@@ -52,7 +52,7 @@ TEST(AiMoveFlow, DrainNormalizesGameWideCommandsToSyntheticTarget) {
 	CommandQueue queue(/*counters=*/nullptr, /*capacity=*/4);
 	QueuedCommand queued;
 	queued.authoritative_target_unit_id = 77;
-	queued.command.mutable_send_text_message()->set_message("hold position");
+	queued.command.mutable_send_text_message()->set_text("hold position");
 	ASSERT_TRUE(queue.TryPush(std::move(queued)));
 
 	std::vector<QueuedCommand> drained;
@@ -64,6 +64,19 @@ TEST(AiMoveFlow, DrainNormalizesGameWideCommandsToSyntheticTarget) {
 		drained[0].command);
 	ASSERT_TRUE(dispatch_target.has_value());
 	EXPECT_EQ(*dispatch_target, -1);
+}
+
+TEST(AiMoveFlow, DrainSurfacesMissingAuthoritativeTargetBeforeDispatch) {
+	CommandQueue queue(/*counters=*/nullptr, /*capacity=*/4);
+	ASSERT_TRUE(queue.TryPush(MakeMoveCommand(/*authoritative_target=*/0,
+	                                        /*embedded_command_unit=*/42)));
+
+	std::vector<QueuedCommand> drained;
+	ASSERT_EQ(queue.Drain(&drained), 1u);
+	const auto dispatch_target = EffectiveDispatchTargetUnitId(
+		drained[0].authoritative_target_unit_id,
+		drained[0].command);
+	EXPECT_FALSE(dispatch_target.has_value());
 }
 
 }  // namespace

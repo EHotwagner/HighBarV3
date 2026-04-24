@@ -117,14 +117,36 @@ let main argv =
         // Build a single-command batch for the requested MoveTo.
         let (x, y, z) = args.MoveTo.Value
         let batch =
-            Commands.batch
+            Commands.batchWithBasis
                 args.TargetUnit
                 1UL  // batch_seq
+                1001UL
+                hs.CurrentFrame
+                1UL
+                CommandConflictPolicy.CommandConflictRejectIfBusy
                 Commands.Opts.None
                 [ Commands.MoveTo (Commands.vec3 x y z) ]
 
         let metadata = Metadata()
         metadata.Add("x-highbar-ai-token", token)
+
+        let proxy = HighBarProxy.HighBarProxyClient(channel)
+        let schema =
+            proxy.GetCommandSchemaAsync(CommandSchemaRequest(), metadata)
+                .ResponseAsync
+            |> Async.AwaitTask
+            |> Async.RunSynchronously
+        if not (schema.FeatureFlags |> Seq.contains "command_capabilities") then
+            failwith "schema capabilities missing command_capabilities feature flag"
+
+        let dryRun =
+            Commands.validateBatch channel metadata batch cts.Token
+            |> Async.RunSynchronously
+        for (_, _, fieldPath, _) in Commands.issueSummary dryRun do
+            if String.IsNullOrWhiteSpace fieldPath then
+                failwith "diagnostic issue missing field_path"
+        printfn "dry-run  status=%O issues=%d capabilities=%d"
+                dryRun.Status dryRun.Issues.Count schema.SupportedCommandArms.Count
 
         let ack =
             Commands.submitOne channel metadata batch cts.Token

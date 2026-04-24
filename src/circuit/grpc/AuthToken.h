@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <string>
 
+#include "highbar/service.pb.h"
+
 namespace circuit {
 class CCircuitAI;
 }  // namespace circuit
@@ -41,6 +43,9 @@ public:
 	// timing side channels on the comparison.
 	static bool ConstantTimeEquals(const std::string& a,
 	                               const std::string& b);
+
+	static ::highbar::v1::AdminRole ParseAdminRole(const std::string& role);
+	static bool IsPrivilegedAdminRole(::highbar::v1::AdminRole role);
 
 private:
 	AuthToken() = default;

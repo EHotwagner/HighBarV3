@@ -14,6 +14,7 @@ syntax = "proto3";
 package highbar.v1;
 
 import "highbar/common.proto";
+import "highbar/commands.proto";
 import "highbar/events.proto";
 
 // ---------------------------------------------------------------------------
@@ -195,8 +196,10 @@ message DeltaEvent {
     EnemyCreatedEvent    enemy_created     = 23;
     EnemyFinishedEvent   enemy_finished    = 24;
     LuaMessageEvent      lua_message       = 25;
+    CommandDispatchEvent command_dispatch  = 26;
+    AdminAuditEvent      admin_audit       = 27;
   }
-  reserved 26 to 28;
+  reserved 28;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,4 +230,39 @@ message EconomyTickEvent {
   float energy_income  = 6;
   float energy_usage   = 7;
   float energy_storage = 8;
+}
+
+enum CommandDispatchStatus {
+  COMMAND_DISPATCH_STATUS_UNSPECIFIED = 0;
+  COMMAND_DISPATCH_APPLIED = 1;
+  COMMAND_DISPATCH_SKIPPED_TARGET_MISSING = 2;
+  COMMAND_DISPATCH_SKIPPED_TARGET_NOT_OWNED = 3;
+  COMMAND_DISPATCH_SKIPPED_TARGET_DEAD = 4;
+  COMMAND_DISPATCH_SKIPPED_CAPABILITY_CHANGED = 5;
+  COMMAND_DISPATCH_SKIPPED_UNSUPPORTED_ARM = 6;
+  COMMAND_DISPATCH_SKIPPED_ENGINE_NOT_READY = 7;
+  COMMAND_DISPATCH_SKIPPED_UNKNOWN = 8;
+}
+
+message CommandDispatchEvent {
+  uint64 batch_seq = 1;
+  uint64 client_command_id = 2;
+  uint32 command_index = 3;
+  uint32 target_unit_id = 4;
+  CommandDispatchStatus status = 5;
+  highbar.v1.CommandIssue issue = 6;
+  uint32 frame = 7;
+}
+
+message AdminAuditEvent {
+  uint64 event_id = 1;
+  string caller_identity = 2;
+  string role = 3;
+  string action_type = 4;
+  uint32 frame = 5;
+  uint64 state_seq = 6;
+  string result = 7;
+  string reason = 8;
+  string lease_control = 9;
+  string run_mode = 10;
 }

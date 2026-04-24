@@ -5,6 +5,8 @@
 
 #include "module/GrpcGatewayModule.h"
 
+#include "grpc/AdminController.h"
+#include "grpc/AdminService.h"
 #include "grpc/AuthToken.h"
 #include "grpc/CommandDispatch.h"
 #include "grpc/CommandQueue.h"
@@ -15,6 +17,7 @@
 #include "grpc/HighBarService.h"
 #include "grpc/GrpcLog.h"
 #include "grpc/RingBuffer.h"
+#include "grpc/OrderStateTracker.h"
 #include "grpc/SchemaVersion.h"
 #include "grpc/SnapshotBuilder.h"
 #include "SpringHeadlessPin.h"  // T006 — kEngineReleaseId / kEngineSha256
@@ -96,10 +99,6 @@ std::uint32_t FrameForWire(CCircuitAI* ai) {
 	if (ai == nullptr) return 0u;
 	const int frame = ai->GetLastFrame();
 	return frame >= 0 ? static_cast<std::uint32_t>(frame) : 0u;
-}
-
-bool IsGameWideCommand(const ::highbar::v1::AICommand& cmd) {
-	return grpc::IsGameWideCommand(cmd);
 }
 
 int CoordinatorOwnerSkirmishAiId() {
@@ -226,6 +225,13 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 
 		// US2 pieces (T055 + T057 command path).
 		command_queue_ = std::make_unique<grpc::CommandQueue>(counters_.get());
+		order_state_tracker_ = std::make_unique<grpc::OrderStateTracker>();
+		admin_controller_ = std::make_unique<grpc::AdminController>();
+		admin_service_ = std::make_unique<grpc::AdminService>(
+			admin_controller_.get());
+		admin_service_->SetClock(
+			[this]() { return this->CurrentFrame(); },
+			[this]() { return this->HeadSeq(); });
 
 		service_ = std::make_unique<grpc::HighBarService>(
 			ai, counters_.get(), token_.get());
@@ -236,6 +242,7 @@ CGrpcGatewayModule::CGrpcGatewayModule(CCircuitAI* ai)
 		service_->SetUs1Handles(snapshot_.get(), delta_bus_.get(),
 		                        ring_.get(), &state_mutex_);
 		service_->SetUs2Handles(command_queue_.get());
+		service_->SetAdminService(admin_service_.get());
 		// 003-snapshot-arm-coverage — RequestSnapshot handler needs the
 		// module to flip the pending atomic + read the current frame.
 		service_->SetSnapshotHandle(this);
@@ -501,6 +508,8 @@ int CGrpcGatewayModule::UnitFinished(CCircuitUnit* unit) {
 int CGrpcGatewayModule::UnitIdle(CCircuitUnit* unit) {
 	HB_HOOK_GUARD_INT({
 		if (unit == nullptr) return 0;
+		order_state_tracker_->MarkIdle(
+			static_cast<std::uint32_t>(unit->GetId()), CurrentFrame());
 		auto* ev = current_frame_delta_.add_events()->mutable_unit_idle();
 		ev->set_unit_id(static_cast<std::int32_t>(unit->GetId()));
 		return 0;
@@ -541,6 +550,8 @@ void CGrpcGatewayModule::OnUnitDamagedFull(CCircuitUnit* unit,
 int CGrpcGatewayModule::UnitDestroyed(CCircuitUnit* unit, CEnemyInfo* attacker) {
 	HB_HOOK_GUARD_INT({
 		if (unit == nullptr) return 0;
+		order_state_tracker_->MarkUnitRemoved(
+			static_cast<std::uint32_t>(unit->GetId()), CurrentFrame());
 		auto* ev = current_frame_delta_.add_events()->mutable_unit_destroyed();
 		ev->set_unit_id(static_cast<std::int32_t>(unit->GetId()));
 		if (attacker != nullptr) {
@@ -553,6 +564,8 @@ int CGrpcGatewayModule::UnitDestroyed(CCircuitUnit* unit, CEnemyInfo* attacker) 
 int CGrpcGatewayModule::UnitGiven(CCircuitUnit* unit, int oldTeam, int newTeam) {
 	HB_HOOK_GUARD_INT({
 		if (unit == nullptr) return 0;
+		order_state_tracker_->MarkUnitRemoved(
+			static_cast<std::uint32_t>(unit->GetId()), CurrentFrame());
 		auto* ev = current_frame_delta_.add_events()->mutable_unit_given();
 		ev->set_unit_id(static_cast<std::int32_t>(unit->GetId()));
 		ev->set_old_team_id(oldTeam);
@@ -564,6 +577,8 @@ int CGrpcGatewayModule::UnitGiven(CCircuitUnit* unit, int oldTeam, int newTeam) 
 int CGrpcGatewayModule::UnitCaptured(CCircuitUnit* unit, int oldTeam, int newTeam) {
 	HB_HOOK_GUARD_INT({
 		if (unit == nullptr) return 0;
+		order_state_tracker_->MarkUnitRemoved(
+			static_cast<std::uint32_t>(unit->GetId()), CurrentFrame());
 		auto* ev = current_frame_delta_.add_events()->mutable_unit_captured();
 		ev->set_unit_id(static_cast<std::int32_t>(unit->GetId()));
 		ev->set_old_team_id(oldTeam);
@@ -700,6 +715,9 @@ void CGrpcGatewayModule::OnFrameTick() {
 		// callback requests on the engine thread before any command
 		// dispatch so callers waiting on def metadata wake promptly.
 		DrainCallbackQueue();
+		if (admin_service_ != nullptr) {
+			admin_service_->ExpireLeases();
+		}
 
 		// T057: drain external-AI commands at the top of the frame so
 		// they land in the engine this tick. Engine-thread only.
@@ -1020,9 +1038,26 @@ void CGrpcGatewayModule::DrainCommandQueue() {
 		// The validator accepted a single authoritative batch target and
 		// that normalized target is preserved on the queue entry.
 		const auto& cmd = entry.command;
+		auto* dispatch_event =
+			current_frame_delta_.add_events()->mutable_command_dispatch();
+		dispatch_event->set_batch_seq(entry.batch_seq);
+		dispatch_event->set_client_command_id(entry.client_command_id);
+		dispatch_event->set_command_index(entry.command_index);
+		dispatch_event->set_target_unit_id(
+			static_cast<std::uint32_t>(entry.authoritative_target_unit_id));
+		dispatch_event->set_frame(CurrentFrame());
 		const auto target_id = grpc::EffectiveDispatchTargetUnitId(
 			entry.authoritative_target_unit_id, cmd);
-		if (!target_id.has_value()) continue;  // arm not recognised by switch
+		if (!target_id.has_value()) {
+			dispatch_event->set_status(
+				::highbar::v1::COMMAND_DISPATCH_SKIPPED_UNSUPPORTED_ARM);
+			auto* issue = dispatch_event->mutable_issue();
+			issue->set_code(::highbar::v1::COMMAND_ARM_NOT_DISPATCHED);
+			issue->set_field_path("commands");
+			issue->set_detail("command arm is not dispatched");
+			issue->set_retry_hint(::highbar::v1::RETRY_WITH_FRESH_CAPABILITIES);
+			continue;
+		}
 
 		// target_id == -1 marks game-wide arms (Game / Pathing / Lua /
 		// Cheats) that don't bind to any unit. Use any own unit as the
@@ -1031,12 +1066,39 @@ void CGrpcGatewayModule::DrainCommandQueue() {
 		CCircuitUnit* unit_ctx = nullptr;
 		if (*target_id > 0) {
 			unit_ctx = circuit->GetTeamUnit(*target_id);
-			if (unit_ctx == nullptr || unit_ctx->IsDead()) continue;
+			if (unit_ctx == nullptr) {
+				dispatch_event->set_status(
+					::highbar::v1::COMMAND_DISPATCH_SKIPPED_TARGET_MISSING);
+				auto* issue = dispatch_event->mutable_issue();
+				issue->set_code(::highbar::v1::MISSING_TARGET_UNIT);
+				issue->set_field_path("target_unit_id");
+				issue->set_detail("target unit missing at dispatch time");
+				issue->set_retry_hint(::highbar::v1::RETRY_AFTER_NEXT_SNAPSHOT);
+				continue;
+			}
+			if (unit_ctx->IsDead()) {
+				dispatch_event->set_status(
+					::highbar::v1::COMMAND_DISPATCH_SKIPPED_TARGET_DEAD);
+				auto* issue = dispatch_event->mutable_issue();
+				issue->set_code(::highbar::v1::TARGET_UNIT_DEAD);
+				issue->set_field_path("target_unit_id");
+				issue->set_detail("target unit dead at dispatch time");
+				issue->set_retry_hint(::highbar::v1::RETRY_AFTER_NEXT_SNAPSHOT);
+				continue;
+			}
 		} else {
 			const auto& own = circuit->GetTeamUnits();
-			if (own.empty()) continue;  // no units yet, skip game-wide too
+			if (own.empty()) {
+				dispatch_event->set_status(
+					::highbar::v1::COMMAND_DISPATCH_SKIPPED_ENGINE_NOT_READY);
+				continue;
+			}
 			unit_ctx = own.begin()->second;  // any live unit
-			if (unit_ctx == nullptr) continue;
+			if (unit_ctx == nullptr) {
+				dispatch_event->set_status(
+					::highbar::v1::COMMAND_DISPATCH_SKIPPED_ENGINE_NOT_READY);
+				continue;
+			}
 		}
 
 		// T015 — dispatch hot path guard. Engine-thread only; direct
@@ -1045,7 +1107,26 @@ void CGrpcGatewayModule::DrainCommandQueue() {
 			AppendCoordinatorTrace(
 				"dispatch begin kind=" + std::string(CommandKind(cmd))
 				+ " target=" + std::to_string(*target_id));
-			grpc::DispatchCommand(circuit, unit_ctx, cmd);
+			if (grpc::DispatchCommand(circuit, unit_ctx, cmd)) {
+				dispatch_event->set_status(
+					::highbar::v1::COMMAND_DISPATCH_APPLIED);
+				if (*target_id > 0) {
+					order_state_tracker_->MarkAccepted(
+						static_cast<std::uint32_t>(*target_id),
+						entry.batch_seq,
+						entry.client_command_id,
+						CurrentFrame(),
+						CommandKind(cmd));
+				}
+			} else {
+				dispatch_event->set_status(
+					::highbar::v1::COMMAND_DISPATCH_SKIPPED_UNSUPPORTED_ARM);
+				auto* issue = dispatch_event->mutable_issue();
+				issue->set_code(::highbar::v1::COMMAND_ARM_NOT_DISPATCHED);
+				issue->set_field_path("commands");
+				issue->set_detail("command arm was skipped by dispatcher");
+				issue->set_retry_hint(::highbar::v1::RETRY_WITH_FRESH_CAPABILITIES);
+			}
 			AppendCoordinatorTrace(
 				"dispatch end kind=" + std::string(CommandKind(cmd))
 				+ " target=" + std::to_string(*target_id));

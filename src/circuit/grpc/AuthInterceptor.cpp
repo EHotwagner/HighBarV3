@@ -23,14 +23,20 @@ constexpr const char* kTokenHeader = "x-highbar-ai-token";
 // request-snapshot.md §Handler behavior invariant 1). Hardcoded rather
 // than computed from the service descriptor because interceptors run
 // in the critical path of every RPC and a static std::array beats a
-// set/map lookup for 6 entries.
-constexpr std::array<const char*, 6> kTokenProtected = {
+// set/map lookup for this small fixed list.
+constexpr std::array<const char*, 12> kTokenProtected = {
 	"/highbar.v1.HighBarProxy/SubmitCommands",
+	"/highbar.v1.HighBarProxy/ValidateCommandBatch",
+	"/highbar.v1.HighBarProxy/GetCommandSchema",
+	"/highbar.v1.HighBarProxy/GetUnitCapabilities",
 	"/highbar.v1.HighBarProxy/InvokeCallback",
 	"/highbar.v1.HighBarProxy/Save",
 	"/highbar.v1.HighBarProxy/Load",
 	"/highbar.v1.HighBarProxy/GetRuntimeCounters",
 	"/highbar.v1.HighBarProxy/RequestSnapshot",
+	"/highbar.v1.HighBarAdmin/GetAdminCapabilities",
+	"/highbar.v1.HighBarAdmin/ValidateAdminAction",
+	"/highbar.v1.HighBarAdmin/ExecuteAdminAction",
 };
 
 }  // namespace

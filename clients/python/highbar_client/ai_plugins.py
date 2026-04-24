@@ -351,8 +351,6 @@ class Turtle1AI(BaseAIPlugin):
         self._observe_update(update)
         if not update.HasField("snapshot"):
             return ()
-        if not self.resolution_attempted:
-            self._resolve_defs(context)
         snapshot = update.snapshot
         frame = int(update.frame or snapshot.frame_number)
         if frame < self.last_build_frame + self.build_interval_frames:
@@ -360,6 +358,8 @@ class Turtle1AI(BaseAIPlugin):
         ready_units = [unit for unit in snapshot.own_units if self._is_ready(unit)]
         if not ready_units:
             return ()
+        if not self.resolution_attempted:
+            self._resolve_defs(context)
 
         static_map = (
             snapshot.static_map
@@ -432,7 +432,6 @@ class Turtle1AI(BaseAIPlugin):
             self.macro_pause_until_frame = 0
 
     def _resolve_defs(self, context: AIPluginContext) -> None:
-        self.resolution_attempted = True
         wanted = {
             name
             for names in self.unit_names.values()
@@ -440,11 +439,13 @@ class Turtle1AI(BaseAIPlugin):
             if name not in self.def_id_by_name
         }
         if not wanted:
+            self.resolution_attempted = True
             return
         try:
             self.def_id_by_name.update(context.resolve_unit_def_ids(wanted))
         except Exception:
             return
+        self.resolution_attempted = True
         self.name_by_def_id = {
             def_id: name for name, def_id in self.def_id_by_name.items()
         }

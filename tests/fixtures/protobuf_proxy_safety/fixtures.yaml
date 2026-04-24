@@ -1,0 +1,57 @@
+version: 1
+fixtures:
+  - fixture_id: command.empty_batch.strict
+    kind: command
+    mode: strict
+    expected_status: COMMAND_BATCH_REJECTED_INVALID
+    expected_issue_codes: [EMPTY_COMMAND]
+    expected_field_paths: [commands]
+    expected_retry_hints: [RETRY_NEVER]
+
+  - fixture_id: command.target_drift.strict
+    kind: command
+    mode: strict
+    expected_status: COMMAND_BATCH_REJECTED_INVALID
+    expected_issue_codes: [TARGET_DRIFT]
+    expected_field_paths: [commands[0].unit_id]
+    expected_retry_hints: [RETRY_NEVER]
+
+  - fixture_id: command.missing_correlation.strict
+    kind: command
+    mode: strict
+    expected_status: COMMAND_BATCH_REJECTED_INVALID
+    expected_issue_codes: [MISSING_CLIENT_COMMAND_ID]
+    expected_field_paths: [client_command_id]
+    expected_retry_hints: [RETRY_NEVER]
+
+  - fixture_id: command.missing_state_basis.strict
+    kind: command
+    mode: strict
+    expected_status: COMMAND_BATCH_REJECTED_STALE
+    expected_issue_codes: [MISSING_STATE_BASIS]
+    expected_field_paths: [based_on_frame]
+    expected_retry_hints: [RETRY_AFTER_NEXT_SNAPSHOT]
+
+  - fixture_id: command.queue_full.strict
+    kind: command
+    mode: strict
+    expected_status: COMMAND_BATCH_REJECTED_QUEUE_FULL
+    expected_issue_codes: [QUEUE_FULL]
+    expected_field_paths: [commands]
+    expected_retry_hints: [RETRY_AFTER_QUEUE_DRAINS]
+
+  - fixture_id: command.ai_channel_admin.strict
+    kind: command
+    mode: strict
+    expected_status: COMMAND_BATCH_REJECTED_INVALID
+    expected_issue_codes: [COMMAND_REQUIRES_ADMIN_CHANNEL]
+    expected_field_paths: [commands[0]]
+    expected_retry_hints: [RETRY_NEVER]
+
+  - fixture_id: admin.unauthorized.strict
+    kind: admin
+    mode: strict
+    expected_status: ADMIN_ACTION_REJECTED_PERMISSION_DENIED
+    expected_issue_codes: [ADMIN_PERMISSION_DENIED]
+    expected_field_paths: [authorization]
+    expected_retry_hints: [RETRY_NEVER]

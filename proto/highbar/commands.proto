@@ -612,4 +612,114 @@ message CommandBatch {
   // unless that command carries its own `options`. Useful for
   // "queued" (SHIFT_KEY) vs "immediate" batches.
   optional CommandOptions batch_options = 4;
+
+  // Client-owned correlation id. Strict validation requires it so
+  // retries, acks, dispatch deltas, and logs can be joined without
+  // relying solely on stream-local batch_seq.
+  optional uint64 client_command_id = 10;
+
+  // Snapshot basis observed by the client before constructing the
+  // batch. Strict validation rejects stale or missing basis values.
+  optional uint32 based_on_frame = 11;
+  optional uint64 based_on_state_seq = 12;
+
+  // Optional live-unit generation token. The gateway fills dispatch
+  // diagnostics with this when available; strict validators may reject
+  // stale generations once engine-thread generation tracking is wired.
+  UnitGeneration target_generation = 13;
+
+  // Caller intent when a new immediate command would replace an active
+  // order. Default is conservative: reject accidental replacement in
+  // strict mode.
+  CommandConflictPolicy conflict_policy = 14;
+}
+
+message UnitGeneration {
+  uint32 unit_id = 1;
+  uint64 generation = 2;
+}
+
+enum CommandConflictPolicy {
+  COMMAND_CONFLICT_POLICY_UNSPECIFIED = 0;
+  COMMAND_CONFLICT_REJECT_IF_BUSY = 1;
+  COMMAND_CONFLICT_QUEUE_AFTER_CURRENT = 2;
+  COMMAND_CONFLICT_REPLACE_CURRENT = 3;
+}
+
+enum ValidationMode {
+  VALIDATION_MODE_UNSPECIFIED = 0;
+  VALIDATION_MODE_COMPATIBILITY = 1;
+  VALIDATION_MODE_WARNING_ONLY = 2;
+  VALIDATION_MODE_STRICT = 3;
+}
+
+enum CommandBatchStatus {
+  COMMAND_BATCH_STATUS_UNSPECIFIED = 0;
+  COMMAND_BATCH_ACCEPTED = 1;
+  COMMAND_BATCH_REJECTED_INVALID = 2;
+  COMMAND_BATCH_REJECTED_QUEUE_FULL = 3;
+  COMMAND_BATCH_REJECTED_STALE = 4;
+  COMMAND_BATCH_REJECTED_CONFLICT = 5;
+  COMMAND_BATCH_ACCEPTED_WITH_WARNINGS = 6;
+}
+
+enum RetryHint {
+  RETRY_HINT_UNSPECIFIED = 0;
+  RETRY_NEVER = 1;
+  RETRY_AFTER_NEXT_SNAPSHOT = 2;
+  RETRY_AFTER_UNIT_IDLE = 3;
+  RETRY_AFTER_QUEUE_DRAINS = 4;
+  RETRY_WITH_FRESH_CAPABILITIES = 5;
+}
+
+enum CommandIssueCode {
+  COMMAND_ISSUE_CODE_UNSPECIFIED = 0;
+  EMPTY_COMMAND = 1;
+  TOO_MANY_COMMANDS = 2;
+  MISSING_COMMAND_INTENT = 3;
+  MULTIPLE_COMMAND_INTENTS = 4;
+  MISSING_TARGET_UNIT = 5;
+  TARGET_DRIFT = 6;
+  TARGET_UNIT_NOT_OWNED = 7;
+  TARGET_UNIT_DEAD = 8;
+  UNKNOWN_UNIT_DEF = 9;
+  BUILDER_CANNOT_BUILD_DEF = 10;
+  POSITION_NON_FINITE = 11;
+  POSITION_OUT_OF_MAP = 12;
+  INVALID_OPTION_BITS = 13;
+  INVALID_ENUM_VALUE = 14;
+  INVALID_TARGET_UNIT = 15;
+  INVALID_TARGET_FEATURE = 16;
+  QUEUE_FULL = 17;
+  STALE_OR_DUPLICATE_BATCH_SEQ = 18;
+  STALE_SNAPSHOT_EPOCH = 19;
+  STALE_UNIT_GENERATION = 20;
+  ORDER_CONFLICT = 21;
+  NON_QUEUE_REPLACES_ACTIVE_ORDER = 22;
+  COMMAND_ARM_NOT_DISPATCHED = 23;
+  COMMAND_REQUIRES_ADMIN_CHANNEL = 24;
+  LEGACY_AI_ADMIN_COMMAND_DISABLED = 25;
+  MISSING_CLIENT_COMMAND_ID = 26;
+  MISSING_STATE_BASIS = 27;
+}
+
+message CommandIssue {
+  CommandIssueCode code = 1;
+  uint32 command_index = 2;
+  string field_path = 3;
+  string detail = 4;
+  RetryHint retry_hint = 5;
+  uint64 batch_seq = 6;
+  uint64 client_command_id = 7;
+}
+
+message CommandBatchResult {
+  uint64 batch_seq = 1;
+  uint64 client_command_id = 2;
+  CommandBatchStatus status = 3;
+  repeated CommandIssue issues = 4;
+  uint32 accepted_command_count = 5;
+  uint32 queued_frame = 6;
+  ValidationMode mode = 7;
+  bool would_reject = 8;
 }

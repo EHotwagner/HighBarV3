@@ -5,6 +5,8 @@
 #include "grpc/HighBarService.h"
 #include "grpc/AuthInterceptor.h"
 #include "grpc/AuthToken.h"
+#include "grpc/AdminService.h"
+#include "grpc/CapabilityProvider.h"
 #include "grpc/CommandQueue.h"
 #include "grpc/CommandValidator.h"
 #include "grpc/Counters.h"
@@ -385,6 +387,8 @@ private:
 	// Pump thread: owns the send sequence end-to-end.
 	void PumpLoop() {
 		try {
+			std::uint64_t last_sent_seq = resume_from_seq_;
+
 			// --- 1. Initial payload: ring-replay vs fresh snapshot.
 			auto replay = resume_from_seq_ > 0
 				? svc_->ring_->GetFromSeq(resume_from_seq_)
@@ -395,7 +399,10 @@ private:
 				::highbar::v1::StateUpdate first;
 				{
 					std::shared_lock<std::shared_mutex> lock(*svc_->state_mutex_);
-					first.set_seq(svc_->ring_->HeadSeq() + 1);
+					// This snapshot is a synthetic baseline, not a ring entry.
+					// Use the current head so the next live ring update remains
+					// strictly greater from the client's point of view.
+					first.set_seq(svc_->ring_->HeadSeq());
 					first.set_frame(svc_->frames_since_bind_.load());
 					*first.mutable_snapshot() = svc_->snapshot_->Build();
 				}
@@ -403,6 +410,7 @@ private:
 					FinishWithStatus(CancelledOrFault());
 					return;
 				}
+				last_sent_seq = first.seq();
 			} else {
 				// Ring replay — every entry is already a serialized
 				// StateUpdate. Parse + Write one at a time so the
@@ -419,6 +427,7 @@ private:
 						FinishWithStatus(CancelledOrFault());
 						return;
 					}
+					last_sent_seq = u.seq();
 				}
 			}
 
@@ -449,10 +458,18 @@ private:
 						"live payload deserialize failed"));
 					return;
 				}
+				// The live slot is subscribed before baseline/replay so no
+				// updates are missed. That can queue payloads the stream has
+				// already sent through the fresh snapshot or replay path; drop
+				// them to preserve strict per-client monotonicity.
+				if (u.seq() <= last_sent_seq) {
+					continue;
+				}
 				if (!WriteAndWait(u)) {
 					FinishWithStatus(CancelledOrFault());
 					return;
 				}
+				last_sent_seq = u.seq();
 			}
 			FinishWithStatus(::grpc::Status::OK);
 		} catch (const std::exception& e) {
@@ -519,6 +536,137 @@ private:
 	std::condition_variable cv_;
 	bool op_done_ = false;
 	bool op_ok_ = false;
+};
+
+// --- ValidateCommandBatch / capabilities (unary, implemented) --------------
+
+class HighBarService::ValidateCommandBatchCallData final : public CallDataBase {
+public:
+	ValidateCommandBatchCallData(HighBarService* svc,
+	                             ::grpc::ServerCompletionQueue* cq)
+		: svc_(svc), cq_(cq), responder_(&ctx_) {
+		svc_->RequestValidateCommandBatch(&ctx_, &request_, &responder_,
+		                                  cq_, cq_, this);
+	}
+
+	void Proceed(bool ok) override {
+		switch (stage_) {
+		case Stage::kCreated:
+			if (!ok) { delete this; return; }
+			new ValidateCommandBatchCallData(svc_, cq_);
+			if (svc_->validator_ == nullptr) {
+				Finish(::grpc::Status(::grpc::StatusCode::UNAVAILABLE,
+				                      "command validator not wired"));
+				return;
+			}
+			response_ = svc_->validator_->ValidateBatch(request_).batch_result;
+			Finish(::grpc::Status::OK);
+			return;
+		case Stage::kFinishing:
+		default:
+			delete this;
+			return;
+		}
+	}
+
+private:
+	enum class Stage { kCreated, kFinishing };
+	void Finish(const ::grpc::Status& status) {
+		stage_ = Stage::kFinishing;
+		responder_.Finish(response_, status, this);
+	}
+
+	HighBarService* svc_;
+	::grpc::ServerCompletionQueue* cq_;
+	::grpc::ServerContext ctx_;
+	::highbar::v1::CommandBatch request_;
+	::highbar::v1::CommandBatchResult response_;
+	::grpc::ServerAsyncResponseWriter<::highbar::v1::CommandBatchResult> responder_;
+	Stage stage_ = Stage::kCreated;
+};
+
+class HighBarService::GetCommandSchemaCallData final : public CallDataBase {
+public:
+	GetCommandSchemaCallData(HighBarService* svc,
+	                         ::grpc::ServerCompletionQueue* cq)
+		: svc_(svc), cq_(cq), responder_(&ctx_) {
+		svc_->RequestGetCommandSchema(&ctx_, &request_, &responder_,
+		                              cq_, cq_, this);
+	}
+
+	void Proceed(bool ok) override {
+		switch (stage_) {
+		case Stage::kCreated: {
+			if (!ok) { delete this; return; }
+			new GetCommandSchemaCallData(svc_, cq_);
+			CapabilityProvider provider(svc_->ai_, svc_->command_queue_);
+			response_ = provider.CommandSchema();
+			Finish(::grpc::Status::OK);
+			return;
+		}
+		case Stage::kFinishing:
+		default:
+			delete this;
+			return;
+		}
+	}
+
+private:
+	enum class Stage { kCreated, kFinishing };
+	void Finish(const ::grpc::Status& status) {
+		stage_ = Stage::kFinishing;
+		responder_.Finish(response_, status, this);
+	}
+
+	HighBarService* svc_;
+	::grpc::ServerCompletionQueue* cq_;
+	::grpc::ServerContext ctx_;
+	::highbar::v1::CommandSchemaRequest request_;
+	::highbar::v1::CommandSchemaResponse response_;
+	::grpc::ServerAsyncResponseWriter<::highbar::v1::CommandSchemaResponse> responder_;
+	Stage stage_ = Stage::kCreated;
+};
+
+class HighBarService::GetUnitCapabilitiesCallData final : public CallDataBase {
+public:
+	GetUnitCapabilitiesCallData(HighBarService* svc,
+	                            ::grpc::ServerCompletionQueue* cq)
+		: svc_(svc), cq_(cq), responder_(&ctx_) {
+		svc_->RequestGetUnitCapabilities(&ctx_, &request_, &responder_,
+		                                 cq_, cq_, this);
+	}
+
+	void Proceed(bool ok) override {
+		switch (stage_) {
+		case Stage::kCreated: {
+			if (!ok) { delete this; return; }
+			new GetUnitCapabilitiesCallData(svc_, cq_);
+			CapabilityProvider provider(svc_->ai_, svc_->command_queue_);
+			response_ = provider.UnitCapabilities(request_);
+			Finish(::grpc::Status::OK);
+			return;
+		}
+		case Stage::kFinishing:
+		default:
+			delete this;
+			return;
+		}
+	}
+
+private:
+	enum class Stage { kCreated, kFinishing };
+	void Finish(const ::grpc::Status& status) {
+		stage_ = Stage::kFinishing;
+		responder_.Finish(response_, status, this);
+	}
+
+	HighBarService* svc_;
+	::grpc::ServerCompletionQueue* cq_;
+	::grpc::ServerContext ctx_;
+	::highbar::v1::UnitCapabilitiesRequest request_;
+	::highbar::v1::UnitCapabilitiesResponse response_;
+	::grpc::ServerAsyncResponseWriter<::highbar::v1::UnitCapabilitiesResponse> responder_;
+	Stage stage_ = Stage::kCreated;
 };
 
 // --- SubmitCommands (client-streaming, implemented — T058/T059) ------------
@@ -597,11 +745,14 @@ private:
 			// Stream EOF — client finished cleanly. ACK with running
 			// counters. Finish() transitions to kFinishing; ~this
 			// releases the AI slot.
-			::highbar::v1::CommandAck ack;
-			ack.set_last_accepted_batch_seq(last_accepted_batch_seq_);
-			ack.set_batches_accepted(batches_accepted_);
-			ack.set_batches_rejected_invalid(batches_rejected_invalid_);
-			ack.set_batches_rejected_full(batches_rejected_full_);
+		::highbar::v1::CommandAck ack;
+		ack.set_last_accepted_batch_seq(last_accepted_batch_seq_);
+		ack.set_batches_accepted(batches_accepted_);
+		ack.set_batches_rejected_invalid(batches_rejected_invalid_);
+		ack.set_batches_rejected_full(batches_rejected_full_);
+		for (const auto& result : results_) {
+			*ack.add_results() = result;
+		}
 
 			stage_ = Stage::kFinishing;
 			reader_.Finish(ack, ::grpc::Status::OK, this);
@@ -609,9 +760,39 @@ private:
 		}
 
 		// Validate + enqueue.
+		if (incoming_.batch_seq() <= last_seen_batch_seq_) {
+			++batches_rejected_invalid_;
+			::highbar::v1::CommandBatchResult stale;
+			stale.set_batch_seq(incoming_.batch_seq());
+			if (incoming_.has_client_command_id()) {
+				stale.set_client_command_id(incoming_.client_command_id());
+			}
+			stale.set_status(::highbar::v1::COMMAND_BATCH_REJECTED_STALE);
+			stale.set_mode(::highbar::v1::VALIDATION_MODE_STRICT);
+			auto* issue = stale.add_issues();
+			issue->set_code(::highbar::v1::STALE_OR_DUPLICATE_BATCH_SEQ);
+			issue->set_field_path("batch_seq");
+			issue->set_detail("batch_seq must increase within a SubmitCommands stream");
+			issue->set_retry_hint(::highbar::v1::RETRY_AFTER_NEXT_SNAPSHOT);
+			issue->set_batch_seq(incoming_.batch_seq());
+			if (incoming_.has_client_command_id()) {
+				issue->set_client_command_id(incoming_.client_command_id());
+			}
+			results_.push_back(stale);
+			if (svc_->counters_ != nullptr) {
+				svc_->counters_->
+					command_submissions_rejected_invalid_argument
+					.fetch_add(1, std::memory_order_relaxed);
+			}
+			Finish(::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT,
+			                      "duplicate or stale batch_seq"));
+			return;
+		}
+
 		const auto result = svc_->validator_->ValidateBatch(incoming_);
 		if (!result.ok) {
 			++batches_rejected_invalid_;
+			results_.push_back(result.batch_result);
 			if (svc_->counters_ != nullptr) {
 				svc_->counters_->
 					command_submissions_rejected_invalid_argument
@@ -622,32 +803,50 @@ private:
 			return;
 		}
 
-		// Push every command from the batch onto the MPSC queue. On
-		// overflow we close with RESOURCE_EXHAUSTED *without* dropping
-		// or reordering already-queued commands (FR-012a): the queue
-		// is append-only, so stopping mid-batch leaves earlier entries
-		// intact.
-		for (const auto& cmd : incoming_.commands()) {
+		std::vector<QueuedCommand> queued;
+		queued.reserve(static_cast<std::size_t>(incoming_.commands_size()));
+		for (int i = 0; i < incoming_.commands_size(); ++i) {
+			const auto& cmd = incoming_.commands(i);
 			QueuedCommand q;
 			q.session_id = session_id_;
+			q.batch_seq = incoming_.batch_seq();
+			q.client_command_id =
+				incoming_.has_client_command_id() ? incoming_.client_command_id() : 0;
+			q.command_index = static_cast<std::uint32_t>(i);
 			q.authoritative_target_unit_id =
 				static_cast<std::int32_t>(incoming_.target_unit_id());
 			q.command = cmd;
-			if (!svc_->command_queue_->TryPush(std::move(q))) {
-				++batches_rejected_full_;
-				if (svc_->counters_ != nullptr) {
-					svc_->counters_->
-						command_submissions_rejected_resource_exhausted
-						.fetch_add(1, std::memory_order_relaxed);
-				}
-				Finish(::grpc::Status(::grpc::StatusCode::RESOURCE_EXHAUSTED,
-				                      "command queue full"));
-				return;
+			queued.push_back(std::move(q));
+		}
+		if (!svc_->command_queue_->TryPushBatch(std::move(queued))) {
+			++batches_rejected_full_;
+			auto full_result = result.batch_result;
+			full_result.set_status(::highbar::v1::COMMAND_BATCH_REJECTED_QUEUE_FULL);
+			full_result.set_accepted_command_count(0);
+			auto* issue = full_result.add_issues();
+			issue->set_code(::highbar::v1::QUEUE_FULL);
+			issue->set_field_path("commands");
+			issue->set_detail("command queue full");
+			issue->set_retry_hint(::highbar::v1::RETRY_AFTER_QUEUE_DRAINS);
+			issue->set_batch_seq(incoming_.batch_seq());
+			if (incoming_.has_client_command_id()) {
+				issue->set_client_command_id(incoming_.client_command_id());
 			}
+			results_.push_back(full_result);
+			if (svc_->counters_ != nullptr) {
+				svc_->counters_->
+					command_submissions_rejected_resource_exhausted
+					.fetch_add(1, std::memory_order_relaxed);
+			}
+			Finish(::grpc::Status(::grpc::StatusCode::RESOURCE_EXHAUSTED,
+			                      "command queue full"));
+			return;
 		}
 
 		++batches_accepted_;
 		last_accepted_batch_seq_ = incoming_.batch_seq();
+		last_seen_batch_seq_ = incoming_.batch_seq();
+		results_.push_back(result.batch_result);
 
 		// Next read — proto requires the same storage to be reused.
 		incoming_.Clear();
@@ -678,9 +877,11 @@ private:
 	bool ai_slot_claimed_ = false;
 	std::string session_id_;
 	std::uint64_t last_accepted_batch_seq_ = 0;
+	std::uint64_t last_seen_batch_seq_ = 0;
 	std::uint64_t batches_accepted_ = 0;
 	std::uint64_t batches_rejected_invalid_ = 0;
 	std::uint64_t batches_rejected_full_ = 0;
+	std::vector<::highbar::v1::CommandBatchResult> results_;
 };
 
 // --- InvokeCallback / Save / Load (unary) ----------------------------------
@@ -920,6 +1121,9 @@ void HighBarService::Bind(const TransportEndpoint& endpoint,
 	builder.experimental().SetInterceptorCreators(std::move(factories));
 
 	builder.RegisterService(this);
+	if (admin_service_ != nullptr) {
+		builder.RegisterService(admin_service_);
+	}
 	cq_ = builder.AddCompletionQueue();
 	server_ = builder.BuildAndStart();
 	if (server_ == nullptr) {
@@ -932,11 +1136,17 @@ void HighBarService::Bind(const TransportEndpoint& endpoint,
 	new HelloCallData(this, cq_.get());
 	new GetRuntimeCountersCallData(this, cq_.get());
 	new StreamStateCallData(this, cq_.get());
+	new ValidateCommandBatchCallData(this, cq_.get());
+	new GetCommandSchemaCallData(this, cq_.get());
+	new GetUnitCapabilitiesCallData(this, cq_.get());
 	new SubmitCommandsCallData(this, cq_.get());
 	new InvokeCallbackCallData(this, cq_.get());
 	new SaveCallData(this, cq_.get());
 	new LoadCallData(this, cq_.get());
 	new RequestSnapshotCallData(this, cq_.get());  // 003-snapshot-arm-coverage
+	if (admin_service_ != nullptr) {
+		admin_service_->Start(cq_.get());
+	}
 
 	// One worker thread for Phase 2. US1's 4-observer + AI pressure
 	// will require 2-4; fine to scale here when needed.
@@ -1033,6 +1243,10 @@ void HighBarService::SetUs2Handles(CommandQueue* queue) {
 	if (validator_ == nullptr && ai_ != nullptr) {
 		validator_ = std::make_unique<CommandValidator>(ai_);
 	}
+}
+
+void HighBarService::SetAdminService(AdminService* admin_service) {
+	admin_service_ = admin_service;
 }
 
 void HighBarService::SetSnapshotHandle(::circuit::CGrpcGatewayModule* module) {

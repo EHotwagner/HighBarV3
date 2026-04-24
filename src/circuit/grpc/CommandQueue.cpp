@@ -28,6 +28,22 @@ bool CommandQueue::TryPush(QueuedCommand cmd) {
 	return true;
 }
 
+bool CommandQueue::TryPushBatch(std::vector<QueuedCommand> cmds) {
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (cmds.size() > capacity_ - queue_.size()) {
+		return false;
+	}
+	for (auto& cmd : cmds) {
+		queue_.push(std::move(cmd));
+	}
+	if (counters_ != nullptr) {
+		counters_->command_queue_depth.store(
+			static_cast<std::uint32_t>(queue_.size()),
+			std::memory_order_relaxed);
+	}
+	return true;
+}
+
 std::size_t CommandQueue::Drain(std::vector<QueuedCommand>* out,
                                 std::size_t max) {
 	if (out == nullptr) return 0;
@@ -50,6 +66,11 @@ std::size_t CommandQueue::Drain(std::vector<QueuedCommand>* out,
 std::size_t CommandQueue::Depth() const {
 	std::lock_guard<std::mutex> lock(mutex_);
 	return queue_.size();
+}
+
+std::size_t CommandQueue::AvailableCapacity() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return capacity_ - queue_.size();
 }
 
 }  // namespace circuit::grpc

@@ -42,6 +42,10 @@ MPSC `CommandQueue`, and the engine thread drains at the top of each
 | `CommandQueue.{h,cpp}` | MPSC drop-off, engine-thread drain. |
 | `CommandValidator.{h,cpp}` | Worker-thread argument validation. |
 | `CommandDispatch.{h,cpp}` | Engine-thread `AICommand → CCircuitUnit::Cmd*`. |
+| `CapabilityProvider.{h,cpp}` | Schema/unit command capability discovery. |
+| `OrderStateTracker.{h,cpp}` | Engine-thread per-unit order conflict state. |
+| `AdminController.{h,cpp}` | Admin validation, leases, and audit state. |
+| `AdminService.{h,cpp}` | Sibling async `HighBarAdmin` RPC service. |
 | `AuthToken.{h,cpp}` | 256-bit token + atomic-write file. |
 | `AuthInterceptor.{h,cpp}` | Per-RPC token gate. |
 | `Config.{h,cpp}` | `grpc.json` parse + UDS path resolution. |
@@ -51,3 +55,19 @@ MPSC `CommandQueue`, and the engine thread drains at the top of each
 
 See also: [`docs/architecture.md`](../../../docs/architecture.md) and
 [`specs/001-grpc-gateway/`](../../../specs/001-grpc-gateway/).
+
+## Protobuf Proxy Safety
+
+`CommandValidator` now returns `CommandBatchResult` diagnostics with
+stable issue codes, retry hints, field paths, batch sequence, and
+client correlation ids. `SubmitCommands` keeps the legacy aggregate
+`CommandAck` counters, but also appends the per-batch results so
+generated clients can make deterministic retry decisions.
+
+`ValidateCommandBatch` uses the same validator without mutating the
+queue or simulation state. `GetCommandSchema` and
+`GetUnitCapabilities` are backed by `CapabilityProvider`, including
+supported command arms, option masks, queue state, map limits, and
+feature flags. `HighBarAdmin` is registered as a separate service and
+uses `AdminController` for role checks, dry-run validation, execution
+results, leases, and audit records.

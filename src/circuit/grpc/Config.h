@@ -33,6 +33,18 @@ struct SnapshotTickSettings {
 	std::uint32_t snapshot_max_units      = 1000;
 };
 
+struct CommandValidationConfig {
+	std::string mode = "compatibility";  // compatibility | warning-only | strict
+	bool strict = false;
+	bool warning_only = false;
+	bool allow_legacy_ai_pause = true;
+	bool allow_legacy_ai_cheats = true;
+	bool reject_unsupported_arms = false;
+	bool reject_order_conflicts = false;
+	std::uint32_t max_state_age_frames = 300;
+	std::uint32_t max_batch_commands = 64;
+};
+
 struct TransportEndpoint {
 	Transport transport = Transport::kUds;
 
@@ -67,6 +79,8 @@ struct TransportEndpoint {
 	// 003-snapshot-arm-coverage — periodic snapshot tick config. See
 	// SnapshotTickSettings for defaults + validation.
 	SnapshotTickSettings snapshot_tick;
+
+	CommandValidationConfig command_validation;
 };
 
 // Parse data/config/grpc.json relative to the plugin's data root.

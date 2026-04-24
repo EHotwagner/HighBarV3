@@ -28,12 +28,16 @@ namespace {
 // ======================================================================
 // Source-of-truth list per contracts/README.md + FR-014 + Q1.
 // ======================================================================
-constexpr std::array<const char*, 5> kExpectedProtected = {
+constexpr std::array<const char*, 9> kExpectedProtected = {
 	"/highbar.v1.HighBarProxy/SubmitCommands",
+	"/highbar.v1.HighBarProxy/ValidateCommandBatch",
+	"/highbar.v1.HighBarProxy/GetCommandSchema",
+	"/highbar.v1.HighBarProxy/GetUnitCapabilities",
 	"/highbar.v1.HighBarProxy/InvokeCallback",
 	"/highbar.v1.HighBarProxy/Save",
 	"/highbar.v1.HighBarProxy/Load",
 	"/highbar.v1.HighBarProxy/GetRuntimeCounters",
+	"/highbar.v1.HighBarProxy/RequestSnapshot",
 };
 
 // The AuthInterceptor's RequiresToken is private; for this unit test

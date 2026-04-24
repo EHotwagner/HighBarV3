@@ -93,3 +93,31 @@ module Session =
                 Role = role
             }
         }
+
+    let getCommandSchema (channel: GrpcChannel)
+                         (metadata: Metadata)
+                         (ct: CancellationToken)
+                         : Async<CommandSchemaResponse> =
+        async {
+            let client = HighBarProxy.HighBarProxyClient(channel)
+            let call = client.GetCommandSchemaAsync(
+                           CommandSchemaRequest(),
+                           metadata,
+                           cancellationToken = ct)
+            return! call.ResponseAsync |> Async.AwaitTask
+        }
+
+    let getUnitCapabilities (channel: GrpcChannel)
+                            (metadata: Metadata)
+                            (unitId: uint32)
+                            (ct: CancellationToken)
+                            : Async<UnitCapabilitiesResponse> =
+        async {
+            let client = HighBarProxy.HighBarProxyClient(channel)
+            let req = UnitCapabilitiesRequest(UnitId = unitId)
+            let call = client.GetUnitCapabilitiesAsync(
+                           req,
+                           metadata,
+                           cancellationToken = ct)
+            return! call.ResponseAsync |> Async.AwaitTask
+        }

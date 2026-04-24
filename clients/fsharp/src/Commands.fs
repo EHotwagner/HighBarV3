@@ -139,6 +139,31 @@ module Commands =
             b.Commands.Add(toProto (int32 targetUnitId) opts ord)
         b
 
+    /// Build a strict-mode-ready CommandBatch with explicit correlation
+    /// and snapshot basis fields.
+    let batchWithBasis (targetUnitId: uint32)
+                       (batchSeq: uint64)
+                       (clientCommandId: uint64)
+                       (basedOnFrame: uint32)
+                       (basedOnStateSeq: uint64)
+                       (conflictPolicy: CommandConflictPolicy)
+                       (opts: Opts)
+                       (orders: Order list)
+                       : CommandBatch =
+        let b = batch targetUnitId batchSeq opts orders
+        b.ClientCommandId <- clientCommandId
+        b.BasedOnFrame <- basedOnFrame
+        b.BasedOnStateSeq <- basedOnStateSeq
+        b.ConflictPolicy <- conflictPolicy
+        b
+
+    let issueSummary (result: CommandBatchResult) : (string * uint32 * string * string) list =
+        result.Issues
+        |> Seq.map (fun issue ->
+            (issue.Code.ToString(), issue.CommandIndex,
+             issue.FieldPath, issue.RetryHint.ToString()))
+        |> Seq.toList
+
     /// SubmitCommands session wrapper. Opens the client-streaming RPC,
     /// writes each batch, and surfaces the CommandAck on completion.
     /// The AI token MUST have been added to `metadata` by the caller —
@@ -178,4 +203,15 @@ module Commands =
             do! session.SendAsync(b) |> Async.AwaitTask
             let! ack = session.CompleteAsync() |> Async.AwaitTask
             return ack
+        }
+
+    let validateBatch (channel: GrpcChannel)
+                      (metadata: Metadata)
+                      (b: CommandBatch)
+                      (ct: CancellationToken)
+                      : Async<CommandBatchResult> =
+        async {
+            let client = HighBarProxy.HighBarProxyClient(channel)
+            let call = client.ValidateCommandBatchAsync(b, metadata, cancellationToken = ct)
+            return! call.ResponseAsync |> Async.AwaitTask
         }

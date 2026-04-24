@@ -28,6 +28,11 @@ public:
 	std::atomic<std::uint32_t> command_queue_depth{0};
 	std::atomic<std::uint64_t> command_submissions_rejected_resource_exhausted{0};
 	std::atomic<std::uint64_t> command_submissions_rejected_invalid_argument{0};
+	std::atomic<std::uint64_t> command_submissions_warning_only_would_reject{0};
+	std::atomic<std::uint64_t> command_dispatch_failures{0};
+	std::atomic<std::uint64_t> admin_actions_accepted{0};
+	std::atomic<std::uint64_t> admin_actions_rejected{0};
+	std::atomic<std::uint64_t> admin_audit_events{0};
 	std::atomic<std::uint32_t> frames_since_bind{0};
 
 	// --- Frame-flush p99 rolling bucket ------------------------------

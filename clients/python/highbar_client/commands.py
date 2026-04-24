@@ -12,15 +12,12 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Optional
 
-import grpc
-
 from .highbar import (  # type: ignore
     commands_pb2,
     common_pb2,
     service_pb2,
-    service_pb2_grpc,
 )
-from .session import TOKEN_HEADER
+TOKEN_HEADER = "x-highbar-ai-token"
 
 
 def vec3(x: float, y: float, z: float) -> common_pb2.Vector3:
@@ -184,15 +181,41 @@ def batch(
     batch_seq: int,
     orders: Iterable[Order],
     opts: OptionBits = OptionBits.NONE,
+    client_command_id: int | None = None,
+    based_on_frame: int | None = None,
+    based_on_state_seq: int | None = None,
+    conflict_policy: int | None = None,
 ) -> commands_pb2.CommandBatch:
     b = commands_pb2.CommandBatch(batch_seq=batch_seq, target_unit_id=target_unit)
+    if client_command_id is not None:
+        b.client_command_id = client_command_id
+    if based_on_frame is not None:
+        b.based_on_frame = based_on_frame
+    if based_on_state_seq is not None:
+        b.based_on_state_seq = based_on_state_seq
+    if conflict_policy is not None:
+        b.conflict_policy = conflict_policy
     for ord_ in orders:
         b.commands.append(_to_proto(ord_, target_unit, opts))
     return b
 
 
+def issue_summary(
+    result: commands_pb2.CommandBatchResult,
+) -> list[tuple[str, int, str, str]]:
+    return [
+        (
+            commands_pb2.CommandIssueCode.Name(issue.code),
+            issue.command_index,
+            issue.field_path,
+            commands_pb2.RetryHint.Name(issue.retry_hint),
+        )
+        for issue in result.issues
+    ]
+
+
 def submit_one(
-    channel_: grpc.Channel,
+    channel_,
     token: str,
     batch_: commands_pb2.CommandBatch,
     timeout: Optional[float] = None,
@@ -202,6 +225,21 @@ def submit_one(
     def _batches() -> Iterator[commands_pb2.CommandBatch]:
         yield batch_
 
+    from .highbar import service_pb2_grpc  # type: ignore
+
     stub = service_pb2_grpc.HighBarProxyStub(channel_)
     metadata = [(TOKEN_HEADER, token)]
     return stub.SubmitCommands(_batches(), metadata=metadata, timeout=timeout)
+
+
+def validate_batch(
+    channel_,
+    token: str,
+    batch_: commands_pb2.CommandBatch,
+    timeout: Optional[float] = None,
+) -> commands_pb2.CommandBatchResult:
+    from .highbar import service_pb2_grpc  # type: ignore
+
+    stub = service_pb2_grpc.HighBarProxyStub(channel_)
+    metadata = [(TOKEN_HEADER, token)]
+    return stub.ValidateCommandBatch(batch_, metadata=metadata, timeout=timeout)

@@ -111,4 +111,21 @@ bool AuthToken::ConstantTimeEquals(const std::string& a, const std::string& b) {
 	return diff == 0;
 }
 
+::highbar::v1::AdminRole AuthToken::ParseAdminRole(const std::string& role) {
+	if (role == "operator") return ::highbar::v1::ADMIN_ROLE_OPERATOR;
+	if (role == "admin") return ::highbar::v1::ADMIN_ROLE_ADMIN;
+	if (role == "test-harness" || role == "test_harness") {
+		return ::highbar::v1::ADMIN_ROLE_TEST_HARNESS;
+	}
+	if (role == "ai") return ::highbar::v1::ADMIN_ROLE_AI;
+	if (role == "observer") return ::highbar::v1::ADMIN_ROLE_OBSERVER;
+	return ::highbar::v1::ADMIN_ROLE_UNSPECIFIED;
+}
+
+bool AuthToken::IsPrivilegedAdminRole(::highbar::v1::AdminRole role) {
+	return role == ::highbar::v1::ADMIN_ROLE_OPERATOR
+	    || role == ::highbar::v1::ADMIN_ROLE_ADMIN
+	    || role == ::highbar::v1::ADMIN_ROLE_TEST_HARNESS;
+}
+
 }  // namespace circuit::grpc

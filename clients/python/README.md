@@ -94,6 +94,25 @@ ack = stub.SubmitCommands(iter([batch]))
 print('ack', ack.batches_accepted)
 ```
 
+Strict-mode-ready command batches should set `client_command_id`,
+`based_on_frame`, `based_on_state_seq`, and `conflict_policy`. The
+helper `highbar_client.commands.batch(...)` accepts those optional
+fields, and `commands.issue_summary(result)` turns structured
+diagnostics into `(code, command_index, field_path, retry_hint)` tuples.
+
+Use `ValidateCommandBatch` before `SubmitCommands` when a generated
+client wants a dry run with no queue or simulation mutation. Capability
+discovery is available through `GetCommandSchema` and
+`GetUnitCapabilities`; the returned feature flags, supported arms,
+option masks, queue depth/capacity, and unit legal arms are the stable
+inputs for generated clients.
+
+Admin controls are intentionally separate from AI commands. Use
+`highbar_client.admin` helpers with the normal token plus run-scoped
+admin metadata (`x-highbar-admin-role` and `x-highbar-client-id`) for
+`GetAdminCapabilities`, `ValidateAdminAction`, and
+`ExecuteAdminAction`.
+
 See `specs/002-live-headless-e2e/examples/{observer,ai_client}.py`
 for runnable end-to-end demos.
 
@@ -142,6 +161,28 @@ hb-ai-runner-py \
 builder's runtime build options, then builds economy, defenses,
 factories, tech, and a mixed army near its own start area. It does not
 emit enemy-directed move, fight, patrol, or attack commands.
+
+## Live topology helper
+
+For local integration runs that need the host, optional BNV viewer, and
+Python AI policy wired together, use `highbar_client.live_topology`
+instead of reconstructing the launch shell each time:
+
+```python
+from dataclasses import replace
+
+from highbar_client.live_topology import run_topology, turtlevsnull
+
+result = run_topology(replace(turtlevsnull, duration_seconds=20.0))
+print(result.report_path, result.updates, result.batches_submitted)
+```
+
+`turtlevsnull` is a saved `TopologyOptions` preset for `turtle1` versus
+`NullAI` with a BNV viewer. The helper writes generated startscripts,
+logs, and `report.md` under the preset's `run_dir`, then cleans up the
+host/viewer processes by default. Override fields with
+`dataclasses.replace(...)` for different ports, run durations, plugin
+artifacts, engine paths, or viewer settings.
 
 Load a custom policy with `module:factory`:
 

@@ -163,6 +163,54 @@ TransportEndpoint LoadTransportConfig(CCircuitAI* ai) {
 			cfg.snapshot_tick.snapshot_max_units = v;
 		}
 	}
+	if (root.isMember("command_validation")) {
+		const Json::Value& cv = root["command_validation"];
+		if (cv.isMember("mode")) {
+			const std::string mode = cv["mode"].asString();
+			if (mode != "compatibility" && mode != "warning-only"
+			    && mode != "strict") {
+				throw std::runtime_error(
+					"grpc.json: command_validation.mode must be compatibility, warning-only, or strict");
+			}
+			cfg.command_validation.mode = mode;
+			cfg.command_validation.warning_only = (mode == "warning-only");
+			cfg.command_validation.strict = (mode == "strict");
+		}
+		if (cv.isMember("strict")) {
+			cfg.command_validation.strict = cv["strict"].asBool();
+		}
+		if (cv.isMember("warning_only")) {
+			cfg.command_validation.warning_only = cv["warning_only"].asBool();
+		}
+		if (cv.isMember("allow_legacy_ai_pause")) {
+			cfg.command_validation.allow_legacy_ai_pause =
+				cv["allow_legacy_ai_pause"].asBool();
+		}
+		if (cv.isMember("allow_legacy_ai_cheats")) {
+			cfg.command_validation.allow_legacy_ai_cheats =
+				cv["allow_legacy_ai_cheats"].asBool();
+		}
+		if (cv.isMember("reject_unsupported_arms")) {
+			cfg.command_validation.reject_unsupported_arms =
+				cv["reject_unsupported_arms"].asBool();
+		}
+		if (cv.isMember("reject_order_conflicts")) {
+			cfg.command_validation.reject_order_conflicts =
+				cv["reject_order_conflicts"].asBool();
+		}
+		if (cv.isMember("max_state_age_frames")) {
+			cfg.command_validation.max_state_age_frames =
+				cv["max_state_age_frames"].asUInt();
+		}
+		if (cv.isMember("max_batch_commands")) {
+			const auto v = cv["max_batch_commands"].asUInt();
+			if (v == 0) {
+				throw std::runtime_error(
+					"grpc.json: command_validation.max_batch_commands must be > 0");
+			}
+			cfg.command_validation.max_batch_commands = v;
+		}
+	}
 	return cfg;
 }
 

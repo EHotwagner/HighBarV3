@@ -66,6 +66,21 @@ class HighBarProxyStub(object):
                 request_serializer=highbar_dot_commands__pb2.CommandBatch.SerializeToString,
                 response_deserializer=highbar_dot_service__pb2.CommandAck.FromString,
                 _registered_method=True)
+        self.ValidateCommandBatch = channel.unary_unary(
+                '/highbar.v1.HighBarProxy/ValidateCommandBatch',
+                request_serializer=highbar_dot_commands__pb2.CommandBatch.SerializeToString,
+                response_deserializer=highbar_dot_commands__pb2.CommandBatchResult.FromString,
+                _registered_method=True)
+        self.GetCommandSchema = channel.unary_unary(
+                '/highbar.v1.HighBarProxy/GetCommandSchema',
+                request_serializer=highbar_dot_service__pb2.CommandSchemaRequest.SerializeToString,
+                response_deserializer=highbar_dot_service__pb2.CommandSchemaResponse.FromString,
+                _registered_method=True)
+        self.GetUnitCapabilities = channel.unary_unary(
+                '/highbar.v1.HighBarProxy/GetUnitCapabilities',
+                request_serializer=highbar_dot_service__pb2.UnitCapabilitiesRequest.SerializeToString,
+                response_deserializer=highbar_dot_service__pb2.UnitCapabilitiesResponse.FromString,
+                _registered_method=True)
         self.InvokeCallback = channel.unary_unary(
                 '/highbar.v1.HighBarProxy/InvokeCallback',
                 request_serializer=highbar_dot_callbacks__pb2.CallbackRequest.SerializeToString,
@@ -131,6 +146,29 @@ class HighBarProxyServicer(object):
     def SubmitCommands(self, request_iterator, context):
         """Client-streaming command submission. AI role only. Bounded queue
         — overflow returns RESOURCE_EXHAUSTED synchronously (FR-012a).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ValidateCommandBatch(self, request, context):
+        """Dry-run validation for generated clients. Runs the same validator
+        as SubmitCommands without enqueueing, dispatching, or mutating
+        simulation state.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetCommandSchema(self, request, context):
+        """Schema-level command capability discovery for generated clients.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetUnitCapabilities(self, request, context):
+        """Unit-specific command capability discovery.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -208,6 +246,21 @@ def add_HighBarProxyServicer_to_server(servicer, server):
                     servicer.SubmitCommands,
                     request_deserializer=highbar_dot_commands__pb2.CommandBatch.FromString,
                     response_serializer=highbar_dot_service__pb2.CommandAck.SerializeToString,
+            ),
+            'ValidateCommandBatch': grpc.unary_unary_rpc_method_handler(
+                    servicer.ValidateCommandBatch,
+                    request_deserializer=highbar_dot_commands__pb2.CommandBatch.FromString,
+                    response_serializer=highbar_dot_commands__pb2.CommandBatchResult.SerializeToString,
+            ),
+            'GetCommandSchema': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetCommandSchema,
+                    request_deserializer=highbar_dot_service__pb2.CommandSchemaRequest.FromString,
+                    response_serializer=highbar_dot_service__pb2.CommandSchemaResponse.SerializeToString,
+            ),
+            'GetUnitCapabilities': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetUnitCapabilities,
+                    request_deserializer=highbar_dot_service__pb2.UnitCapabilitiesRequest.FromString,
+                    response_serializer=highbar_dot_service__pb2.UnitCapabilitiesResponse.SerializeToString,
             ),
             'InvokeCallback': grpc.unary_unary_rpc_method_handler(
                     servicer.InvokeCallback,
@@ -330,6 +383,87 @@ class HighBarProxy(object):
             '/highbar.v1.HighBarProxy/SubmitCommands',
             highbar_dot_commands__pb2.CommandBatch.SerializeToString,
             highbar_dot_service__pb2.CommandAck.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ValidateCommandBatch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/highbar.v1.HighBarProxy/ValidateCommandBatch',
+            highbar_dot_commands__pb2.CommandBatch.SerializeToString,
+            highbar_dot_commands__pb2.CommandBatchResult.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetCommandSchema(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/highbar.v1.HighBarProxy/GetCommandSchema',
+            highbar_dot_service__pb2.CommandSchemaRequest.SerializeToString,
+            highbar_dot_service__pb2.CommandSchemaResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetUnitCapabilities(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/highbar.v1.HighBarProxy/GetUnitCapabilities',
+            highbar_dot_service__pb2.UnitCapabilitiesRequest.SerializeToString,
+            highbar_dot_service__pb2.UnitCapabilitiesResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -465,6 +599,164 @@ class HighBarProxy(object):
             '/highbar.v1.HighBarProxy/RequestSnapshot',
             highbar_dot_service__pb2.RequestSnapshotRequest.SerializeToString,
             highbar_dot_service__pb2.RequestSnapshotResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class HighBarAdminStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.GetAdminCapabilities = channel.unary_unary(
+                '/highbar.v1.HighBarAdmin/GetAdminCapabilities',
+                request_serializer=highbar_dot_service__pb2.AdminCapabilitiesRequest.SerializeToString,
+                response_deserializer=highbar_dot_service__pb2.AdminCapabilitiesResponse.FromString,
+                _registered_method=True)
+        self.ValidateAdminAction = channel.unary_unary(
+                '/highbar.v1.HighBarAdmin/ValidateAdminAction',
+                request_serializer=highbar_dot_service__pb2.AdminAction.SerializeToString,
+                response_deserializer=highbar_dot_service__pb2.AdminActionResult.FromString,
+                _registered_method=True)
+        self.ExecuteAdminAction = channel.unary_unary(
+                '/highbar.v1.HighBarAdmin/ExecuteAdminAction',
+                request_serializer=highbar_dot_service__pb2.AdminAction.SerializeToString,
+                response_deserializer=highbar_dot_service__pb2.AdminActionResult.FromString,
+                _registered_method=True)
+
+
+class HighBarAdminServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def GetAdminCapabilities(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ValidateAdminAction(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ExecuteAdminAction(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_HighBarAdminServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'GetAdminCapabilities': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetAdminCapabilities,
+                    request_deserializer=highbar_dot_service__pb2.AdminCapabilitiesRequest.FromString,
+                    response_serializer=highbar_dot_service__pb2.AdminCapabilitiesResponse.SerializeToString,
+            ),
+            'ValidateAdminAction': grpc.unary_unary_rpc_method_handler(
+                    servicer.ValidateAdminAction,
+                    request_deserializer=highbar_dot_service__pb2.AdminAction.FromString,
+                    response_serializer=highbar_dot_service__pb2.AdminActionResult.SerializeToString,
+            ),
+            'ExecuteAdminAction': grpc.unary_unary_rpc_method_handler(
+                    servicer.ExecuteAdminAction,
+                    request_deserializer=highbar_dot_service__pb2.AdminAction.FromString,
+                    response_serializer=highbar_dot_service__pb2.AdminActionResult.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'highbar.v1.HighBarAdmin', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('highbar.v1.HighBarAdmin', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class HighBarAdmin(object):
+    """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def GetAdminCapabilities(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/highbar.v1.HighBarAdmin/GetAdminCapabilities',
+            highbar_dot_service__pb2.AdminCapabilitiesRequest.SerializeToString,
+            highbar_dot_service__pb2.AdminCapabilitiesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ValidateAdminAction(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/highbar.v1.HighBarAdmin/ValidateAdminAction',
+            highbar_dot_service__pb2.AdminAction.SerializeToString,
+            highbar_dot_service__pb2.AdminActionResult.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ExecuteAdminAction(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/highbar.v1.HighBarAdmin/ExecuteAdminAction',
+            highbar_dot_service__pb2.AdminAction.SerializeToString,
+            highbar_dot_service__pb2.AdminActionResult.FromString,
             options,
             channel_credentials,
             insecure,

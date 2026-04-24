@@ -41,6 +41,7 @@ class DeltaBus;
 class RingBuffer;
 class CommandQueue;
 class CommandValidator;
+class AdminService;
 
 class HighBarService final : public ::highbar::v1::HighBarProxy::AsyncService {
 public:
@@ -78,6 +79,7 @@ public:
 	// Wire the US2 command-path handle (T058). `queue` outlives this
 	// service. Until set, SubmitCommands returns UNAVAILABLE.
 	void SetUs2Handles(CommandQueue* queue);
+	void SetAdminService(AdminService* admin_service);
 
 	// 003-snapshot-arm-coverage T013/T014 — wire the snapshot-tick handle.
 	// `module` exposes PendingSnapshotRequest() (atomic flag to set) and
@@ -133,6 +135,9 @@ private:
 	class GetRuntimeCountersCallData;
 	class StreamStateCallData;
 	class SubmitCommandsCallData;
+	class ValidateCommandBatchCallData;
+	class GetCommandSchemaCallData;
+	class GetUnitCapabilitiesCallData;
 	class InvokeCallbackCallData;
 	class SaveCallData;
 	class LoadCallData;
@@ -159,6 +164,7 @@ private:
 	// checking.
 	CommandQueue* command_queue_ = nullptr;
 	std::unique_ptr<CommandValidator> validator_;
+	AdminService* admin_service_ = nullptr;
 
 	// 003-snapshot-arm-coverage — module handle for RequestSnapshot.
 	// Read on worker threads; never written after SetSnapshotHandle.

@@ -31,8 +31,13 @@ TEST(CommandValidator_WithoutAi, ZeroTargetRejected) {
 
 	auto r = v.ValidateBatch(batch);
 	EXPECT_FALSE(r.ok);
-	EXPECT_NE(r.error.find("target_unit_id"), std::string::npos)
-		<< "error must name the offending field: " << r.error;
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.status(),
+	          ::highbar::v1::COMMAND_BATCH_REJECTED_INVALID);
+	EXPECT_EQ(r.batch_result.issues(0).code(), ::highbar::v1::EMPTY_COMMAND);
+	EXPECT_EQ(r.batch_result.issues(0).field_path(), "commands");
+	EXPECT_NE(r.error.find("command batch"), std::string::npos)
+		<< "legacy error should still be human-readable: " << r.error;
 }
 
 TEST(CommandValidator_WithoutAi, NonOwnedTargetRejected) {
@@ -43,6 +48,9 @@ TEST(CommandValidator_WithoutAi, NonOwnedTargetRejected) {
 
 	auto r = v.ValidateBatch(batch);
 	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::TARGET_UNIT_NOT_OWNED);
 	EXPECT_NE(r.error.find("42"), std::string::npos)
 		<< "error must name the offending id for diagnostics: " << r.error;
 }
@@ -74,6 +82,9 @@ TEST(CommandValidator_WithoutAi, TargetDriftRejectedBeforeOwnershipLookup) {
 
 	auto r = v.ValidateBatch(batch);
 	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(), ::highbar::v1::TARGET_DRIFT);
+	EXPECT_EQ(r.batch_result.issues(0).field_path(), "commands[0].unit_id");
 	EXPECT_NE(r.error.find("target_drift"), std::string::npos) << r.error;
 }
 
@@ -85,6 +96,9 @@ TEST(CommandValidator_WithoutAi, MissingPerCommandUnitIdRejectedBeforeOwnershipL
 
 	auto r = v.ValidateBatch(batch);
 	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::MISSING_TARGET_UNIT);
 	EXPECT_NE(r.error.find("missing unit_id"), std::string::npos) << r.error;
 }
 
@@ -100,7 +114,109 @@ TEST(CommandValidator_WithoutAi, NonFinitePositionRejectedBeforeOwnershipLookup)
 
 	auto r = v.ValidateBatch(batch);
 	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::POSITION_NON_FINITE);
 	EXPECT_NE(r.error.find("non-finite"), std::string::npos) << r.error;
+}
+
+TEST(CommandValidator_WithoutAi, StrictModeRequiresCorrelationAndBasis) {
+	circuit::grpc::CommandValidationSettings settings;
+	settings.mode = ::highbar::v1::VALIDATION_MODE_STRICT;
+	settings.require_correlation = true;
+	settings.require_state_basis = true;
+	CommandValidator v(/*ai=*/nullptr, settings);
+
+	CommandBatch batch;
+	batch.set_batch_seq(7);
+	batch.set_target_unit_id(42);
+	batch.add_commands()->mutable_stop()->set_unit_id(42);
+
+	auto r = v.ValidateBatch(batch);
+	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::MISSING_CLIENT_COMMAND_ID);
+	EXPECT_EQ(r.batch_result.issues(0).field_path(), "client_command_id");
+
+	batch.set_client_command_id(1234);
+	r = v.ValidateBatch(batch);
+	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::MISSING_STATE_BASIS);
+	EXPECT_EQ(r.batch_result.status(),
+	          ::highbar::v1::COMMAND_BATCH_REJECTED_STALE);
+}
+
+TEST(CommandValidator_WithoutAi, StrictModeRejectsAiChannelAdminArms) {
+	circuit::grpc::CommandValidationSettings settings;
+	settings.mode = ::highbar::v1::VALIDATION_MODE_STRICT;
+	settings.allow_legacy_ai_admin = false;
+	CommandValidator v(/*ai=*/nullptr, settings);
+
+	CommandBatch batch;
+	batch.set_batch_seq(8);
+	batch.add_commands()->mutable_pause_team()->set_enable(true);
+
+	auto r = v.ValidateBatch(batch);
+	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::COMMAND_REQUIRES_ADMIN_CHANNEL);
+}
+
+TEST(CommandValidator_WithoutAi, StrictModeRejectsUnsupportedDispatchArm) {
+	circuit::grpc::CommandValidationSettings settings;
+	settings.mode = ::highbar::v1::VALIDATION_MODE_STRICT;
+	CommandValidator v(/*ai=*/nullptr, settings);
+
+	CommandBatch batch;
+	batch.set_batch_seq(9);
+	batch.add_commands()->mutable_send_text_message()->set_text("hello");
+
+	auto r = v.ValidateBatch(batch);
+	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::COMMAND_ARM_NOT_DISPATCHED);
+	EXPECT_EQ(r.batch_result.issues(0).retry_hint(),
+	          ::highbar::v1::RETRY_WITH_FRESH_CAPABILITIES);
+}
+
+TEST(CommandValidator_WithoutAi, InvalidOptionBitsRejectedBeforeOwnershipLookup) {
+	CommandValidator v(/*ai=*/nullptr);
+	CommandBatch batch;
+	batch.set_batch_seq(10);
+	batch.set_target_unit_id(42);
+	auto* move = batch.add_commands()->mutable_move_unit();
+	move->set_unit_id(42);
+	move->set_options(0x80u);
+	move->mutable_to_position()->set_x(1.0f);
+	move->mutable_to_position()->set_y(0.0f);
+	move->mutable_to_position()->set_z(1.0f);
+
+	auto r = v.ValidateBatch(batch);
+	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::INVALID_OPTION_BITS);
+}
+
+TEST(CommandValidator_WithoutAi, InvalidEnumValuesRejectedBeforeOwnershipLookup) {
+	CommandValidator v(/*ai=*/nullptr);
+	CommandBatch batch;
+	batch.set_batch_seq(11);
+	batch.set_target_unit_id(42);
+	auto* fire = batch.add_commands()->mutable_set_fire_state();
+	fire->set_unit_id(42);
+	fire->set_fire_state(99);
+
+	auto r = v.ValidateBatch(batch);
+	EXPECT_FALSE(r.ok);
+	ASSERT_EQ(r.batch_result.issues_size(), 1);
+	EXPECT_EQ(r.batch_result.issues(0).code(),
+	          ::highbar::v1::INVALID_ENUM_VALUE);
 }
 
 }  // namespace

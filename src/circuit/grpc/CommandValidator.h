@@ -30,14 +30,27 @@ class CCircuitAI;
 
 namespace circuit::grpc {
 
+struct CommandValidationSettings {
+	::highbar::v1::ValidationMode mode =
+		::highbar::v1::VALIDATION_MODE_COMPATIBILITY;
+	std::uint32_t max_batch_commands = 64;
+	bool require_correlation = false;
+	bool require_state_basis = false;
+	bool allow_legacy_ai_admin = true;
+	bool reject_unsupported_arms = false;
+};
+
 struct ValidationResult {
 	bool ok = false;
 	std::string error;  // human-readable reason; empty when ok
+	::highbar::v1::CommandBatchResult batch_result;
 };
 
 class CommandValidator {
 public:
-	explicit CommandValidator(::circuit::CCircuitAI* ai);
+	explicit CommandValidator(
+		::circuit::CCircuitAI* ai,
+		CommandValidationSettings settings = CommandValidationSettings{});
 
 	// Validate a single batch. On first failure returns {false, reason}
 	// — the caller must NOT enqueue any command from this batch.
@@ -53,6 +66,8 @@ private:
 	// commands before the batch reaches the engine-thread queue.
 	bool ValidateCommandTarget(const ::highbar::v1::AICommand& cmd,
 	                           std::int32_t batch_target_unit_id,
+	                           std::uint32_t command_index,
+	                           ::highbar::v1::CommandIssue* issue,
 	                           std::string* error) const;
 
 	// Is `unit_id` a live unit owned by our team? Destroyed / enemy-owned
@@ -67,9 +82,12 @@ private:
 
 	// Inspect a single AICommand oneof arm. Fills `error` on failure.
 	bool ValidateCommand(const ::highbar::v1::AICommand& cmd,
+	                     std::uint32_t command_index,
+	                     ::highbar::v1::CommandIssue* issue,
 	                     std::string* error) const;
 
 	::circuit::CCircuitAI* ai_;
+	CommandValidationSettings settings_;
 };
 
 }  // namespace circuit::grpc

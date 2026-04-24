@@ -99,3 +99,31 @@ def hello(
         current_frame=resp.current_frame,
         role=role,
     )
+
+
+def get_command_schema(
+    channel: grpc.Channel,
+    token: str,
+    timeout: Optional[float] = None,
+) -> service_pb2.CommandSchemaResponse:
+    stub = service_pb2_grpc.HighBarProxyStub(channel)
+    return stub.GetCommandSchema(
+        service_pb2.CommandSchemaRequest(),
+        metadata=[(TOKEN_HEADER, token)],
+        timeout=timeout,
+    )
+
+
+def get_unit_capabilities(
+    channel: grpc.Channel,
+    token: str,
+    unit_id: int,
+    timeout: Optional[float] = None,
+) -> service_pb2.UnitCapabilitiesResponse:
+    stub = service_pb2_grpc.HighBarProxyStub(channel)
+    req = service_pb2.UnitCapabilitiesRequest(unit_id=unit_id)
+    return stub.GetUnitCapabilities(
+        req,
+        metadata=[(TOKEN_HEADER, token)],
+        timeout=timeout,
+    )

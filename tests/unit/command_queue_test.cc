@@ -115,4 +115,23 @@ TEST(CommandQueue, PartialDrainLeavesRemainder) {
 	}
 }
 
+TEST(CommandQueue, TryPushBatchIsAtomicWhenCapacityInsufficient) {
+	CommandQueue q(/*counters=*/nullptr, /*capacity=*/3);
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 1, 1)));
+	ASSERT_TRUE(q.TryPush(MakeCommand("s1", 2, 2)));
+
+	std::vector<QueuedCommand> batch;
+	batch.push_back(MakeCommand("s2", 10, 10));
+	batch.push_back(MakeCommand("s2", 11, 11));
+
+	EXPECT_FALSE(q.TryPushBatch(std::move(batch)));
+	EXPECT_EQ(q.Depth(), 2u);
+
+	std::vector<QueuedCommand> drained;
+	ASSERT_EQ(q.Drain(&drained), 2u);
+	ASSERT_EQ(drained.size(), 2u);
+	EXPECT_EQ(drained[0].command.move_unit().unit_id(), 1);
+	EXPECT_EQ(drained[1].command.move_unit().unit_id(), 2);
+}
+
 }  // namespace

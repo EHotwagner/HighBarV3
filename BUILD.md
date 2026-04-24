@@ -57,6 +57,21 @@ sha256sum "$HOME/.local/state/Beyond All Reason/engine/recoil_2025.06.19/spring-
 ls build/gen/highbar/service.grpc.pb.h
 ```
 
+## Standalone CMake Smoke Tests
+
+The repository root can be configured directly for proto-backed tests that do
+not need Recoil engine headers:
+
+```bash
+cmake -S . -B build
+cmake --build build --target command_queue_test -j 4
+ctest --test-dir build --output-on-failure -R command_queue_test
+```
+
+The full plugin, validator tests, and engine-thread integration tests still
+require the engine-tree configuration in step 4 because they include Recoil
+headers and use `configure_native_skirmish_ai`.
+
 ## 4. Configure the BAR engine + AI subtree (AI-only build)
 
 <!-- expect: Build files have been written to: /home/ -->

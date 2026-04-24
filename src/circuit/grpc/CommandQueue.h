@@ -28,6 +28,9 @@ class Counters;
 // Push returns.
 struct QueuedCommand {
 	std::string session_id;
+	std::uint64_t batch_seq = 0;
+	std::uint64_t client_command_id = 0;
+	std::uint32_t command_index = 0;
 	std::int32_t authoritative_target_unit_id = 0;
 	::highbar::v1::AICommand command;
 };
@@ -44,6 +47,12 @@ public:
 	// to the client without mutating state. Already-queued commands are
 	// never dropped or reordered.
 	bool TryPush(QueuedCommand cmd);
+
+	// Atomic batch enqueue. Returns false when the entire batch cannot
+	// fit; in that case no command from `cmds` is pushed.
+	bool TryPushBatch(std::vector<QueuedCommand> cmds);
+
+	std::size_t AvailableCapacity() const;
 
 	// Engine-thread drain. Moves up to `max` entries into `out` and
 	// returns the number actually moved. Called from OnFrameTick at the

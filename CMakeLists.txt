@@ -1,3 +1,80 @@
+cmake_minimum_required(VERSION 3.24)
+
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+	project(HighBarV3Standalone LANGUAGES CXX)
+	set(CMAKE_CXX_STANDARD 20)
+	set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+	list(APPEND CMAKE_PREFIX_PATH
+		"${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x64-linux")
+
+	find_package(Protobuf CONFIG REQUIRED)
+	find_package(gRPC CONFIG REQUIRED)
+	find_package(GTest CONFIG QUIET)
+	if (NOT GTest_FOUND)
+		find_package(GTest QUIET)
+	endif ()
+	if (NOT GTest_FOUND AND NOT GTEST_FOUND)
+		find_library(HIGHBAR_GTEST_LIB gtest)
+		find_library(HIGHBAR_GTEST_MAIN_LIB gtest_main)
+		if (HIGHBAR_GTEST_LIB AND HIGHBAR_GTEST_MAIN_LIB)
+			add_library(GTest::gtest UNKNOWN IMPORTED)
+			set_target_properties(GTest::gtest PROPERTIES
+				IMPORTED_LOCATION "${HIGHBAR_GTEST_LIB}")
+			add_library(GTest::gtest_main UNKNOWN IMPORTED)
+			set_target_properties(GTest::gtest_main PROPERTIES
+				IMPORTED_LOCATION "${HIGHBAR_GTEST_MAIN_LIB}"
+				INTERFACE_LINK_LIBRARIES GTest::gtest)
+			set(GTest_FOUND TRUE)
+		endif ()
+	endif ()
+
+	set(HIGHBAR_PROTO_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/gen")
+	file(GLOB HIGHBAR_PROTO_GEN_SRCS CONFIGURE_DEPENDS
+		"${HIGHBAR_PROTO_GEN_DIR}/highbar/*.pb.cc"
+		"${HIGHBAR_PROTO_GEN_DIR}/highbar/*.grpc.pb.cc")
+	if (NOT HIGHBAR_PROTO_GEN_SRCS)
+		message(FATAL_ERROR
+			"Generated proto stubs not found under build/gen/highbar. "
+			"Run proto generation first, then reconfigure.")
+	endif ()
+
+	add_library(highbar_proto STATIC ${HIGHBAR_PROTO_GEN_SRCS})
+	target_include_directories(highbar_proto PUBLIC "${HIGHBAR_PROTO_GEN_DIR}")
+	target_link_libraries(highbar_proto PUBLIC
+		gRPC::grpc++
+		protobuf::libprotobuf)
+
+	enable_testing()
+
+	add_library(highbar_command_queue_test_support STATIC
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/CommandQueue.cpp"
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/Counters.cpp")
+	target_include_directories(highbar_command_queue_test_support PUBLIC
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit")
+	target_link_libraries(highbar_command_queue_test_support PUBLIC
+		highbar_proto)
+
+	if (GTest_FOUND OR GTEST_FOUND)
+		add_executable(command_queue_test
+			"${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/command_queue_test.cc")
+		target_include_directories(command_queue_test PRIVATE
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit")
+		target_link_libraries(command_queue_test PRIVATE
+			highbar_command_queue_test_support
+			GTest::gtest
+			GTest::gtest_main)
+		add_test(NAME command_queue_test COMMAND command_queue_test)
+	else ()
+		message(WARNING "GTest not found; standalone CMake will build libraries only.")
+	endif ()
+
+	message(STATUS
+		"HighBarV3 standalone CMake configured. Engine-coupled plugin and "
+		"validator tests require configuring from the Recoil engine tree; see BUILD.md.")
+	return()
+endif ()
+
 ### Generic native Skirmish AI config
 #
 
@@ -213,6 +290,9 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 
 			add_library(highbar_command_validator_test_support STATIC
 				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/CommandValidator.cpp"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/CapabilityProvider.cpp"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/CommandQueue.cpp"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/Counters.cpp"
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/command_validator_test_stubs.cpp"
 				"${CMAKE_SOURCE_DIR}/rts/System/float3.cpp")
 			target_include_directories(highbar_command_validator_test_support PUBLIC
@@ -220,6 +300,42 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 				"${HIGHBAR_PROTO_GEN_DIR}"
 				"${HIGHBAR_PIN_GEN_DIR}")
 			target_link_libraries(highbar_command_validator_test_support PUBLIC
+				highbar_proto
+				gRPC::grpc++
+				protobuf::libprotobuf)
+
+			add_library(highbar_capability_test_support STATIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/CapabilityProvider.cpp"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/CommandQueue.cpp"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/Counters.cpp"
+				"${CMAKE_SOURCE_DIR}/rts/System/float3.cpp")
+			target_include_directories(highbar_capability_test_support PUBLIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit"
+				"${HIGHBAR_PROTO_GEN_DIR}"
+				"${HIGHBAR_PIN_GEN_DIR}")
+			target_link_libraries(highbar_capability_test_support PUBLIC
+				highbar_proto
+				gRPC::grpc++
+				protobuf::libprotobuf)
+
+			add_library(highbar_order_state_test_support STATIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/OrderStateTracker.cpp")
+			target_include_directories(highbar_order_state_test_support PUBLIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit"
+				"${HIGHBAR_PROTO_GEN_DIR}"
+				"${HIGHBAR_PIN_GEN_DIR}")
+			target_link_libraries(highbar_order_state_test_support PUBLIC
+				highbar_proto
+				gRPC::grpc++
+				protobuf::libprotobuf)
+
+			add_library(highbar_admin_controller_test_support STATIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit/grpc/AdminController.cpp")
+			target_include_directories(highbar_admin_controller_test_support PUBLIC
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit"
+				"${HIGHBAR_PROTO_GEN_DIR}"
+				"${HIGHBAR_PIN_GEN_DIR}")
+			target_link_libraries(highbar_admin_controller_test_support PUBLIC
 				highbar_proto
 				gRPC::grpc++
 				protobuf::libprotobuf)
@@ -251,6 +367,15 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 				     OR _test_name STREQUAL "command_validation_perf_test")
 					target_link_libraries("${_test_name}" PRIVATE
 						highbar_command_validator_test_support)
+				elseif (_test_name STREQUAL "command_capabilities_test")
+					target_link_libraries("${_test_name}" PRIVATE
+						highbar_capability_test_support)
+				elseif (_test_name STREQUAL "order_state_tracker_test")
+					target_link_libraries("${_test_name}" PRIVATE
+						highbar_order_state_test_support)
+				elseif (_test_name STREQUAL "admin_control_test")
+					target_link_libraries("${_test_name}" PRIVATE
+						highbar_admin_controller_test_support)
 				endif ()
 				add_test(NAME "${_test_name}" COMMAND "${_test_name}")
 				file(APPEND "${HIGHBAR_ROOT_CTEST_SCRIPT}"
@@ -260,7 +385,11 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 			file(GLOB HIGHBAR_INTEGRATION_TEST_SRCS CONFIGURE_DEPENDS
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/*_test.cc")
 			foreach (_test_src IN LISTS HIGHBAR_INTEGRATION_TEST_SRCS)
-				get_filename_component(_test_name "${_test_src}" NAME_WE)
+				get_filename_component(_test_base "${_test_src}" NAME_WE)
+				set(_test_name "${_test_base}")
+				if (TARGET "${_test_name}")
+					set(_test_name "integration_${_test_base}")
+				endif ()
 				add_executable("${_test_name}" "${_test_src}")
 				target_include_directories("${_test_name}" PRIVATE
 					"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit"
@@ -273,9 +402,16 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 					target_link_libraries("${_test_name}" PRIVATE
 						${GTEST_BOTH_LIBRARIES})
 				endif ()
-				if (_test_name STREQUAL "ai_move_flow_test")
+				if (_test_base STREQUAL "ai_move_flow_test")
 					target_link_libraries("${_test_name}" PRIVATE
 						highbar_command_queue_test_support)
+				elseif (_test_base STREQUAL "command_diagnostics_test")
+					target_link_libraries("${_test_name}" PRIVATE
+						highbar_command_validator_test_support
+						highbar_command_queue_test_support)
+				elseif (_test_base STREQUAL "admin_control_test")
+					target_link_libraries("${_test_name}" PRIVATE
+						highbar_admin_controller_test_support)
 				endif ()
 				add_test(NAME "${_test_name}" COMMAND "${_test_name}")
 				file(APPEND "${HIGHBAR_ROOT_CTEST_SCRIPT}"

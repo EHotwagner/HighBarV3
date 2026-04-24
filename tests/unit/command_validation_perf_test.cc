@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -42,6 +43,28 @@ CommandBatch RepresentativeBatch() {
 	move->mutable_to_position()->set_x(0.0f);
 	move->mutable_to_position()->set_y(0.0f);
 	move->mutable_to_position()->set_z(0.0f);
+	return batch;
+}
+
+CommandBatch TargetDriftBatch() {
+	CommandBatch batch = RepresentativeBatch();
+	batch.mutable_commands(0)->mutable_move_unit()->set_unit_id(99);
+	return batch;
+}
+
+CommandBatch NonFiniteBatch() {
+	CommandBatch batch = RepresentativeBatch();
+	batch.mutable_commands(0)->mutable_move_unit()
+		->mutable_to_position()->set_x(std::numeric_limits<float>::quiet_NaN());
+	return batch;
+}
+
+CommandBatch StrictMissingBasisBatch() {
+	CommandBatch batch;
+	batch.set_batch_seq(3);
+	batch.set_target_unit_id(42);
+	batch.set_client_command_id(333);
+	batch.add_commands()->mutable_stop()->set_unit_id(42);
 	return batch;
 }
 
@@ -130,12 +153,32 @@ std::string IsoTimestampNow() {
 
 TEST(CommandValidationPerf, EmitsValidatorOverheadRecordWithinBudget) {
 	CommandValidator validator(/*ai=*/nullptr);
-	const CommandBatch batch = RepresentativeBatch();
+	circuit::grpc::CommandValidationSettings strict_settings;
+	strict_settings.mode = ::highbar::v1::VALIDATION_MODE_STRICT;
+	strict_settings.require_correlation = true;
+	strict_settings.require_state_basis = true;
+	CommandValidator strict_validator(/*ai=*/nullptr, strict_settings);
+	const std::vector<std::pair<std::string, std::pair<const CommandValidator*, CommandBatch>>> scenarios = {
+		{"ownership", {&validator, RepresentativeBatch()}},
+		{"target_drift", {&validator, TargetDriftBatch()}},
+		{"non_finite", {&validator, NonFiniteBatch()}},
+		{"strict_missing_basis", {&strict_validator, StrictMissingBasisBatch()}},
+	};
 
-	const auto warmup_samples = MeasureSamples(validator, batch, kWarmupSamples);
-	const auto measured_samples = MeasureSamples(validator, batch, kMeasuredSamples);
-	const SampleStats baseline = Summarize(warmup_samples);
-	const SampleStats measured = Summarize(measured_samples);
+	std::vector<double> warmup_all;
+	std::vector<double> measured_all;
+	for (const auto& scenario : scenarios) {
+		const auto warmup = MeasureSamples(*scenario.second.first,
+		                                   scenario.second.second,
+		                                   kWarmupSamples / scenarios.size());
+		const auto measured = MeasureSamples(*scenario.second.first,
+		                                     scenario.second.second,
+		                                     kMeasuredSamples / scenarios.size());
+		warmup_all.insert(warmup_all.end(), warmup.begin(), warmup.end());
+		measured_all.insert(measured_all.end(), measured.begin(), measured.end());
+	}
+	const SampleStats baseline = Summarize(warmup_all);
+	const SampleStats measured = Summarize(measured_all);
 
 	const double regression_percent =
 		(baseline.p99_us > 0.0)
@@ -161,7 +204,7 @@ TEST(CommandValidationPerf, EmitsValidatorOverheadRecordWithinBudget) {
 	payload << "{\n"
 	        << "  \"record_id\": \"command-validation-overhead\",\n"
 	        << "  \"measurement_entrypoint\": \"ctest --test-dir build --output-on-failure -R command_validation_perf_test\",\n"
-	        << "  \"batch_shape\": \"single move_unit command with normalized target_unit_id and null-AI ownership rejection\",\n"
+	        << "  \"batch_shape\": \"structured diagnostics matrix: ownership, target drift, non-finite coordinate, strict missing basis\",\n"
 	        << "  \"sample_count\": " << kMeasuredSamples << ",\n"
 	        << "  \"median_us\": " << std::fixed << std::setprecision(3) << measured.median_us << ",\n"
 	        << "  \"p95_us\": " << measured.p95_us << ",\n"
