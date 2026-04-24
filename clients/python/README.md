@@ -32,23 +32,26 @@ who change `.proto` files need to run `make codegen`.
 
 ## Live-gateway environment
 
-The acceptance grid scripts (`tests/headless/*.sh`) and the latency
-bench (`tests/bench/latency-{uds,tcp}.sh`) read these env vars:
+The direct live topology helper and the headless scripts use the native
+plugin as a same-host gRPC endpoint. Some legacy acceptance scripts can
+also pass a coordinator endpoint for plugin dial-out tests. The common
+environment variables are:
 
 | Var                    | Used by                       | Notes                                                 |
 |------------------------|-------------------------------|-------------------------------------------------------|
 | `SPRING_HEADLESS`      | `_launch.sh`, every script    | Path to the pinned spring-headless binary. Skip-77 if unset. |
-| `HIGHBAR_COORDINATOR`  | `_launch.sh`                  | Coordinator endpoint the plugin dials (e.g. `unix:/tmp/hb-coord.sock`). |
-| `HIGHBAR_WRITE_DIR`    | `_fault-assert.sh`, drivers   | Directory where the plugin writes `highbar.health`. Defaults to `$HOME/.local/state/Beyond All Reason`. |
+| `HIGHBAR_TOKEN_PATH`   | `live_topology`, admin suite  | Token file used by AI/admin RPCs in direct-gateway runs. |
+| `HIGHBAR_COORDINATOR`  | `_launch.sh`                  | Optional coordinator endpoint for dial-out tests (e.g. `unix:/tmp/hb-coord.sock`). |
+| `HIGHBAR_WRITE_DIR`    | launchers, fault checks       | Directory where the plugin writes runtime files. Defaults to `$HOME/.local/state/Beyond All Reason`. |
+| `HIGHBAR_ENABLE_BUILTIN` | launchers                   | Compatibility key. Always forced to `false`; built-in BARb behavior cannot be re-enabled. |
 | `HIGHBAR_BENCH_DURATION` | `latency-{uds,tcp}.sh`      | Bench window in seconds. Default 30.                  |
 | `HIGHBAR_BENCH_SAMPLES`  | `latency-{uds,tcp}.sh`      | Hard cap on sample count. Default 1000.               |
 | `HIGHBAR_TCP_BIND`     | `latency-tcp.sh`              | Coordinator TCP bind address. Default `127.0.0.1:50521`. |
 
-Note the architecture flip vs. earlier docs: the plugin is a gRPC
-**client**, not a server. There is no `HIGHBAR_UDS_PATH` or
-`HIGHBAR_TOKEN_PATH` in this revision — the plugin dials the
-coordinator at `HIGHBAR_COORDINATOR`, so the only on-disk artifact
-is the `highbar.health` JSON file.
+Use `highbar_client.live_topology.run_topology(...)` for Python-driven
+live runs. It writes the generated startscripts, token path, socket path,
+BNV viewer launch, and report location from one `TopologyOptions`
+object.
 
 ## Usage (observer)
 
@@ -129,6 +132,10 @@ tests/headless/admin-behavioral-control.sh \
 
 See `specs/002-live-headless-e2e/examples/{observer,ai_client}.py`
 for runnable end-to-end demos.
+
+For cross-language client generation and the full service/proto map, see
+[`../../docs/client-development.md`](../../docs/client-development.md)
+and [`../../docs/proto-reference.md`](../../docs/proto-reference.md).
 
 ## Python AI plugins
 

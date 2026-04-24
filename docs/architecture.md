@@ -61,34 +61,29 @@ grpcGateway->InitHandlers();
 modules.push_back(grpcGateway);
 ```
 
-Placement after `economyManager` ensures the gateway sees the world state
-*after* every internal module has reacted to an event — so external
-clients observe the post-decision state.
+The gateway is the only decision module registered for HighBarV3. The
+legacy BARb/Circuit military, builder, factory, and economy managers are
+still constructed where the proxy needs their data structures, but their
+autonomous decision loops are not pushed into `modules` and
+`enable_builtin=true` is ignored at startup. This keeps HighBarV3 aligned
+with the V2 model: the external client is the AI, and the native plugin
+is a proxy/gateway.
 
-## Module fate (phased)
+## Module Fate
 
-**Phase 1 (MVP): keep all four existing modules running.** The internal
-AI keeps playing; the gRPC gateway streams state out and accepts commands
-in. External commands are issued via `CCircuitUnit::Cmd*` directly and
-coexist with internal decisions. This de-risks the transport work — if
-something goes wrong, the game still plays. External commands take
-effective priority because Spring applies unit orders in submission order
-(the last `CmdMoveTo` wins).
+HighBarV3 is external-control only.
 
-**Phase 2: opt-out via config.** Add `[modules] enable_builtin =
-true|false` to the AI's `config.lua`. When false, `CCircuitAI::Init` skips
-the four internal modules' `push_back` calls. The gateway module is then
-the only decision authority — external client IS the AI, matching V2's
-model.
+- Built-in BARb/Circuit behavior is permanently disabled.
+- `HIGHBAR_ENABLE_BUILTIN` and the AI option `enable_builtin` remain
+  only as backward-compatible no-op inputs.
+- Unit commands from AI clients enter through `SubmitCommands` and are
+  drained on the engine thread.
+- Administrative/test controls use `HighBarAdmin`, not legacy AI command
+  arms.
 
-**Phase 3 (optional): per-subsystem opt-out.** `enable_military`,
-`enable_economy`, etc. Not planned for initial delivery — wait until
-there's concrete demand.
-
-Rationale: the stated intent is "AI bot driver same as V2," which is
-Phase 2. But Phase 1 is a strictly better delivery order — it proves
-the gRPC plumbing against a *working* AI before asking the external
-client to be correct, and it's reachable in a fraction of the time.
+This avoids command collisions between BARb's internal planners and
+external clients and makes behavioral evidence attributable to the
+client that issued it.
 
 ## gRPC service (`proto/highbar/service.proto`)
 
@@ -310,14 +305,12 @@ spread ≤ 5%.
    `libSkirmishAI.so` and drives Spring's ABI directly. Cases:
    `test_reconnect_resume` (ring replay), `test_reconnect_fresh` (fresh
    snapshot when out of range), `test_multi_client` (AI + 2 observers).
-3. **Headless engine** (BAR spring-headless): 60-second game, **Phase 1
-   config** (internal modules on + gateway active). Assert: AI issued
-   ≥1 command through internal modules, gateway emitted matching delta
-   events, external client received them.
-4. **Phase 2 headless test** (added after opt-out lands): internal
-   modules off; external F# client issues hand-scripted commands via
-   `SubmitCommands`; assert those commands reach the engine (verify via
-   engine log).
+3. **Headless engine** (BAR spring-headless): external-control run with
+   built-in behavior disabled. Assert: a client-issued command reaches
+   the engine and the gateway emits the matching dispatch/state evidence.
+4. **Admin behavior test**: `HighBarAdmin` actions execute or reject
+   according to capabilities, with behavioral evidence from state stream,
+   snapshot/delta windows, or engine logs.
 5. **Latency microbench**: `UnitDamaged` event → F# client callback
    received. Target p99 < 500µs UDS, < 1.5ms TCP loopback.
 
@@ -339,11 +332,7 @@ spread ≤ 5%.
    backoff up to 5s. Document or clients hit flaky first-connect.
 5. **UDS path length** capped at 108 bytes — validate and fall back.
 6. **Save/Load are unary**, not deltas — engine needs synchronous return.
-7. **Phase 1 command collision.** With internal modules active, internal
-   `CmdMoveTo` and external `CmdMoveTo` compete. Not a bug in Phase 1,
-   but note it in the Phase 1 acceptance criteria so testers don't file
-   it as one.
-8. **Upstream merges.** BARb is actively maintained (last commit Dec
+7. **Upstream merges.** BARb is actively maintained (last commit Dec
    2025). Our fork should track upstream; keep the gRPC code isolated to
    `src/circuit/module/GrpcGatewayModule*` and `src/circuit/grpc/*` so
    merge conflicts stay in `CircuitAI.cpp::Init` (three lines) and

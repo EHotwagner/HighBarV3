@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 from __future__ import annotations
 
+from pathlib import Path
+
 from highbar_client.behavioral_coverage.admin_actions import (
     rejection_scenarios,
     success_scenarios,
@@ -13,6 +15,8 @@ from highbar_client.behavioral_coverage.admin_suite import (
 )
 from highbar_client.behavioral_coverage import _admin_main
 from highbar_client.highbar import service_pb2
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _success_states(scenario_id: str) -> tuple[ObservedMatchState, ObservedMatchState]:
@@ -154,11 +158,11 @@ def test_admin_cli_skip_live_writes_failing_missing_evidence_report(tmp_path):
 
 
 def test_replay_fixture_passes_only_with_behavioral_sources(tmp_path):
-    replay_path = "tests/fixtures/admin_behavior/evidence-replay.json"
+    replay_path = REPO_ROOT / "tests/fixtures/admin_behavior/evidence-replay.json"
     code = _admin_main(
         [
             "--evidence-replay",
-            replay_path,
+            str(replay_path),
             "--output-dir",
             str(tmp_path),
         ]

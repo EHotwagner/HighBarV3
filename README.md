@@ -1,29 +1,69 @@
-Circuit AI
-=========
-Framework for Spring RTS local native AIs.
+# HighBarV3
 
-### Requirements
-* gcc 5.4+
-* spring 104.0-dev
-* SDL2 (optional)
+HighBarV3 is a Beyond All Reason / Recoil Skirmish AI proxy. It embeds
+a gRPC gateway in the BARb/CircuitAI plugin so external clients can
+observe game state, submit AI commands, and run controlled admin/test
+actions from any language with protobuf and gRPC support.
 
-### Compiling
-Build process of native AI described in the [wiki](https://springrts.com/wiki/AI:Development:Lang:Cpp) of Spring RTS engine.
-Required steps on linux:
+The native plugin remains the Spring/Recoil `libSkirmishAI.so`; built-in
+BARb decision behavior is permanently disabled for HighBarV3 runs. The
+external client is the decision authority.
+
+## Start Here
+
+- [Architecture](docs/architecture.md) explains the native plugin,
+  gateway module, state stream, and engine-thread rules.
+- [Transport](docs/transport.md) documents UDS/TCP transport options
+  and local security assumptions.
+- [Proto Reference](docs/proto-reference.md) lists every service,
+  proto file, stream shape, auth metadata, and compatibility rule.
+- [Client Development](docs/client-development.md) explains how to
+  build clients in Python, F#/.NET, Go, Rust, Java/Kotlin, Node/TS, and
+  other protobuf/gRPC stacks.
+- [Python Client README](clients/python/README.md) covers the supported
+  Python package, live topology launcher, BNV demos, and AI plugins.
+- [Local Environment](docs/local-env.md) and [Build Hygiene](docs/commit-hygiene.md)
+  cover local setup and repository workflow details.
+
+## Repository Layout
+
+| Path | Purpose |
+| --- | --- |
+| `proto/highbar/*.proto` | Versioned `highbar.v1` wire contract. |
+| `src/circuit/grpc/` | Native C++ gateway, admin controller, command validation, and snapshots. |
+| `src/circuit/module/GrpcGatewayModule.*` | CircuitAI module that bridges engine events to gRPC. |
+| `clients/python/` | Python package, generated stubs, samples, live topology launcher, and tests. |
+| `clients/fsharp/` | F#/.NET client wrapper, samples, and latency bench. |
+| `tests/headless/` | Live Recoil/BAR harness scripts, BNV demo reels, and shell acceptance tests. |
+| `specs/` | Speckit feature specifications and contracts. |
+| `.github/workflows/ci.yml` | Hosted and self-hosted CI pipeline. |
+
+## Development Checks
+
+The hosted GitHub workflow runs proto lint/generation smoke tests,
+Python codegen/tests, shell syntax checks, and BUILD.md runbook
+validation. Before pushing API/client changes, run the relevant local
+subset:
+
+```bash
+buf lint proto
+cd proto && buf generate
+cd ../clients/python
+python -m pip install -e '.[dev]'
+make codegen
+make test
 ```
-$ git clone https://github.com/spring/spring.git
-$ cd spring && git checkout maintenance
-$ git clone https://github.com/rlcevg/CircuitAI.git AI/Skirmish/CircuitAI
-$ cmake . && make CircuitAI
+
+For shell-only changes:
+
+```bash
+bash -n tests/headless/*.sh tests/bench/*.sh
 ```
 
-### Installing
-To install the AI, put files into proper directory, see CppTestAI or Shard for reference.
-An example location of `libSkirmishAI.so` on linux would be `/home/<user>/.spring/engine/<engine version>/AI/Skirmish/CircuitAI/<AI version>/libSkirmishAI.so`
+Native build and live headless acceptance require a BAR/Recoil engine
+checkout and the self-hosted runner environment described in
+`.github/runner-setup/`.
 
-### Linux troubleshooting
-Dead AI upon match start: ensure that `libSkirmishAI.so` is compatible with `AI/Interfaces/C/0.1/libAIInterface.so` (i.e. replace it with own build)
+## License
 
-For those who lost all hope, behold: [Vagrant](https://docs.vagrantup.com/v2/).
-Just navigate to Vagrantfile and do "vagrant up". It will take some time to warm up, install all dependencies and compile Circuit for the first time.
-Subsequent builds should be done manually, see Vagrantfile for reference.
+GPL-2.0-only, inherited from the BARb/CircuitAI fork.

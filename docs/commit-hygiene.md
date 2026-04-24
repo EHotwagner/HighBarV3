@@ -17,16 +17,14 @@ This document is the audit checklist for any PR that touches
 
 2. `src/circuit/CircuitAI.cpp` — edited at:
    - T018 (commit `1d8371ca`): module registration, 2 added lines.
-   - T079 (Phase 6): read `enable_builtin` from AIOptions in
-     `InitOptions()`. 4 added lines.
-   - T080 (Phase 6): guard the four `modules.push_back` calls for
-     `military/builder/factory/economy` behind
-     `if (enableBuiltin) { … }`. Net: wraps 4 existing lines in a
-     conditional + a TODO comment block.
+   - T079/T080 (Phase 6): introduced the `enableBuiltin` gate for the
+     legacy BARb managers.
+   - 020-admin-behavior-tests: made external-control mode permanent by
+     defaulting `enableBuiltin` false and ignoring `enable_builtin=true`
+     in `InitOptions()`.
 
-3. `src/circuit/CircuitAI.h` — edited at T079 only: adds
-   `enableBuiltin` member, `IsBuiltinEnabled()` accessor. 3 added
-   lines.
+3. `src/circuit/CircuitAI.h` — adds the `enableBuiltin` member and
+   `IsBuiltinEnabled()` accessor. HighBarV3 keeps the default false.
 
 ## Rules for splitting
 
