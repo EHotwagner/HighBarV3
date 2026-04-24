@@ -20,6 +20,9 @@ external client is the decision authority.
 - [Client Development](docs/client-development.md) explains how to
   build clients in Python, F#/.NET, Go, Rust, Java/Kotlin, Node/TS, and
   other protobuf/gRPC stacks.
+- [Compiling the Native Plugin](docs/compilation.md) documents the
+  Recoil engine-tree build, BAR install layout, artifact size, and
+  platform compatibility notes.
 - [Python Client README](clients/python/README.md) covers the supported
   Python package, live topology launcher, BNV demos, and AI plugins.
 - [Local Environment](docs/local-env.md) and [Build Hygiene](docs/commit-hygiene.md)
