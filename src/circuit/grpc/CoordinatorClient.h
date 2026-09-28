@@ -54,10 +54,9 @@ public:
 	bool PushStateUpdate(const ::highbar::v1::StateUpdate& update);
 
 	// Phase C — open the server-streaming command channel. Spawns a
-	// background reader thread that calls `sink->TryPush(QueuedCommand)`
-	// for every AICommand inside every CommandBatch the coordinator
-	// sends. Sink is the engine-thread CommandQueue; DrainCommandQueue
-	// picks commands up at the top of each frame tick.
+	// background reader thread that atomically admits every CommandBatch
+	// to the engine-thread CommandQueue. DrainCommandQueue picks commands
+	// up at the top of each frame tick.
 	void StartCommandChannel(CommandQueue* sink);
 
 	bool IsConnected() const { return connected_.load(std::memory_order_acquire); }
@@ -105,6 +104,9 @@ private:
 	std::thread cmd_thread_;
 	std::atomic<bool> cmd_stopping_{false};
 	std::atomic<std::uint64_t> cmd_batches_received_{0};
+	std::atomic<std::uint64_t> cmd_batches_accepted_{0};
+	std::atomic<std::uint64_t> cmd_batches_rejected_invalid_{0};
+	std::atomic<std::uint64_t> cmd_batches_rejected_full_{0};
 	std::atomic<std::uint64_t> cmd_commands_received_{0};
 };
 

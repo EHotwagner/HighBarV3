@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	project(HighBarV3Standalone LANGUAGES CXX)
+	find_package(Threads REQUIRED)
 	set(CMAKE_CXX_STANDARD 20)
 	set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -65,6 +66,18 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 			GTest::gtest
 			GTest::gtest_main)
 		add_test(NAME command_queue_test COMMAND command_queue_test)
+
+		add_executable(coordinator_command_admission_test
+			"${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/coordinator_command_admission_test.cc")
+		target_include_directories(coordinator_command_admission_test PRIVATE
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/circuit")
+		target_link_libraries(coordinator_command_admission_test PRIVATE
+			highbar_command_queue_test_support
+			Threads::Threads
+			GTest::gtest
+			GTest::gtest_main)
+		add_test(NAME coordinator_command_admission_test
+			COMMAND coordinator_command_admission_test)
 	else ()
 		message(WARNING "GTest not found; standalone CMake will build libraries only.")
 	endif ()
@@ -253,6 +266,7 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 	# job upgrades to failure.
 	option(HIGHBAR_BUILD_TESTS "Build HighBarV3 unit tests" ON)
 	if (HIGHBAR_BUILD_TESTS AND Protobuf_FOUND AND gRPC_FOUND)
+		find_package(Threads REQUIRED)
 		enable_testing()
 		find_package(GTest CONFIG QUIET)
 		if (NOT GTest_FOUND)
@@ -360,9 +374,13 @@ constexpr const char* kEngineSha256    = "@HIGHBAR_ENGINE_SHA256@";
 					highbar_proto
 					gRPC::grpc++
 					protobuf::libprotobuf)
-				if (_test_name STREQUAL "command_queue_test")
+				if (_test_name STREQUAL "command_queue_test"
+				    OR _test_name STREQUAL "coordinator_command_admission_test")
 					target_link_libraries("${_test_name}" PRIVATE
 						highbar_command_queue_test_support)
+					if (_test_name STREQUAL "coordinator_command_admission_test")
+						target_link_libraries("${_test_name}" PRIVATE Threads::Threads)
+					endif ()
 				elseif (_test_name STREQUAL "command_validation_test"
 				     OR _test_name STREQUAL "command_validation_perf_test")
 					target_link_libraries("${_test_name}" PRIVATE

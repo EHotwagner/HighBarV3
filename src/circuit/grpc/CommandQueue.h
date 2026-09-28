@@ -35,6 +35,29 @@ struct QueuedCommand {
 	::highbar::v1::AICommand command;
 };
 
+enum class CommandBatchAdmissionStatus {
+	kAccepted,
+	kInvalidEmpty,
+	kInvalidOversized,
+	kInvalidTarget,
+	kInvalidBatchSequence,
+	kInvalidCorrelation,
+	kQueueFull,
+};
+
+// Engine-independent result for coordinator command admission. This is
+// intentionally local to the native queue boundary; it is not the protobuf
+// acknowledgement type used by HighBarService.
+struct CommandBatchResult {
+	CommandBatchAdmissionStatus status =
+		CommandBatchAdmissionStatus::kInvalidEmpty;
+	std::size_t accepted_command_count = 0;
+
+	bool accepted() const {
+		return status == CommandBatchAdmissionStatus::kAccepted;
+	}
+};
+
 class CommandQueue {
 public:
 	// `counters` may be null for unit tests. `capacity` is the bounded
@@ -74,5 +97,13 @@ private:
 	mutable std::mutex mutex_;
 	std::queue<QueuedCommand> queue_;
 };
+
+// Validate and atomically admit one coordinator batch. The helper preserves
+// the coordinator's complete provenance on every queued child and calls
+// TryPushBatch exactly once after all validation and construction succeed.
+CommandBatchResult AdmitCommandBatch(
+	CommandQueue& queue,
+	const ::highbar::v1::CommandBatch& batch,
+	const std::string& session_id);
 
 }  // namespace circuit::grpc
