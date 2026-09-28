@@ -5,8 +5,6 @@
 #include "grpc/GrpcLog.h"
 #include "grpc/SchemaVersion.h"
 
-#include "CircuitAI.h"
-
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/credentials.h>
 
@@ -59,6 +57,28 @@ const char* ConnectivityStateName(::grpc_connectivity_state state) {
 	return "UNKNOWN";
 }
 
+const char* CommandBatchAdmissionStatusName(
+		circuit::grpc::CommandBatchAdmissionStatus status) {
+	using circuit::grpc::CommandBatchAdmissionStatus;
+	switch (status) {
+	case CommandBatchAdmissionStatus::kAccepted:
+		return "accepted";
+	case CommandBatchAdmissionStatus::kInvalidEmpty:
+		return "invalid-empty";
+	case CommandBatchAdmissionStatus::kInvalidOversized:
+		return "invalid-oversized";
+	case CommandBatchAdmissionStatus::kInvalidTarget:
+		return "invalid-target";
+	case CommandBatchAdmissionStatus::kInvalidBatchSequence:
+		return "invalid-batch-sequence";
+	case CommandBatchAdmissionStatus::kInvalidCorrelation:
+		return "invalid-correlation";
+	case CommandBatchAdmissionStatus::kQueueFull:
+		return "queue-full";
+	}
+	return "unknown";
+}
+
 }  // namespace
 
 namespace circuit::grpc {
@@ -105,7 +125,14 @@ bool CoordinatorClient::SendHeartbeat(std::uint32_t frame) {
 		+ " cmd_state=" + ConnectivityStateName(cmd_channel_->GetState(false))
 		+ " pushed=" + std::to_string(pushed_count_.load(std::memory_order_relaxed))
 		+ " cmd_batches=" + std::to_string(cmd_batches_received_.load(std::memory_order_relaxed))
-		+ " cmd_commands=" + std::to_string(cmd_commands_received_.load(std::memory_order_relaxed)));
+		+ " cmd_batches_accepted="
+		+ std::to_string(cmd_batches_accepted_.load(std::memory_order_relaxed))
+		+ " cmd_batches_invalid="
+		+ std::to_string(cmd_batches_rejected_invalid_.load(std::memory_order_relaxed))
+		+ " cmd_batches_full="
+		+ std::to_string(cmd_batches_rejected_full_.load(std::memory_order_relaxed))
+		+ " cmd_commands_accepted="
+		+ std::to_string(cmd_commands_received_.load(std::memory_order_relaxed)));
 	::highbar::v1::HeartbeatRequest req;
 	req.set_plugin_id(plugin_id_);
 	req.set_frame(frame);
@@ -241,28 +268,29 @@ void CoordinatorClient::CommandReaderLoop(CommandQueue* sink) {
 				                      + std::to_string(batch.batch_seq())
 				                      + " ncmds=" + std::to_string(batch.commands_size()));
 				cmd_batches_received_.fetch_add(1, std::memory_order_relaxed);
-				// Drop each AICommand inside the batch onto the
-				// engine-thread queue. The batch carries target_unit_id
-				// at the top level AND optionally per-arm — DrainCommandQueue
-				// prefers the per-arm when present.
-				for (const auto& cmd : batch.commands()) {
-					QueuedCommand q;
-					q.session_id = plugin_id_ + "-cmd-ch";
-					q.authoritative_target_unit_id =
-						static_cast<std::int32_t>(batch.target_unit_id());
-					q.command = cmd;
-					if (!sink->TryPush(std::move(q))) {
-						AppendCoordinatorTrace(plugin_id_, "cmd queue full drop");
-						// Queue full — drop and log.
-						LogError(ai_, "CoordinatorClient",
-						         "CommandQueue full; dropping command");
-						break;
-					}
-					cmd_commands_received_.fetch_add(1, std::memory_order_relaxed);
+				const auto admission = AdmitCommandBatch(
+					*sink, batch, plugin_id_ + "-cmd-ch");
+				if (admission.accepted()) {
+					cmd_batches_accepted_.fetch_add(1, std::memory_order_relaxed);
+					cmd_commands_received_.fetch_add(
+						admission.accepted_command_count, std::memory_order_relaxed);
+				} else if (admission.status
+				           == CommandBatchAdmissionStatus::kQueueFull) {
+					cmd_batches_rejected_full_.fetch_add(1, std::memory_order_relaxed);
+				} else {
+					cmd_batches_rejected_invalid_.fetch_add(1, std::memory_order_relaxed);
 				}
-				AppendCoordinatorTrace(plugin_id_,
-				                      "cmd batch processed seq="
-				                      + std::to_string(batch.batch_seq()));
+				const std::string outcome =
+					"cmd batch admission seq=" + std::to_string(batch.batch_seq())
+					+ " correlation="
+					+ std::to_string(batch.has_client_command_id()
+					                 ? batch.client_command_id() : 0)
+					+ " ncmds=" + std::to_string(batch.commands_size())
+					+ " status=" + CommandBatchAdmissionStatusName(admission.status);
+				AppendCoordinatorTrace(plugin_id_, outcome);
+				if (!admission.accepted()) {
+					LogError(ai_, "CoordinatorClient", outcome);
+				}
 			}
 			AppendCoordinatorTrace(plugin_id_, "cmd read loop ended");
 			LogDisconnect(ai_, plugin_id_, "cmd-channel-read-closed");

@@ -6,6 +6,7 @@
 #include "grpc/Counters.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -71,6 +72,50 @@ std::size_t CommandQueue::Depth() const {
 std::size_t CommandQueue::AvailableCapacity() const {
 	std::lock_guard<std::mutex> lock(mutex_);
 	return capacity_ - queue_.size();
+}
+
+CommandBatchResult AdmitCommandBatch(
+		CommandQueue& queue,
+		const ::highbar::v1::CommandBatch& batch,
+		const std::string& session_id) {
+	constexpr int kMaxCoordinatorBatchCommands = 64;
+	const int command_count = batch.commands_size();
+	if (command_count == 0) {
+		return {CommandBatchAdmissionStatus::kInvalidEmpty, 0};
+	}
+	if (command_count > kMaxCoordinatorBatchCommands) {
+		return {CommandBatchAdmissionStatus::kInvalidOversized, 0};
+	}
+	if (batch.target_unit_id()
+	    > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
+		return {CommandBatchAdmissionStatus::kInvalidTarget, 0};
+	}
+	if (batch.batch_seq() == 0) {
+		return {CommandBatchAdmissionStatus::kInvalidBatchSequence, 0};
+	}
+	if (!batch.has_client_command_id() || batch.client_command_id() == 0) {
+		return {CommandBatchAdmissionStatus::kInvalidCorrelation, 0};
+	}
+
+	std::vector<QueuedCommand> queued;
+	queued.reserve(static_cast<std::size_t>(command_count));
+	for (int i = 0; i < command_count; ++i) {
+		QueuedCommand child;
+		child.session_id = session_id;
+		child.batch_seq = batch.batch_seq();
+		child.client_command_id = batch.client_command_id();
+		child.command_index = static_cast<std::uint32_t>(i);
+		child.authoritative_target_unit_id =
+			static_cast<std::int32_t>(batch.target_unit_id());
+		child.command = batch.commands(i);
+		queued.push_back(std::move(child));
+	}
+
+	if (!queue.TryPushBatch(std::move(queued))) {
+		return {CommandBatchAdmissionStatus::kQueueFull, 0};
+	}
+	return {CommandBatchAdmissionStatus::kAccepted,
+	        static_cast<std::size_t>(command_count)};
 }
 
 }  // namespace circuit::grpc
